@@ -1,0 +1,6 @@
+# Minimal Supabase CLI config. Enough for `supabase link` and `supabase db push`;
+# run `supabase init --force` if you later want the full local-dev config.
+project_id = "momentum-terminal"
+
+[db]
+major_version = 17
