@@ -144,3 +144,22 @@ export function getLLMRouteOverride(taskType: "sentiment" | "anomaly" | "narrati
       };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Engine cron heartbeat — SERVER ONLY
+// ---------------------------------------------------------------------------
+
+/**
+ * The on/off switch for autonomous ticking. Only the exact string "true"
+ * enables it; anything else (unset, "false", "1", "TRUE") keeps the Engine
+ * idle so nothing runs and nothing costs.
+ */
+export function isEngineCronEnabled(): boolean {
+  return process.env.ENGINE_CRON_ENABLED?.trim() === "true";
+}
+
+/** Vercel's CRON_SECRET (sent as `Authorization: Bearer` on scheduled invocations), or null. */
+export function getCronSecretOrNull(): string | null {
+  const value = process.env.CRON_SECRET?.trim();
+  return value ? value : null;
+}

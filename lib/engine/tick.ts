@@ -10,7 +10,7 @@ import { getSentimentScorer } from "@/lib/engine/sentiment";
 import type { SentimentResult, SentimentScorer } from "@/lib/engine/sentiment/types";
 import { buySellPrices, computeSpreads } from "@/lib/engine/spread";
 import type { EngineStore } from "@/lib/engine/store";
-import type { ForceEntry, PersonSummary, PersonTickResult, TickContext, TickPersistence, TickSummary } from "@/lib/engine/types";
+import type { ForceEntry, PersonSummary, PersonTickResult, TickContext, TickPersistence, TickSummary, TickTrigger } from "@/lib/engine/types";
 import type { Person } from "@/types";
 
 /**
@@ -35,6 +35,8 @@ export interface EngineTickOptions {
   now?: Date;
   /** Compute everything and return the summary without persisting. */
   dryRun?: boolean;
+  /** Recorded in the summary (and therefore engine_ticks.summary) so cron and manual ticks can be told apart. */
+  trigger?: TickTrigger;
 }
 
 const FORCE_DECIMALS = 4;
@@ -54,7 +56,7 @@ function roundForce(entry: ForceEntry): ForceEntry {
 }
 
 export async function runEngineTick(options: EngineTickOptions): Promise<TickSummary> {
-  const { store, config = DEFAULT_ENGINE_CONFIG, dryRun = false } = options;
+  const { store, config = DEFAULT_ENGINE_CONFIG, dryRun = false, trigger = "manual" } = options;
   const scorer = options.scorer ?? getSentimentScorer();
   const startedAt = options.now ?? new Date();
   const wallClockStart = Date.now();
@@ -203,6 +205,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
   const summary: TickSummary = {
     tickNumber: expectedTickNumber,
     dryRun,
+    trigger,
     startedAt: startedAt.toISOString(),
     finishedAt: finishedAt.toISOString(),
     durationMs: elapsedMs,

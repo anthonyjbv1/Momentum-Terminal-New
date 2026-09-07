@@ -109,9 +109,13 @@ export interface PersonSummary {
   signalsProcessed: number;
 }
 
+/** What started the tick: a manual call to /api/engine/tick or the scheduled cron heartbeat. */
+export type TickTrigger = "manual" | "cron";
+
 export interface TickSummary {
   tickNumber: number;
   dryRun: boolean;
+  trigger?: TickTrigger;
   startedAt: string;
   finishedAt: string;
   durationMs: number;

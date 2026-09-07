@@ -2,7 +2,7 @@
 
 A social data terminal where users take **HIGH** or **LOW** positions on individual people. Each person has a continuously updating Momentum Score driven by their observable real-world data. Users profit when a score moves in their predicted direction; the platform is the sole counterparty. The scoring system is called **the Engine**; its five forces are **Gravity**, **Signals**, **Market Mood**, **Conviction** and **Trading Activity**.
 
-> **Status: Phase 4 (LLM reasoning layer + memory) complete.** On top of the scaffold, schema, auth, ingestion and the Engine, the repo now has a provider-agnostic LLM abstraction (Anthropic adapter live, OpenAI / Gemini / OpenAI-compatible stubs), per-entity memory, an `LLMScorer` that reasons about each signal relative to the person's own baseline and falls back to the rules scorer on any failure, token-usage logging with a per-tick call cap, and narratives for meaningful score moves. The five forces, inverse pairs, LMSR and tick persistence are unchanged from Phase 3. The tick is still triggered manually; the schedule, trading flow, behavioral logging and the product UI are later phases.
+> **Status: Phase 4 (LLM reasoning layer + memory) complete.** On top of the scaffold, schema, auth, ingestion and the Engine, the repo now has a provider-agnostic LLM abstraction (Anthropic adapter live, OpenAI / Gemini / OpenAI-compatible stubs), per-entity memory, an `LLMScorer` that reasons about each signal relative to the person's own baseline and falls back to the rules scorer on any failure, token-usage logging with a per-tick call cap, and narratives for meaningful score moves. The five forces, inverse pairs, LMSR and tick persistence are unchanged from Phase 3. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`; the trading flow, behavioral logging and the product UI are later phases.
 
 ## Stack
 
@@ -47,8 +47,10 @@ All variables are listed in `.env.local.example`. `lib/env.ts` is the only place
 | `NEXT_PUBLIC_SITE_URL`                 | server (auth redirect links) | `http://localhost:3000` locally, your Vercel URL in production.                          |
 | `YOUTUBE_API_KEY`                      | server only (ingestion)      | YouTube Data API v3 key. Read inside the YouTube connector, never sent to a browser.      |
 | `INGEST_SECRET`                        | server only (ingestion)      | Random string that authorises `/api/ingest`. Generate with `openssl rand -hex 32`.       |
-| `ENGINE_SECRET`                        | server only (Engine)         | Random string that authorises `/api/engine/tick`.                                        |
+| `ENGINE_SECRET`                        | server only (Engine)         | Random string that authorises `/api/engine/tick` (and manual calls to `/api/engine/cron`). |
 | `SCORER`                               | server only (Engine)         | `llm` (default) or `rules` — the instant fallback to the Phase 3 keyword scorer.        |
+| `ENGINE_CRON_ENABLED`                  | server only (heartbeat)      | **The switch.** Only the exact string `true` lets `/api/engine/cron` tick; anything else (including unset) logs `skipped (disabled)` and returns. Default `false`. |
+| `CRON_SECRET`                          | server only (heartbeat)      | Vercel's cron secret. Once set in the Vercel project, Vercel sends it as `Authorization: Bearer` on every scheduled call and the handler rejects anything else. |
 | `LLM_PROVIDER`                         | server only (LLM)            | `anthropic` (default), `openai`, `gemini` or `openai-compatible`. One variable swaps vendors. |
 | `LLM_MODEL`                            | server only (LLM)            | Model string for the active provider; empty = provider default (`claude-opus-5`).       |
 | `ANTHROPIC_API_KEY`                    | server only (LLM)            | Anthropic Messages API key.                                                              |
@@ -65,6 +67,7 @@ app/
   account/page.tsx         minimal protected page
   api/ingest/route.ts      ingestion runner endpoint (INGEST_SECRET)
   api/engine/tick/route.ts Engine tick endpoint (ENGINE_SECRET, ?dryRun=1)
+  api/engine/cron/route.ts the heartbeat: Vercel Cron target, gated by ENGINE_CRON_ENABLED
 components/auth/           LoginForm, SignupForm, SignOutButton
 lib/
   env.ts                   environment variable access
@@ -94,8 +97,11 @@ lib/
     inverse-pairs.ts       second-pass inverse-pair adjustments
     spread.ts              LMSR dynamic spread, Buy / Sell prices
     tick.ts                runEngineTick(): the orchestrator
+    run-tick.ts            runFullTick(): the ONE production tick path (store + scorer + post-tick)
+    cron.ts                heartbeat scheduling (two ticks per invocation, time budget) + cron auth
     store.ts               EngineStore (Supabase via apply_engine_tick RPC + in-memory)
 proxy.ts                   Next.js proxy (formerly middleware)
+vercel.json                cron schedule: /api/engine/cron every minute
 supabase/migrations/       SQL migrations (applied in order)
 types/                     generated database types + row aliases
 vitest.config.ts           test runner config
@@ -224,7 +230,7 @@ update public.data_sources set is_active = true where name = 'youtube';
 
 ### Running a tick
 
-`POST` or `GET /api/engine/tick`, protected by `ENGINE_SECRET` (`x-engine-secret` header or `Authorization: Bearer`). Add `?dryRun=1` to compute and return the summary without persisting. Scheduling is deliberately not set up yet.
+`POST` or `GET /api/engine/tick`, protected by `ENGINE_SECRET` (`x-engine-secret` header or `Authorization: Bearer`). Add `?dryRun=1` to compute and return the summary without persisting. Both this route and the scheduled heartbeat (see [The heartbeat](#the-heartbeat-autonomous-ticking)) call `runFullTick()` in `lib/engine/run-tick.ts`, so there is exactly one tick path; the summary carries `trigger: "manual"` or `"cron"`.
 
 ```bash
 # see what the next tick would do, without writing anything
@@ -328,11 +334,48 @@ One person-call sends roughly 1,000 input tokens (stable ~450-token system promp
 
 Memory summaries add one ~$0.003 (Opus) call per person every ~8 notable events; narratives add nothing. `llm_usage` gives the observed numbers once real ticks run.
 
+## The heartbeat (autonomous ticking)
+
+The Engine can tick on its own every 30 seconds, but the switch ships **OFF**.
+
+`vercel.json` registers a Vercel Cron job that calls `GET /api/engine/cron` every minute (`* * * * *`, the finest schedule Vercel offers). The handler (`app/api/engine/cron/route.ts`) does, in this order:
+
+1. **Checks `ENGINE_CRON_ENABLED` first.** Unless it is exactly `"true"`, it logs `skipped (disabled)` and returns `{ status: "skipped", enabled: false }` immediately: no database read, no tick, no LLM call, no cost. This check runs before authentication, so an unset flag makes the endpoint a no-op for everyone.
+2. **Authenticates the caller.** Vercel Cron sends `Authorization: Bearer <CRON_SECRET>` automatically once `CRON_SECRET` exists in the project; an operator can also call it with `ENGINE_SECRET` (`x-engine-secret` header or Bearer). Both comparisons are constant-time (`lib/api-auth.ts`). Anything else gets `401`; with neither secret configured, `503`.
+3. **Runs the ticks** through `runScheduledTicks()` (`lib/engine/cron.ts`), which calls the very same `runFullTick()` the manual route uses.
+
+### Cadence: two ticks per one-minute invocation
+
+Vercel Cron cannot fire more often than once a minute, so each invocation runs **two** ticks: the first immediately, the second 30 seconds after the first *started* (not after it finished, so the cadence stays anchored to the minute). Per-tick fields in the log and the response include `tickNumber`, `signalsProcessed`, `llmScored`, `fallbacks`, `narratives` and `durationMs`.
+
+The route declares `maxDuration = 60` and the scheduler works inside a **55-second budget**. Before the second tick it estimates how long that tick will take (the first tick's duration, floored at 5 s) and, if `start offset + estimate` would exceed the budget, it skips the second tick with a `tick skipped` log line and `skippedTicks: [{ index: 1, reason }]` in the response. So a slow tick (a big batch of LLM calls, a slow provider) degrades the cadence to 60 s for that minute rather than risking a function timeout that could leave the invocation half-logged. A tick that throws is logged as `tick failed`, the next tick in the invocation is still attempted, and the response status is `500` so Vercel's cron dashboard shows the failure. Overlap between invocations is harmless: `apply_engine_tick` refuses a tick computed against a stale `tick_number`.
+
+Every invocation writes JSON lines to the function log with `"source":"engine-cron"`: `skipped (disabled)`, `tick ran`, `tick failed`, `tick skipped` and a final `invocation finished` line with `ticksPlanned`, `ticksRun`, `signalsProcessed`, `fallbacks`, `failures`, `skippedTicks` and `durationMs`.
+
+The numbers live in `CRON_DEFAULTS` (`lib/engine/cron.ts`): `ticksPerInvocation: 2`, `spacingMs: 30000`, `budgetMs: 55000`, `minTickEstimateMs: 5000`. Setting `ticksPerInvocation` to `1` gives a plain 60-second heartbeat.
+
+### Enabling it later
+
+Nothing ticks until you do all of this in the Vercel project:
+
+1. Make sure the Engine's own variables are set for Production: `SUPABASE_SERVICE_ROLE_KEY`, `ENGINE_SECRET`, and for LLM scoring `ANTHROPIC_API_KEY` (or set `SCORER=rules` to run without any LLM cost).
+2. Add `CRON_SECRET` (generate with `openssl rand -hex 32`). Vercel attaches it to every scheduled call.
+3. Set `ENGINE_CRON_ENABLED` to `true` (exactly that string).
+4. Redeploy so the new values are baked in. Vercel picks the schedule up from `vercel.json` on deploy; check **Project → Settings → Cron Jobs** to confirm `/api/engine/cron` is listed.
+5. Watch the function logs for `"source":"engine-cron"` lines and `engine_ticks` rows appearing every ~30 seconds.
+
+To pause: set `ENGINE_CRON_ENABLED` back to `false` (or delete it) and redeploy. The cron keeps firing but every call returns `skipped (disabled)` in a few milliseconds.
+
+Plan note: per-minute cron schedules require a Vercel **Pro** plan (Hobby is limited to daily jobs and would silently run the job once a day). On Pro, `maxDuration` on the cron route could be raised above 60 if ticks ever need more room.
+
+Locally, the same endpoint is testable without any cron: with `ENGINE_CRON_ENABLED` unset, `curl http://localhost:3000/api/engine/cron` returns the skipped payload; with `ENGINE_CRON_ENABLED=true` in `.env.local`, `curl -H "x-engine-secret: $ENGINE_SECRET" http://localhost:3000/api/engine/cron` runs two real ticks 30 seconds apart.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
 - **Phase 2**: financial-write lockdown + RPC pattern, connector interface and registry, YouTube connector, stubs, `source_snapshots`, ingestion runner and endpoint.
 - **Phase 3**: swappable sentiment scoring (rules-based), the five forces, inverse pairs, LMSR spread with Buy/Sell prices, the atomic tick with history and per-force audit trail, the tick endpoint.
 - **Phase 4**: provider-agnostic LLM abstraction with an Anthropic adapter and three stubs, model routing, per-entity memory with seeded baselines and cheap evolution, the `LLMScorer` with anomaly awareness and rules fallback, usage logging with a per-tick call cap, narratives for meaningful moves.
+- **Engine cron**: the 30-second heartbeat via Vercel Cron (two ticks per one-minute invocation with a time budget), one shared `runFullTick()` path, gated by `ENGINE_CRON_ENABLED`, which ships as `false`.
 
-Deliberately not built yet: the 30-second schedule, behavioral logging (Phase 5), the user trading flow (which will write `positions`, `transactions` and `trade_events` through RPCs), person profiles, feeds, portfolio pages, and any visual design.
+Deliberately not built yet: behavioral logging (Phase 5), the user trading flow (which will write `positions`, `transactions` and `trade_events` through RPCs), person profiles, feeds, portfolio pages, and any visual design. The heartbeat is wired but switched off.
