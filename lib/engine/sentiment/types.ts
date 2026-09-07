@@ -4,6 +4,8 @@ import type { Json } from "@/types/database";
 /** What a scorer gets to look at. Kept minimal so an LLM scorer can be dropped in unchanged. */
 export interface SentimentInput {
   id: string;
+  /** The person the signal is about; scorers with per-entity memory batch and contextualise by it. */
+  personId: string;
   headline: string;
   /** The connector's raw payload; `kind: "baseline"` marks zero-impact baseline signals. */
   rawPayload: Json | null;
@@ -19,7 +21,15 @@ export interface SentimentResult {
   direction: 1 | -1 | 0;
   /** Optional human-readable explanation, kept in score_events details. */
   rationale?: string;
+  /** How unusual this signal is for THIS person (LLM scorer). */
+  anomaly?: SentimentAnomaly;
+  /** One-sentence explanation of the person's net movement, in the Engine's voice (LLM scorer, per batch). */
+  narrative?: string;
+  /** Which scorer produced the result: "rules", "llm", "prefilter", "rules-fallback". */
+  scorer?: string;
 }
+
+export type SentimentAnomaly = "routine" | "notable" | "anomalous";
 
 /**
  * The swappable sentiment interface. The Engine only ever calls scoreSignal();

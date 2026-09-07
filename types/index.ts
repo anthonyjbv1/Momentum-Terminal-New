@@ -45,3 +45,12 @@ export type TradeEventRow = Tables<"trade_events">;
 export type TradeSide = "BUY" | "SELL";
 /** Enforced by score_events_force_check. */
 export type ScoreEventForce = "gravity" | "signals" | "market_mood" | "conviction" | "trading_activity" | "inverse_pair";
+
+// ---------------------------------------------------------------------------
+// LLM reasoning layer + memory (Phase 4)
+// ---------------------------------------------------------------------------
+export type PersonMemoryRow = Tables<"person_memory">;
+export type LlmUsageRow = Tables<"llm_usage">;
+export type NarrativeRow = Tables<"narratives">;
+export type LlmTaskType = "sentiment" | "anomaly" | "narrative" | "memory";
+export type NarrativeSource = "llm" | "template";

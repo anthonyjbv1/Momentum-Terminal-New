@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { getSentimentScorer, listSentimentScorers } from "./index";
+import { getSentimentScorer, listSentimentScorers, resetSentimentScorers } from "./index";
 import { RulesBasedScorer, applyPayloadHints, scoreHeadline } from "./rules";
 import type { SentimentInput, SentimentScorer } from "./types";
 
 const scorer = new RulesBasedScorer();
 
 function input(headline: string, rawPayload: SentimentInput["rawPayload"] = null): SentimentInput {
-  return { id: "sig", headline, rawPayload, sourceName: "youtube", sourceTier: 2 };
+  return { id: "sig", personId: "p-1", headline, rawPayload, sourceName: "youtube", sourceTier: 2 };
 }
 
 describe("RulesBasedScorer", () => {
@@ -81,11 +81,21 @@ describe("RulesBasedScorer", () => {
 });
 
 describe("sentiment registry", () => {
-  it("returns the rules scorer by default and rejects unknown names", () => {
-    expect(getSentimentScorer().name).toBe("rules");
+  it("returns the LLM scorer by default, the rules scorer on request, and rejects unknown names", () => {
+    delete process.env.SCORER;
+    delete process.env.SENTIMENT_SCORER;
+    resetSentimentScorers();
+    expect(getSentimentScorer().name).toBe("llm");
     expect(getSentimentScorer("rules")).toBeInstanceOf(RulesBasedScorer);
-    expect(listSentimentScorers()).toEqual(["rules"]);
+    expect(listSentimentScorers()).toEqual(["rules", "llm"]);
     expect(() => getSentimentScorer("oracle")).toThrow(/Unknown sentiment scorer/);
+
+    // SCORER=rules is the instant fallback switch.
+    process.env.SCORER = "rules";
+    resetSentimentScorers();
+    expect(getSentimentScorer().name).toBe("rules");
+    delete process.env.SCORER;
+    resetSentimentScorers();
   });
 
   it("is swappable: any object with scoreSignal satisfies the interface", async () => {

@@ -77,3 +77,70 @@ export function getEngineSecretOrNull(): string | null {
   const value = process.env.ENGINE_SECRET?.trim();
   return value ? value : null;
 }
+
+// ---------------------------------------------------------------------------
+// LLM reasoning layer (Phase 4) — all SERVER ONLY
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_LLM_PROVIDER_NAME = "anthropic";
+export const DEFAULT_SCORER_NAME = "llm";
+
+/** Active LLM provider registry name (LLM_PROVIDER). */
+export function getLLMProviderName(): string {
+  return process.env.LLM_PROVIDER?.trim() || DEFAULT_LLM_PROVIDER_NAME;
+}
+
+/** Model string for the active provider (LLM_MODEL), or null for the provider default. */
+export function getLLMModelOrNull(): string | null {
+  const value = process.env.LLM_MODEL?.trim();
+  return value ? value : null;
+}
+
+/** Which SentimentScorer the Engine uses: SCORER (default "llm"; "rules" is the instant fallback). */
+export function getScorerName(): string {
+  return process.env.SCORER?.trim() || process.env.SENTIMENT_SCORER?.trim() || DEFAULT_SCORER_NAME;
+}
+
+export interface LLMRouteOverride {
+  provider?: string;
+  model?: string;
+  effort?: "low" | "medium" | "high";
+}
+
+function effortOrUndefined(value: string | undefined): LLMRouteOverride["effort"] {
+  return value === "low" || value === "medium" || value === "high" ? value : undefined;
+}
+
+/**
+ * Optional per-task routing overrides. Each task type has its own trio of
+ * variables so a cheap model can serve simple scoring while a premium one
+ * handles anomaly reasoning.
+ */
+export function getLLMRouteOverride(taskType: "sentiment" | "anomaly" | "narrative" | "memory"): LLMRouteOverride {
+  switch (taskType) {
+    case "sentiment":
+      return {
+        provider: process.env.LLM_PROVIDER_SENTIMENT?.trim() || undefined,
+        model: process.env.LLM_MODEL_SENTIMENT?.trim() || undefined,
+        effort: effortOrUndefined(process.env.LLM_EFFORT_SENTIMENT?.trim()),
+      };
+    case "anomaly":
+      return {
+        provider: process.env.LLM_PROVIDER_ANOMALY?.trim() || undefined,
+        model: process.env.LLM_MODEL_ANOMALY?.trim() || undefined,
+        effort: effortOrUndefined(process.env.LLM_EFFORT_ANOMALY?.trim()),
+      };
+    case "narrative":
+      return {
+        provider: process.env.LLM_PROVIDER_NARRATIVE?.trim() || undefined,
+        model: process.env.LLM_MODEL_NARRATIVE?.trim() || undefined,
+        effort: effortOrUndefined(process.env.LLM_EFFORT_NARRATIVE?.trim()),
+      };
+    case "memory":
+      return {
+        provider: process.env.LLM_PROVIDER_MEMORY?.trim() || undefined,
+        model: process.env.LLM_MODEL_MEMORY?.trim() || undefined,
+        effort: effortOrUndefined(process.env.LLM_EFFORT_MEMORY?.trim()),
+      };
+  }
+}

@@ -49,6 +49,9 @@ export function signalsForce(scored: ScoredSignal[], config: EngineConfig["signa
         confidence: s.sentiment.confidence,
         direction: s.sentiment.direction,
         impact: s.impact,
+        scorer: s.sentiment.scorer,
+        anomaly: s.sentiment.anomaly,
+        rationale: s.sentiment.rationale,
       })),
     },
   };

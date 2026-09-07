@@ -161,6 +161,107 @@ export type Database = {
           },
         ]
       }
+      llm_usage: {
+        Row: {
+          cache_creation_input_tokens: number
+          cache_read_input_tokens: number
+          created_at: string
+          id: string
+          input_tokens: number
+          latency_ms: number | null
+          model: string
+          output_tokens: number
+          person_id: string | null
+          provider: string
+          task_type: string
+          tick_number: number | null
+        }
+        Insert: {
+          cache_creation_input_tokens?: number
+          cache_read_input_tokens?: number
+          created_at?: string
+          id?: string
+          input_tokens?: number
+          latency_ms?: number | null
+          model: string
+          output_tokens?: number
+          person_id?: string | null
+          provider: string
+          task_type: string
+          tick_number?: number | null
+        }
+        Update: {
+          cache_creation_input_tokens?: number
+          cache_read_input_tokens?: number
+          created_at?: string
+          id?: string
+          input_tokens?: number
+          latency_ms?: number | null
+          model?: string
+          output_tokens?: number
+          person_id?: string | null
+          provider?: string
+          task_type?: string
+          tick_number?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "llm_usage_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      narratives: {
+        Row: {
+          created_at: string
+          id: string
+          person_id: string
+          score_after: number
+          score_before: number
+          source: string
+          text: string
+          tick_number: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          person_id: string
+          score_after: number
+          score_before: number
+          source?: string
+          text: string
+          tick_number: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          person_id?: string
+          score_after?: number
+          score_before?: number
+          source?: string
+          text?: string
+          tick_number?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "narratives_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "narratives_tick_number_fkey"
+            columns: ["tick_number"]
+            isOneToOne: false
+            referencedRelation: "engine_ticks"
+            referencedColumns: ["tick_number"]
+          },
+        ]
+      }
       people: {
         Row: {
           avatar_url: string | null
@@ -261,6 +362,41 @@ export type Database = {
             foreignKeyName: "person_data_sources_person_id_fkey"
             columns: ["person_id"]
             isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      person_memory: {
+        Row: {
+          baseline_patterns: Json
+          id: string
+          person_id: string
+          profile: Json
+          recent_context: Json
+          updated_at: string
+        }
+        Insert: {
+          baseline_patterns?: Json
+          id?: string
+          person_id: string
+          profile?: Json
+          recent_context?: Json
+          updated_at?: string
+        }
+        Update: {
+          baseline_patterns?: Json
+          id?: string
+          person_id?: string
+          profile?: Json
+          recent_context?: Json
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "person_memory_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: true
             referencedRelation: "people"
             referencedColumns: ["id"]
           },

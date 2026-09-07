@@ -1,29 +1,43 @@
+import { getScorerName } from "@/lib/env";
+
+import { createDefaultLLMScorer } from "./llm";
 import { rulesBasedScorer } from "./rules";
 import type { SentimentScorer } from "./types";
 
-export type { SentimentInput, SentimentResult, SentimentScorer } from "./types";
+export type { SentimentAnomaly, SentimentInput, SentimentResult, SentimentScorer } from "./types";
 export { RulesBasedScorer, rulesBasedScorer } from "./rules";
+export { LLMScorer, createDefaultLLMScorer } from "./llm";
 
 /**
- * Scorer registry. The Engine asks for a scorer by name and only ever talks
- * to the SentimentScorer interface. Phase 4 registers an LLM scorer here and
- * switches the default (or the SENTIMENT_SCORER env var) — the Engine does
- * not change.
+ * Scorer registry. The Engine asks for a scorer by name (SCORER env var,
+ * default "llm") and only ever talks to the SentimentScorer interface.
+ * SCORER=rules switches back to the Phase 3 keyword scorer instantly.
  */
-const SCORERS: Record<string, SentimentScorer> = {
-  rules: rulesBasedScorer,
+const FACTORIES: Record<string, () => SentimentScorer> = {
+  rules: () => rulesBasedScorer,
+  llm: () => createDefaultLLMScorer(),
 };
 
-export const DEFAULT_SCORER_NAME = "rules";
+const instances = new Map<string, SentimentScorer>();
 
-export function getSentimentScorer(name: string = process.env.SENTIMENT_SCORER ?? DEFAULT_SCORER_NAME): SentimentScorer {
-  const scorer = SCORERS[name];
+export function getSentimentScorer(name: string = getScorerName()): SentimentScorer {
+  const key = name.trim().toLowerCase();
+  const factory = FACTORIES[key];
+  if (!factory) {
+    throw new Error(`Unknown sentiment scorer "${name}". Registered: ${Object.keys(FACTORIES).join(", ")}`);
+  }
+  let scorer = instances.get(key);
   if (!scorer) {
-    throw new Error(`Unknown sentiment scorer "${name}". Registered: ${Object.keys(SCORERS).join(", ")}`);
+    scorer = factory();
+    instances.set(key, scorer);
   }
   return scorer;
 }
 
 export function listSentimentScorers(): string[] {
-  return Object.keys(SCORERS);
+  return Object.keys(FACTORIES);
+}
+
+export function resetSentimentScorers(): void {
+  instances.clear();
 }

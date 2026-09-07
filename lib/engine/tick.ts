@@ -68,6 +68,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     context.signals.map(async (signal) => {
       const result = await scorer.scoreSignal({
         id: signal.id,
+        personId: signal.personId,
         headline: signal.headline,
         rawPayload: signal.rawPayload,
         sourceName: signal.sourceName,
@@ -182,6 +183,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     id: r.person.id,
     slug: r.person.slug,
     displayName: r.person.display_name,
+    revertTarget: Number(r.person.revert_target),
     previousScore: r.previousScore,
     newScore: r.newScore,
     change: round(r.newScore - r.previousScore, decimals),
@@ -216,6 +218,10 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       confidence: s.sentiment.confidence,
       direction: s.sentiment.direction,
       impact: round(s.impact, FORCE_DECIMALS),
+      scorer: s.sentiment.scorer,
+      rationale: s.sentiment.rationale,
+      anomaly: s.sentiment.anomaly,
+      narrative: s.sentiment.narrative,
     })),
   };
 

@@ -92,6 +92,41 @@ export interface EngineConfig {
     /** Used when an inverse_pairs row has no dampening. */
     defaultDampening: number;
   };
+  /** LLM reasoning layer (Phase 4): cost controls and anomaly folding. */
+  llm: {
+    /** Hard cap on LLM calls per tick (rolling tick-interval window). Beyond it, signals use the rules scorer. */
+    maxCallsPerTick: number;
+    /** How many per-person calls run concurrently. */
+    maxConcurrentCalls: number;
+    /** Per-call timeout. On timeout the signals fall back to the rules scorer. */
+    timeoutMs: number;
+    /** Most signals about one person reasoned together in a single call. */
+    maxSignalsPerCall: number;
+    /** Confidence multipliers by anomaly assessment: routine noise is damped, genuine anomalies amplified (capped at 1). */
+    routineConfidenceMultiplier: number;
+    notableConfidenceMultiplier: number;
+    anomalousConfidenceMultiplier: number;
+    /** "change" signals below this relative move never reach the LLM (rules scorer instead). */
+    minRelativeChangeForLlm: number;
+    /** Per-entity memory is cached this long so a profile is not re-fetched within a tick. */
+    memoryCacheTtlMs: number;
+  };
+  /** Narrative generation (the Engine explaining meaningful moves). */
+  narratives: {
+    /** Only moves with |change| >= this get a narrative. */
+    minAbsChange: number;
+    /** Most narratives written per tick. */
+    maxPerTick: number;
+  };
+  /** Per-entity memory updates. */
+  memory: {
+    /** A processed signal with |impact| >= this (or flagged notable / anomalous) is remembered. */
+    notableImpactThreshold: number;
+    /** How many recent notable events are kept verbatim; older ones are folded into the summary. */
+    maxRecentEvents: number;
+    /** Use the LLM to fold overflowing events into the summary (one small call); otherwise a deterministic summary. */
+    llmSummaries: boolean;
+  };
   /** LMSR dynamic spread. */
   spread: {
     base: number;
@@ -148,6 +183,19 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     maxAbsImpact: 0.3,
   },
   inversePairs: { defaultDampening: 0.4 },
+  llm: {
+    maxCallsPerTick: 20,
+    maxConcurrentCalls: 4,
+    timeoutMs: 20_000,
+    maxSignalsPerCall: 12,
+    routineConfidenceMultiplier: 0.5,
+    notableConfidenceMultiplier: 1.0,
+    anomalousConfidenceMultiplier: 1.2,
+    minRelativeChangeForLlm: 0.002,
+    memoryCacheTtlMs: 60_000,
+  },
+  narratives: { minAbsChange: 0.5, maxPerTick: 16 },
+  memory: { notableImpactThreshold: 0.5, maxRecentEvents: 8, llmSummaries: true },
   spread: {
     base: 0.5,
     max: 1.5,

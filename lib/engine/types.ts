@@ -97,6 +97,7 @@ export interface PersonSummary {
   id: string;
   slug: string;
   displayName: string;
+  revertTarget: number;
   previousScore: number;
   newScore: number;
   change: number;
@@ -127,6 +128,12 @@ export interface TickSummary {
     confidence: number;
     direction: SentimentResult["direction"];
     impact: number;
+    /** Which scorer produced the assessment ("rules", "llm", "prefilter", "rules-fallback"). */
+    scorer?: string;
+    rationale?: string;
+    anomaly?: SentimentResult["anomaly"];
+    /** The Engine's one-sentence explanation from LLM reasoning, reused by narratives. */
+    narrative?: string;
   }>;
 }
 
