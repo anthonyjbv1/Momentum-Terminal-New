@@ -89,6 +89,42 @@ export type Database = {
         }
         Relationships: []
       }
+      engine_ticks: {
+        Row: {
+          created_at: string
+          finished_at: string
+          id: string
+          mood: number
+          people_updated: number
+          signals_processed: number
+          started_at: string
+          summary: Json | null
+          tick_number: number
+        }
+        Insert: {
+          created_at?: string
+          finished_at: string
+          id?: string
+          mood?: number
+          people_updated?: number
+          signals_processed?: number
+          started_at: string
+          summary?: Json | null
+          tick_number: number
+        }
+        Update: {
+          created_at?: string
+          finished_at?: string
+          id?: string
+          mood?: number
+          people_updated?: number
+          signals_processed?: number
+          started_at?: string
+          summary?: Json | null
+          tick_number?: number
+        }
+        Relationships: []
+      }
       inverse_pairs: {
         Row: {
           dampening: number
@@ -130,6 +166,7 @@ export type Database = {
           avatar_url: string | null
           base_score: number
           bio: string | null
+          buy_price: number | null
           category: string
           consent_tier: number
           created_at: string
@@ -138,9 +175,11 @@ export type Database = {
           full_name: string | null
           id: string
           is_active: boolean
+          last_tick_at: string | null
           max_allocation_cents: number
           partnership_status: string
           revert_target: number
+          sell_price: number | null
           slug: string
           spread: number
         }
@@ -148,6 +187,7 @@ export type Database = {
           avatar_url?: string | null
           base_score?: number
           bio?: string | null
+          buy_price?: number | null
           category: string
           consent_tier?: number
           created_at?: string
@@ -156,9 +196,11 @@ export type Database = {
           full_name?: string | null
           id?: string
           is_active?: boolean
+          last_tick_at?: string | null
           max_allocation_cents?: number
           partnership_status?: string
           revert_target?: number
+          sell_price?: number | null
           slug: string
           spread?: number
         }
@@ -166,6 +208,7 @@ export type Database = {
           avatar_url?: string | null
           base_score?: number
           bio?: string | null
+          buy_price?: number | null
           category?: string
           consent_tier?: number
           created_at?: string
@@ -174,9 +217,11 @@ export type Database = {
           full_name?: string | null
           id?: string
           is_active?: boolean
+          last_tick_at?: string | null
           max_allocation_cents?: number
           partnership_status?: string
           revert_target?: number
+          sell_price?: number | null
           slug?: string
           spread?: number
         }
@@ -304,6 +349,51 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "users"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      score_events: {
+        Row: {
+          created_at: string
+          details: Json | null
+          force: string
+          id: string
+          impact: number
+          person_id: string
+          tick_number: number
+        }
+        Insert: {
+          created_at?: string
+          details?: Json | null
+          force: string
+          id?: string
+          impact: number
+          person_id: string
+          tick_number: number
+        }
+        Update: {
+          created_at?: string
+          details?: Json | null
+          force?: string
+          id?: string
+          impact?: number
+          person_id?: string
+          tick_number?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "score_events_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_events_tick_number_fkey"
+            columns: ["tick_number"]
+            isOneToOne: false
+            referencedRelation: "engine_ticks"
+            referencedColumns: ["tick_number"]
           },
         ]
       }
@@ -444,6 +534,48 @@ export type Database = {
           },
         ]
       }
+      trade_events: {
+        Row: {
+          amount_cents: number
+          created_at: string
+          id: string
+          person_id: string
+          side: string
+          user_id: string | null
+        }
+        Insert: {
+          amount_cents: number
+          created_at?: string
+          id?: string
+          person_id: string
+          side: string
+          user_id?: string | null
+        }
+        Update: {
+          amount_cents?: number
+          created_at?: string
+          id?: string
+          person_id?: string
+          side?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trade_events_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trade_events_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       transactions: {
         Row: {
           amount_cents: number
@@ -527,6 +659,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      apply_engine_tick: { Args: { p_tick: Json }; Returns: Json }
       placeholder_financial_mutation: {
         Args: { p_amount_cents: number }
         Returns: undefined

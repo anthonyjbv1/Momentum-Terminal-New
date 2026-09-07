@@ -35,3 +35,13 @@ export type SentimentLabel = "positive" | "negative" | "neutral";
 
 /** Enforced by behavioral_events_event_type_check. Extend the constraint (migration) before adding a value here. */
 export type BehavioralEventType = "view_person" | "expand_signal" | "take_position" | "time_spent" | "follow";
+
+// ---------------------------------------------------------------------------
+// Engine (Phase 3)
+// ---------------------------------------------------------------------------
+export type EngineTick = Tables<"engine_ticks">;
+export type ScoreEvent = Tables<"score_events">;
+export type TradeEventRow = Tables<"trade_events">;
+export type TradeSide = "BUY" | "SELL";
+/** Enforced by score_events_force_check. */
+export type ScoreEventForce = "gravity" | "signals" | "market_mood" | "conviction" | "trading_activity" | "inverse_pair";

@@ -1,0 +1,175 @@
+/**
+ * Every tuning constant of the Engine lives here. Nothing else in lib/engine
+ * hard-codes a number. Adjust values in DEFAULT_ENGINE_CONFIG; tests and the
+ * tick runner can pass overrides through withEngineConfig().
+ *
+ * The values mirror the proven formulas of the previous platform:
+ *   theta decay λ = 0.35/h, tier-weighted confidence-scaled news impact,
+ *   tidal propagation with a brake, the open-interest ramp, the 1.5σ
+ *   net-order-flow pre-emption weighted 0.25 (0.4× when unconfirmed) and the
+ *   LMSR spread with liquidity parameter b = 5000.
+ */
+
+export interface EngineConfig {
+  tick: {
+    /** Target cadence of the Engine, in seconds. Not scheduled yet (manual trigger only). */
+    intervalSeconds: number;
+    /** deltaHours used by Gravity when a person has never been ticked (no last_tick_at). */
+    firstTickDeltaHours: number;
+    /** Upper bound on deltaHours so a long pause does not snap scores to target in one tick. */
+    maxDeltaHours: number;
+    /** Most unprocessed signals loaded per tick. */
+    maxSignalsPerTick: number;
+  };
+  score: {
+    floor: number;
+    ceiling: number;
+    /** Decimal places scores are rounded to when persisted. */
+    decimals: number;
+  };
+  /** FORCE 1 — Gravity (mean reversion toward people.revert_target). */
+  gravity: {
+    /** Decay rate per hour: decayed = target + (score - target) * e^(-lambda * deltaHours). */
+    lambdaPerHour: number;
+  };
+  /** FORCE 2 — Signals (news impact). */
+  signals: {
+    /** Maximum impact of one signal at confidence 1 and tier multiplier 1. */
+    baseImpact: number;
+    /** data_sources.tier -> multiplier. */
+    tierMultipliers: Record<number, number>;
+    /** Used for tiers missing from the table above. */
+    defaultTierMultiplier: number;
+    /** Brake: |sum of signal impacts| per person per tick is capped here. */
+    maxAbsImpactPerTick: number;
+  };
+  /** FORCE 3 — Market Mood (global sentiment tide). */
+  marketMood: {
+    /** Fraction of the mood applied to each person. */
+    fraction: number;
+    /** Sensitivity used for people not listed in sensitivityBySlug. */
+    defaultSensitivity: number;
+    /** Per-person overrides keyed by people.slug. */
+    sensitivityBySlug: Record<string, number>;
+    /** Brake: the mood itself is clamped to ±this before the fraction is applied. */
+    maxAbsMood: number;
+    /** Brake: the per-person impact is clamped to ±this. */
+    maxAbsImpact: number;
+  };
+  /** FORCE 4 — Conviction (capital concentration = open capital / max_allocation). */
+  conviction: {
+    /** Up to this concentration the force is 0. */
+    neutralUpTo: number;
+    /** Between neutralUpTo and this, a linear ramp from positiveMin to positiveMax. */
+    positiveUpTo: number;
+    positiveMin: number;
+    positiveMax: number;
+    /** Above positiveUpTo, a linear ramp from -negativeMin (just above) to -negativeMax at 100%. */
+    negativeMin: number;
+    negativeMax: number;
+    /** Absolute cap of the negative side. */
+    cap: number;
+  };
+  /** FORCE 5 — Trading Activity (live Buy/Sell velocity). */
+  tradingActivity: {
+    /** Rolling window for net flow, in seconds. */
+    windowSeconds: number;
+    /** History used for the mean / standard deviation of windowed net flow, in hours. */
+    historyHours: number;
+    /** Only act when the current conviction score is beyond mean ± this many standard deviations. */
+    thresholdStdDevs: number;
+    /** adjustment = convictionScore * weight. */
+    weight: number;
+    /** Multiplier when no signal confirms the move this tick (pump protection). */
+    unconfirmedDampening: number;
+    /** Gate: skip evaluation when the person's capital concentration is below this. */
+    minConcentration: number;
+    /** Absolute cap of the adjustment. */
+    maxAbsImpact: number;
+  };
+  /** Second pass — inverse pairs. */
+  inversePairs: {
+    /** Used when an inverse_pairs row has no dampening. */
+    defaultDampening: number;
+  };
+  /** LMSR dynamic spread. */
+  spread: {
+    base: number;
+    max: number;
+    /** LMSR liquidity parameter b, in dollars (capital / b feeds exp()). */
+    lmsrLiquidity: number;
+    /** Window for "signal activity depth" and confidence, in hours. */
+    depthWindowHours: number;
+    /** Number of processed signals in the window at which depth tightening saturates. */
+    depthSaturationSignals: number;
+    /** Tightening weights (should sum to 1). */
+    weights: { concentration: number; depth: number; confidence: number };
+  };
+}
+
+export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
+  tick: {
+    intervalSeconds: 30,
+    firstTickDeltaHours: 30 / 3600,
+    maxDeltaHours: 24,
+    maxSignalsPerTick: 500,
+  },
+  score: { floor: 35, ceiling: 100, decimals: 2 },
+  gravity: { lambdaPerHour: 0.35 },
+  signals: {
+    baseImpact: 1.5,
+    tierMultipliers: { 1: 1.5, 2: 1.0, 3: 0.5, 4: 0.3, 5: 0.3 },
+    defaultTierMultiplier: 0.3,
+    maxAbsImpactPerTick: 10,
+  },
+  marketMood: {
+    fraction: 0.25,
+    defaultSensitivity: 1.0,
+    sensitivityBySlug: {},
+    maxAbsMood: 2.0,
+    maxAbsImpact: 0.5,
+  },
+  conviction: {
+    neutralUpTo: 0.6,
+    positiveUpTo: 0.85,
+    positiveMin: 0.05,
+    positiveMax: 0.15,
+    negativeMin: 0.05,
+    negativeMax: 0.15,
+    cap: 0.3,
+  },
+  tradingActivity: {
+    windowSeconds: 60,
+    historyHours: 24,
+    thresholdStdDevs: 1.5,
+    weight: 0.25,
+    unconfirmedDampening: 0.4,
+    minConcentration: 0.15,
+    maxAbsImpact: 0.3,
+  },
+  inversePairs: { defaultDampening: 0.4 },
+  spread: {
+    base: 0.5,
+    max: 1.5,
+    lmsrLiquidity: 5000,
+    depthWindowHours: 24,
+    depthSaturationSignals: 10,
+    weights: { concentration: 0.5, depth: 0.3, confidence: 0.2 },
+  },
+};
+
+type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
+
+/** DEFAULT_ENGINE_CONFIG with nested overrides applied (one level deep per section). */
+export function withEngineConfig(overrides: DeepPartial<EngineConfig>, base: EngineConfig = DEFAULT_ENGINE_CONFIG): EngineConfig {
+  const merged = { ...base } as Record<string, unknown>;
+  for (const [section, value] of Object.entries(overrides)) {
+    if (value === undefined) continue;
+    const current = (base as unknown as Record<string, unknown>)[section];
+    merged[section] =
+      current !== null && typeof current === "object" && value !== null && typeof value === "object"
+        ? { ...(current as object), ...(value as object) }
+        : value;
+  }
+  return merged as unknown as EngineConfig;
+}

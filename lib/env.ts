@@ -64,3 +64,16 @@ export function getIngestSecretOrNull(): string | null {
   const value = process.env.INGEST_SECRET?.trim();
   return value ? value : null;
 }
+
+// ---------------------------------------------------------------------------
+// The Engine (Phase 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Shared secret that authorises calls to /api/engine/tick. SERVER ONLY.
+ * Returns null when unset so the route can fail closed with a clear message.
+ */
+export function getEngineSecretOrNull(): string | null {
+  const value = process.env.ENGINE_SECRET?.trim();
+  return value ? value : null;
+}
