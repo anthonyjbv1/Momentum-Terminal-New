@@ -46,3 +46,21 @@ export function getSupabaseServiceRoleKey(): string {
 export function getSiteUrl(): string {
   return process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 }
+
+// ---------------------------------------------------------------------------
+// Data ingestion (Phase 2)
+// ---------------------------------------------------------------------------
+
+/** YouTube Data API v3 key. SERVER ONLY — read inside connectors, never in client code. */
+export function getYouTubeApiKey(): string {
+  return required("YOUTUBE_API_KEY", process.env.YOUTUBE_API_KEY);
+}
+
+/**
+ * Shared secret that authorises calls to /api/ingest. SERVER ONLY.
+ * Returns null when unset so the route can fail closed with a clear message.
+ */
+export function getIngestSecretOrNull(): string | null {
+  const value = process.env.INGEST_SECRET?.trim();
+  return value ? value : null;
+}

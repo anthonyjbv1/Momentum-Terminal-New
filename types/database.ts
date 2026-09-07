@@ -343,9 +343,11 @@ export type Database = {
         Row: {
           created_at: string
           data_source_id: string
+          dedupe_key: string | null
           headline: string
           id: string
           impact_score: number | null
+          occurred_at: string
           person_id: string
           processed: boolean
           processed_at: string | null
@@ -356,9 +358,11 @@ export type Database = {
         Insert: {
           created_at?: string
           data_source_id: string
+          dedupe_key?: string | null
           headline: string
           id?: string
           impact_score?: number | null
+          occurred_at?: string
           person_id: string
           processed?: boolean
           processed_at?: string | null
@@ -369,9 +373,11 @@ export type Database = {
         Update: {
           created_at?: string
           data_source_id?: string
+          dedupe_key?: string | null
           headline?: string
           id?: string
           impact_score?: number | null
+          occurred_at?: string
           person_id?: string
           processed?: boolean
           processed_at?: string | null
@@ -389,6 +395,48 @@ export type Database = {
           },
           {
             foreignKeyName: "signals_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      source_snapshots: {
+        Row: {
+          data_source_id: string
+          id: string
+          metric_key: string
+          person_id: string
+          recorded_at: string
+          value: number
+        }
+        Insert: {
+          data_source_id: string
+          id?: string
+          metric_key: string
+          person_id: string
+          recorded_at?: string
+          value: number
+        }
+        Update: {
+          data_source_id?: string
+          id?: string
+          metric_key?: string
+          person_id?: string
+          recorded_at?: string
+          value?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "source_snapshots_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "data_sources"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "source_snapshots_person_id_fkey"
             columns: ["person_id"]
             isOneToOne: false
             referencedRelation: "people"
@@ -479,6 +527,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      placeholder_financial_mutation: {
+        Args: { p_amount_cents: number }
+        Returns: undefined
+      }
       username_available: { Args: { p_username: string }; Returns: boolean }
     }
     Enums: {

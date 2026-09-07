@@ -21,6 +21,7 @@ export type Signal = Tables<"signals">;
 export type ScoreHistoryEntry = Tables<"score_history">;
 export type PortfolioHistoryEntry = Tables<"portfolio_history">;
 export type BehavioralEvent = Tables<"behavioral_events">;
+export type SourceSnapshot = Tables<"source_snapshots">;
 
 // ---------------------------------------------------------------------------
 // Closed vocabularies. These mirror CHECK constraints in the schema; keep them
@@ -32,11 +33,5 @@ export type PositionDirection = "HIGH" | "LOW";
 export type TransactionType = "DEPOSIT" | "ALLOCATION" | "REDEMPTION" | "WITHDRAWAL";
 export type SentimentLabel = "positive" | "negative" | "neutral";
 
-/** Known event types. The column is intentionally unconstrained, so new types are allowed. */
-export type BehavioralEventType =
-  | "view_person"
-  | "expand_signal"
-  | "take_position"
-  | "time_spent"
-  | "follow"
-  | (string & {});
+/** Enforced by behavioral_events_event_type_check. Extend the constraint (migration) before adding a value here. */
+export type BehavioralEventType = "view_person" | "expand_signal" | "take_position" | "time_spent" | "follow";
