@@ -33,8 +33,12 @@ export type PositionDirection = "HIGH" | "LOW";
 export type TransactionType = "DEPOSIT" | "ALLOCATION" | "REDEMPTION" | "WITHDRAWAL";
 export type SentimentLabel = "positive" | "negative" | "neutral";
 
-/** Enforced by behavioral_events_event_type_check. Extend the constraint (migration) before adding a value here. */
-export type BehavioralEventType = "view_person" | "expand_signal" | "take_position" | "time_spent" | "follow";
+/**
+ * Behavioral event vocabulary (Phase 5). The database only checks the format
+ * of event_type; the canonical list is BEHAVIORAL_EVENT_TYPES in
+ * lib/behavioral/events.ts, so new types need no migration.
+ */
+export type { BehavioralEventType } from "@/lib/behavioral/events";
 
 // ---------------------------------------------------------------------------
 // Engine (Phase 3)

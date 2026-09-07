@@ -21,6 +21,7 @@ export type Database = {
           id: string
           metadata: Json | null
           person_id: string | null
+          session_id: string | null
           user_id: string
         }
         Insert: {
@@ -29,6 +30,7 @@ export type Database = {
           id?: string
           metadata?: Json | null
           person_id?: string | null
+          session_id?: string | null
           user_id: string
         }
         Update: {
@@ -37,6 +39,7 @@ export type Database = {
           id?: string
           metadata?: Json | null
           person_id?: string | null
+          session_id?: string | null
           user_id?: string
         }
         Relationships: [
@@ -796,6 +799,43 @@ export type Database = {
     }
     Functions: {
       apply_engine_tick: { Args: { p_tick: Json }; Returns: Json }
+      behavioral_co_engagement: {
+        Args: {
+          p_event_types?: string[]
+          p_limit?: number
+          p_min_shared_users?: number
+          p_since: string
+        }
+        Returns: {
+          person_a: string
+          person_b: string
+          shared_users: number
+          users_a: number
+          users_b: number
+        }[]
+      }
+      behavioral_person_engagement: {
+        Args: { p_person_id: string; p_since: string }
+        Returns: {
+          detail: string
+          event_count: number
+          event_type: string
+          grouping_level: number
+          total_duration_ms: number
+          unique_users: number
+        }[]
+      }
+      behavioral_user_history: {
+        Args: { p_event_types?: string[]; p_since: string; p_user_id: string }
+        Returns: {
+          event_count: number
+          event_type: string
+          first_at: string
+          last_at: string
+          person_id: string
+          total_duration_ms: number
+        }[]
+      }
       placeholder_financial_mutation: {
         Args: { p_amount_cents: number }
         Returns: undefined

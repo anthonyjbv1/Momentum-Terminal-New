@@ -2,7 +2,7 @@
 
 A social data terminal where users take **HIGH** or **LOW** positions on individual people. Each person has a continuously updating Momentum Score driven by their observable real-world data. Users profit when a score moves in their predicted direction; the platform is the sole counterparty. The scoring system is called **the Engine**; its five forces are **Gravity**, **Signals**, **Market Mood**, **Conviction** and **Trading Activity**.
 
-> **Status: Phase 4 (LLM reasoning layer + memory) complete.** On top of the scaffold, schema, auth, ingestion and the Engine, the repo now has a provider-agnostic LLM abstraction (Anthropic adapter live, OpenAI / Gemini / OpenAI-compatible stubs), per-entity memory, an `LLMScorer` that reasons about each signal relative to the person's own baseline and falls back to the rules scorer on any failure, token-usage logging with a per-tick call cap, and narratives for meaningful score moves. The five forces, inverse pairs, LMSR and tick persistence are unchanged from Phase 3. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`; the trading flow, behavioral logging and the product UI are later phases.
+> **Status: Phase 5 (behavioral logging foundation) complete.** On top of the scaffold, schema, auth, ingestion, the Engine and the LLM reasoning layer, the repo now has the collection layer for a future "For You" recommender: a canonical event vocabulary, a validated append-only logging service usable from Server Actions and from the browser (`POST /api/behavioral/log`, batched and debounced), cookie-based browsing-session grouping, and a service-role-only query layer (interaction history, person engagement, co-engagement pairs). No recommendation algorithm, no UI. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`; the trading flow and the product UI are later phases.
 
 ## Stack
 
@@ -68,6 +68,7 @@ app/
   api/ingest/route.ts      ingestion runner endpoint (INGEST_SECRET)
   api/engine/tick/route.ts Engine tick endpoint (ENGINE_SECRET, ?dryRun=1)
   api/engine/cron/route.ts the heartbeat: Vercel Cron target, gated by ENGINE_CRON_ENABLED
+  api/behavioral/log/route.ts client-side behavioral logging (cookie auth, batched, RLS-scoped insert)
 components/auth/           LoginForm, SignupForm, SignOutButton
 lib/
   env.ts                   environment variable access
@@ -100,6 +101,13 @@ lib/
     run-tick.ts            runFullTick(): the ONE production tick path (store + scorer + post-tick)
     cron.ts                heartbeat scheduling (two ticks per invocation, time budget) + cron auth
     store.ts               EngineStore (Supabase via apply_engine_tick RPC + in-memory)
+  behavioral/
+    events.ts              BEHAVIORAL_EVENT_TYPES, per-type metadata contracts, validation (isomorphic)
+    core.ts                prepare / write / HTTP contract of the log route, stores, rate limiter (pure)
+    log.ts                 server-side logEvent, logEvents, logEventInBackground (server only)
+    client.ts              browser trackEvent, startDwell, flushBehavioralEvents (batched queue)
+    session.ts             mt_bsid browsing-session cookie: tracker + server-side reader
+    queries.ts             read side for the future recommender (service role only)
 proxy.ts                   Next.js proxy (formerly middleware)
 vercel.json                cron schedule: /api/engine/cron every minute
 supabase/migrations/       SQL migrations (applied in order)
@@ -123,6 +131,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260907002303_source_snapshots.sql`      | `source_snapshots` table + RLS, `signals.occurred_at`, `signals.dedupe_key`                  |
 | `20260907002801_seed_rss_data_source.sql`  | Registers the inactive `rss` data source                                                     |
 | `20260907143920_engine_tables.sql`         | `people.last_tick_at` + generated `buy_price`/`sell_price`, `engine_ticks`, `score_events`, `trade_events`, `apply_engine_tick()` |
+| `20260907195432_behavioral_logging_foundation.sql` | `behavioral_events.session_id`, format-only `event_type` check, metadata check, recommender indexes, column-level insert grant, three service-role-only aggregate functions |
 | `20260907153228_llm_memory_narratives.sql` | `person_memory` (+ 16 seeded profiles), `llm_usage`, `narratives`, with RLS                  |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
@@ -148,7 +157,7 @@ All of these are applied to the `Momentum Terminal` Supabase project and recorde
 | `llm_usage`           | One row per LLM call: provider, model, task, input/output/cache tokens, latency, person, tick  |
 | `narratives`          | The Engine's one-sentence explanation of a meaningful move (`source` = llm or template)       |
 | `portfolio_history`   | Portfolio value time series per user                                                          |
-| `behavioral_events`   | Append-only interaction log (`event_type` allow-listed)                                       |
+| `behavioral_events`   | Append-only interaction log with `session_id`; canonical `event_type` list lives in code       |
 
 ### Row level security
 
@@ -159,7 +168,7 @@ RLS is enabled on every table. The `anon` role has no policies anywhere.
 | `users`                                                                                                                                             | read own row; update own `username`, `display_name`, `avatar_url` only       | full               |
 | `positions`, `transactions`, `portfolio_history`                                                                                                    | read own rows only                                                           | full (only writer) |
 | `trade_events`                                                                                                                                      | read own rows only                                                           | full (only writer) |
-| `behavioral_events`                                                                                                                                 | read own; insert own with an allow-listed `event_type`; no update/delete     | full               |
+| `behavioral_events`                                                                                                                                 | read own; insert own (`user_id, event_type, person_id, metadata, session_id` only); no update/delete | full               |
 | `people`, `data_sources`, `person_data_sources`, `inverse_pairs`, `score_history`, `signals`, `source_snapshots`, `engine_ticks`, `score_events`, `person_memory`, `narratives` | read all                                                | full (only writer) |
 | `llm_usage`                                                                                                                                         | no access                                                                    | full (only writer) |
 
@@ -370,6 +379,86 @@ Plan note: per-minute cron schedules require a Vercel **Pro** plan (Hobby is lim
 
 Locally, the same endpoint is testable without any cron: with `ENGINE_CRON_ENABLED` unset, `curl http://localhost:3000/api/engine/cron` returns the skipped payload; with `ENGINE_CRON_ENABLED=true` in `.env.local`, `curl -H "x-engine-secret: $ENGINE_SECRET" http://localhost:3000/api/engine/cron` runs two real ticks 30 seconds apart.
 
+## Behavioral logging (Phase 5)
+
+The collection layer for a future recommendation algorithm ("For You"). It records what users do so the algorithm has data to learn from; the algorithm itself, its ranking and any feed UI are deliberately not built.
+
+### The table
+
+`behavioral_events` is one row per interaction: `id`, `user_id`, `event_type`, `person_id` (nullable), `metadata` (jsonb object), `session_id` (uuid, nullable), `created_at`.
+
+- `event_type` is checked by **format only** (`^[a-z][a-z0-9_]{1,63}$`). The canonical list is `BEHAVIORAL_EVENT_TYPES` in `lib/behavioral/events.ts`, enforced by the logging service, so adding a type is a code change with no migration.
+- `metadata` must be a JSON object of at most 8 KiB (the service caps it at 4 KiB, 32 keys, depth 3, 512-character strings).
+- `session_id` groups events into browsing sessions for sequence features.
+- Indexes: `(user_id, created_at)`, `(person_id, event_type, created_at)`, `(event_type, created_at)` and a partial `(session_id, created_at)`.
+- `id` and `created_at` are always set by the database: the client insert grant covers only `user_id, event_type, person_id, metadata, session_id`, so nobody can choose ids or backdate events.
+
+### Event vocabulary
+
+| `eventType`       | `personId` | `metadata`                                                              |
+| ----------------- | ---------- | ----------------------------------------------------------------------- |
+| `view_person`     | required   | `{ source?: string }` (feed, search, swipe, profile_link, …)            |
+| `time_spent`      | required   | `{ duration_ms: number, surface?: string }` (coalesced client-side)     |
+| `expand_signal`   | required   | `{ signal_id?: uuid, headline?: string }`                               |
+| `take_position`   | required   | `{ direction: "HIGH" \| "LOW", amount_cents: integer, position_id?: uuid }` |
+| `close_position`  | required   | `{ position_id?: uuid, direction?, amount_cents?, pnl_cents? }`         |
+| `follow_person`   | required   | `{}`                                                                    |
+| `unfollow_person` | required   | `{}`                                                                    |
+| `search`          | optional   | `{ query: string, result_count?: integer }`                             |
+| `view_feed`       | optional   | `{ feed?: string }` (home, trending, for_you, …)                        |
+| `swipe`           | required   | `{ action: "left" \| "right" \| "up" \| "down" }`                       |
+
+`validateBehavioralEvent()` enforces all of this (and normalises: uppercase direction, trimmed query, lowercase swipe action, rounded and clamped duration). All money is integer cents, as everywhere else.
+
+### Logging from server code
+
+```ts
+import { logEventInBackground } from "@/lib/behavioral/log";
+
+// inside a Server Action or Route Handler, after the real work succeeded:
+logEventInBackground({ eventType: "take_position", personId, metadata: { direction: "HIGH", amount_cents: 5000 } });
+```
+
+`logEventInBackground` defers the write with Next's `after()`, so it runs once the response has been sent and adds nothing to the user's wait. `logEvent` / `logEvents` are the awaitable forms (they resolve to `{ accepted, dropped, error? }` and never reject). All three take the user from the verified auth session, the browsing session from the `mt_bsid` cookie, and insert through the user's own RLS-scoped client, so a row can only ever belong to the caller. Not signed in, invalid event, database down: the action proceeds and the event is dropped (with a `[behavioral]` warning in the server log).
+
+### Logging from the browser
+
+```ts
+import { trackEvent, startDwell } from "@/lib/behavioral/client";
+
+trackEvent({ eventType: "view_person", personId, metadata: { source: "feed" } });
+trackEvent({ eventType: "search", metadata: { query, result_count: results.length } });
+
+// dwell time, in a Client Component:
+useEffect(() => startDwell({ personId, surface: "profile" }), [personId]);
+```
+
+`trackEvent` validates, queues and returns immediately. The queue posts to `POST /api/behavioral/log` after a 2-second lull, once 20 events are pending, or when the tab is hidden or unloaded (`sendBeacon` / `fetch keepalive`, so the request outlives the page). Pending `time_spent` events for the same person are merged into one. The queue holds at most 200 events (oldest dropped), each request carries at most 50, and the route also caps body size (128 KiB) and requests per user per minute (120, per server instance). Nothing throws and no call awaits the network; on the server the functions are no-ops.
+
+The route reads the user from the auth cookies via `getClaims()`, ignores any user id in the body, and inserts through the caller's RLS-scoped client. It responds with `{ accepted, dropped: [{ index, reason }] }`; `401` when signed out, `400` for malformed JSON, `413` / `429` for the caps, `500` when storage failed (the client just drops the batch).
+
+### Sessions
+
+The client mints a v4 UUID and keeps it in a plain session cookie, `mt_bsid`, as `<uuid>.<lastActiveMs>`. It dies with the browser, rolls over after 30 minutes of inactivity, is shared across tabs, and is readable by Server Actions, so a trade logged server-side lands in the same session as the clicks that led to it without the client passing anything. It authorises nothing; it is only a grouping key. This was chosen over `sessionStorage` (per tab, invisible to the server) and over a server-issued token (extra round trip and server state for no gain). Call `resetBehavioralSession()` on sign-out.
+
+### Read side (foundation for the recommender)
+
+`lib/behavioral/queries.ts` is the data-access layer the algorithm will sit on. Every function takes a `SupabaseAdminClient` (the branded service-role client from `lib/supabase-admin.ts`) and calls SQL aggregates whose `EXECUTE` is granted to `service_role` only:
+
+- `getUserInteractionHistory(admin, userId, { since?, eventTypes?, recentLimit? })` → totals per event type, a per-person summary (views, dwell, expands, positions, follows, swipes, first/last interaction) sorted by recency, and the raw recent events for sequence features.
+- `getPersonEngagement(admin, personId, { since? })` → total events, exact distinct users overall and per type, dwell, HIGH/LOW split, swipe split, net follows.
+- `getCoEngagementPairs(admin, { since?, eventTypes?, minSharedUsers?, limit? })` → pairs of people engaged by the same users, with per-person audience sizes and a Jaccard overlap: the raw material for "users who traded A also traded B".
+
+The default window is 90 days. Only canonical event types are counted.
+
+### Privacy and integrity
+
+- Append-only: clients can insert and read their own rows and nothing else (no update, no delete).
+- A user can only insert as themselves (`behavioral_events_insert_own`), enforced by RLS regardless of what the application sends; anon has no access at all.
+- Reading anyone else's behavior requires the service role: RLS hides other users' rows and the aggregate functions refuse `authenticated`.
+- Verified on the live project under simulated roles: own inserts succeed; inserts as another user, malformed types, array metadata, client-chosen `id` / `created_at`, updates, deletes, anon access and user calls to the aggregate functions are all rejected.
+- This data exists for personalisation. Retention, export and deletion must follow whatever privacy policy the platform adopts; deleting an account already cascades to its events.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -377,5 +466,6 @@ Locally, the same endpoint is testable without any cron: with `ENGINE_CRON_ENABL
 - **Phase 3**: swappable sentiment scoring (rules-based), the five forces, inverse pairs, LMSR spread with Buy/Sell prices, the atomic tick with history and per-force audit trail, the tick endpoint.
 - **Phase 4**: provider-agnostic LLM abstraction with an Anthropic adapter and three stubs, model routing, per-entity memory with seeded baselines and cheap evolution, the `LLMScorer` with anomaly awareness and rules fallback, usage logging with a per-tick call cap, narratives for meaningful moves.
 - **Engine cron**: the 30-second heartbeat via Vercel Cron (two ticks per one-minute invocation with a time budget), one shared `runFullTick()` path, gated by `ENGINE_CRON_ENABLED`, which ships as `false`.
+- **Phase 5**: behavioral logging foundation: `session_id` and recommender-shaped indexes on `behavioral_events`, the canonical event vocabulary with per-type metadata contracts, server-side and browser logging services (validated, silent on failure, batched, session-grouped), and the service-role-only query layer.
 
-Deliberately not built yet: behavioral logging (Phase 5), the user trading flow (which will write `positions`, `transactions` and `trade_events` through RPCs), person profiles, feeds, portfolio pages, and any visual design. The heartbeat is wired but switched off.
+Deliberately not built yet: the recommendation algorithm and any For You ranking, the user trading flow (which will write `positions`, `transactions` and `trade_events` through RPCs), person profiles, feeds, portfolio pages, and any visual design. The heartbeat is wired but switched off.
