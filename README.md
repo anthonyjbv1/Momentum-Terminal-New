@@ -76,7 +76,7 @@ app/
   auth/callback/route.ts   email confirmation / magic-link landing
   account/page.tsx         redirects to /profile
   not-found.tsx            404, with the banner
-  icon.svg                 favicon (static mirror of the brand mark)
+  icon.png                 favicon (512px downscale of the brand mark)
   api/ingest/route.ts      ingestion runner endpoint (INGEST_SECRET)
   api/engine/tick/route.ts Engine tick endpoint (ENGINE_SECRET, ?dryRun=1)
   api/engine/cron/route.ts the heartbeat: Vercel Cron target, gated by ENGINE_CRON_ENABLED
@@ -86,7 +86,7 @@ components/
                            CountdownTimer, Skeleton*, Input/Field, Sheet, PageHeader, PhaseNotice
   shell/                   AppShell, TopBanner, DesktopNav, BottomNav, RightRail, PulseIndicator, SearchButton, ProfileButton
   engine/engine-clock.ts   shared 30-second Engine clock (useEngineClock)
-  brand/momentum-mark.tsx  the orbital mark and wordmark
+  brand/momentum-mark.tsx  renders public/brand/momentum-mark.png (the brand asset, unmodified) + wordmark
   auth/                    LoginForm, SignupForm, SignOutButton, FormError
 docs/design-system.md      how to change the look; token, component and shell reference
 lib/

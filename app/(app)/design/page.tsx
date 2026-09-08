@@ -1,3 +1,4 @@
+import { Search } from "lucide-react";
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
@@ -61,18 +62,28 @@ export default function DesignPage() {
         actions={<Badge tone="outline">Sample values</Badge>}
       />
 
-      <Section title="Mark" description="The orbital mark in the current text colour, so it follows any recolour. Black blends into the ground.">
-        <Card>
-          <CardContent className="flex flex-wrap items-center gap-10">
-            <MomentumMark className="size-24" />
-            <MomentumMark className="size-12" />
-            <MomentumMark className="size-8" />
-            <MomentumMark className="size-5 text-fg-muted" />
-            <span className="flex items-baseline gap-1.5 text-base font-semibold tracking-tight text-fg">
-              Momentum <span className="font-normal text-fg-muted">Terminal</span>
-            </span>
-          </CardContent>
-        </Card>
+      <Section
+        title="Mark"
+        description="The brand artwork itself (public/brand/momentum-mark.png), unmodified. Screen blending drops its black tile so it sits on any ground."
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Card>
+            <CardContent className="flex flex-wrap items-center gap-10">
+              <MomentumMark className="size-24" />
+              <MomentumMark className="size-12" />
+              <MomentumMark className="size-9" />
+              <MomentumMark className="size-5" />
+            </CardContent>
+          </Card>
+          <Card tone="ghost">
+            <CardContent className="flex flex-wrap items-center gap-6">
+              <MomentumMark className="size-12" />
+              <span className="flex items-baseline gap-1.5 text-base font-semibold tracking-tight text-fg">
+                Momentum <span className="font-normal text-fg-muted">Terminal</span>
+              </span>
+            </CardContent>
+          </Card>
+        </div>
       </Section>
 
       <Section title="Colour" description="Monochrome, zero chroma. Green and red exist for Buy / heating and Sell / cooling and appear nowhere else.">
@@ -168,8 +179,8 @@ export default function DesignPage() {
               <Button disabled variant="outline">
                 Disabled
               </Button>
-              <Button size="icon" variant="outline" aria-label="Icon button">
-                <MomentumMark className="size-4" />
+              <Button size="icon" variant="outline" aria-label="Search">
+                <Search />
               </Button>
             </div>
           </CardContent>

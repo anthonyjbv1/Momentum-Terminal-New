@@ -22,7 +22,7 @@ Every visual value lives in **`app/styles/tokens.css`**, inside one `@theme` blo
 
 The stock Tailwind palette, fonts, radii and shadows are reset (`--color-*: initial;` etc.), so a class like `bg-red-500` or `text-gray-400` does not compile to anything. If a component needs a new value, add a token, do not inline it.
 
-Two deliberate mirrors exist outside the token file and are commented as such: `viewport.themeColor` in `app/layout.tsx` (browser chrome cannot read CSS) and `app/icon.svg` (favicons cannot either). Update them when recolouring the ground.
+One deliberate mirror exists outside the token file and is commented as such: `viewport.themeColor` in `app/layout.tsx`, because browser chrome cannot read CSS. Update it when recolouring the ground.
 
 A unit test, `lib/__tests__/design-tokens.test.ts`, fails the suite if any file under `app/` or `components/` contains a hex colour, a colour function, a pixel literal or a Tailwind arbitrary value (`w-[…]`). That is the enforcement.
 
@@ -72,7 +72,15 @@ Hierarchy carries the design: page titles are `text-4xl sm:text-5xl font-bold tr
 
 ## The mark
 
-`components/brand/momentum-mark.tsx` draws the orbital mark (two crossing loops) in `currentColor`, so it is white on the black banner and follows any recolour. `app/icon.svg` is its static favicon mirror on a black tile. Both are vector recreations of the brand asset; if the original SVG paths are available, paste them into those two files.
+The brand artwork lives at **`public/brand/momentum-mark.png`** and is used unmodified. `components/brand/momentum-mark.tsx` renders it through `next/image`, which downscales and serves a modern format per request.
+
+The file is a white orbital mark on an opaque black tile, so the component applies `mix-blend-mode: screen`: screen keeps white pixels white and lets black pixels show whatever is behind them, anti-aliased edges included. The black tile therefore disappears on the banner and on grey cards without the file being edited. To swap the mark, replace that one PNG.
+
+`app/icon.png` is the favicon: a straight 512 × 512 Lanczos downscale of the same file, so browser tabs get the artwork at icon weight rather than a 700 KB download. Regenerate it after replacing the mark:
+
+```bash
+node -e 'require("sharp")("public/brand/momentum-mark.png").resize(512,512,{kernel:"lanczos3"}).png().toFile("app/icon.png")'
+```
 
 ## The Engine clock
 
