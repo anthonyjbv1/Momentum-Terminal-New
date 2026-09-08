@@ -2,7 +2,7 @@
 
 A social data terminal where users take **HIGH** or **LOW** positions on individual people. Each person has a continuously updating Momentum Score driven by their observable real-world data. Users profit when a score moves in their predicted direction; the platform is the sole counterparty. The scoring system is called **the Engine**; its five forces are **Gravity**, **Signals**, **Market Mood**, **Conviction** and **Trading Activity**.
 
-> **Status: Phase 6a (design system + app shell) complete.** On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer and the behavioral logging foundation, the repo now has its visual foundation: a single design-token file that drives every colour, font, size, radius, shadow and motion value (`app/styles/tokens.css`), a polished component library (`components/ui`), and the persistent shell: a top banner with the ever-present 30-second countdown to the next Engine tick, mobile bottom tabs, and a desktop two-panel layout with a right rail. Home, Portfolio, Feed, Profile and `/person/[slug]` exist as styled placeholders; `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`; page content, the trading flow and the recommendation layer are later phases.
+> **Status: Phase 6b (Home / discovery) complete.** On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation and the editorial-monochrome shell, **Home is now wired to real data**: the 16 tracked people are read from the database, ranked by momentum, and shown as a top-movers row and a ranked list, with category filtering, sparklines, and impression / dwell logging. The desktop rail previews the newest signals and narratives. Portfolio, Feed and `/person/[slug]` are still styled placeholders; `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0 and the board reads as awaiting its first tick. The trading flow and the recommendation layer are later phases.
 
 ## Stack
 
@@ -85,6 +85,7 @@ components/
   ui/                      the primitives: Button, Card, Badge, Avatar, ScoreDisplay, DirectionIndicator,
                            CountdownTimer, Skeleton*, Input/Field, Sheet, PageHeader, PhaseNotice
   shell/                   AppShell, TopBanner, DesktopNav, BottomNav, RightRail, PulseIndicator, SearchButton, ProfileButton
+  home/                    PersonCard + PersonRow, Sparkline, CategoryFilter, PeopleBoard, FeedPreview, impression logging
   engine/engine-clock.ts   shared 30-second Engine clock (useEngineClock)
   brand/momentum-mark.tsx  renders public/brand/momentum-mark.png (the brand asset, unmodified) + wordmark
   auth/                    LoginForm, SignupForm, SignOutButton, FormError
@@ -129,6 +130,10 @@ lib/
     client.ts              browser trackEvent, startDwell, flushBehavioralEvents (batched queue)
     session.ts             mt_bsid browsing-session cookie: tracker + server-side reader
     queries.ts             read side for the future recommender (service role only)
+  home/
+    board.ts               Home's server reads: the board and the feed preview (service role)
+    board-model.ts         pure ranking, mover selection and category options
+    relative-time.ts       compact "3m" / "2h" feed stamps
 proxy.ts                   Next.js proxy (formerly middleware)
 vercel.json                cron schedule: /api/engine/cron every minute
 supabase/migrations/       SQL migrations (applied in order)
@@ -153,6 +158,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260907002801_seed_rss_data_source.sql`  | Registers the inactive `rss` data source                                                     |
 | `20260907143920_engine_tables.sql`         | `people.last_tick_at` + generated `buy_price`/`sell_price`, `engine_ticks`, `score_events`, `trade_events`, `apply_engine_tick()` |
 | `20260907195432_behavioral_logging_foundation.sql` | `behavioral_events.session_id`, format-only `event_type` check, metadata check, recommender indexes, column-level insert grant, three service-role-only aggregate functions |
+| `20260908114758_home_board_reads.sql`      | `home_momentum()` (per-person change + sparkline over a trailing window), `signals`/`narratives` newest-first indexes for the feed rail |
 | `20260907153228_llm_memory_narratives.sql` | `person_memory` (+ 16 seeded profiles), `llm_usage`, `narratives`, with RLS                  |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
@@ -507,6 +513,41 @@ Button (`primary`, `buy`, `sell`, `outline`, `ghost`), Card, Badge, Avatar, **Sc
 
 `/` Home, `/portfolio`, `/feed`, `/profile` (signed in), `/person/[slug]`, `/design`, plus `/login`, `/signup`, `/account` (redirects to `/profile`). All are styled placeholders with skeletons and a "Phase 6x" notice where real content lands.
 
+## Home (Phase 6b)
+
+The discovery surface, and the first screen reading live data.
+
+### What it shows
+
+- **Top movers** — four featured cards: the biggest absolute score moves over the trailing hour. Before the Engine has ticked nobody has moved, so the section becomes **Leading the board** with an *Awaiting first tick* badge and simply shows the top of the ranking.
+- **People** — every active person as a ranked row: position, avatar, name, category, sparkline, score and direction.
+- **Category filter** — All / Executive / Creator / Musician / Athlete / Founder, derived from the `people` rows and counted. Filtering is instant: the server sends all 16 and the client only chooses which to show. The featured row follows the filter, while rank numbers stay board-wide.
+- **Live feed rail** (desktop, ≥ lg) — the newest Engine narratives and raw signals merged newest first, each linking to its person, with a *Nothing on the wire yet* empty state.
+
+Colour discipline holds: the score is white, the sparkline grey, and only the direction indicator is ever green or red. A person with no history yet shows a bare `—` rather than an arrow, because there is no measurement to point anywhere.
+
+### Data
+
+`lib/home/board.ts` reads on the server through the **service-role client**. `people` and friends are readable by signed-in users under RLS and carry no per-user data, but Home is public — a signed-out visitor using the publishable key would see nothing, since anon has no policies anywhere. Reading in trusted server code keeps the board public without granting anon a blanket read on the schema.
+
+Movement comes from `home_momentum()` (see the migration table): per person, the change over a trailing window plus a downsampled sparkline, computed in Postgres so the page never pulls a growing history table across the wire. A person with no rows in the window is treated as *no movement yet*, not as a change of zero.
+
+`lib/home/board-model.ts` holds the pure half — ranking, mover selection, category options — so it is unit-tested without any I/O. Ranking is score descending, then name, which keeps the order stable while every score is tied at 50.0.
+
+### Behavioural logging
+
+Wired to the Phase 5 client, fire-and-forget:
+
+| Event | When |
+| --- | --- |
+| `view_feed` | Home mounts (`{ feed: "home" }`) |
+| `view_person` | a card scrolls at least halfway into view, once per person (`{ source: "home" }`) |
+| `view_person` | a card is tapped (`{ source: "home_tap" }`) — the intentional click, distinct from the impression |
+| `time_spent` | for as long as a card stays visible; the client queue coalesces per person, so scrolling up and back down costs one row |
+| `search` | a query in the search sheet settles for 700 ms |
+
+Logging is skipped entirely when nobody is signed in, since the log endpoint would reject those events anyway.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -516,5 +557,6 @@ Button (`primary`, `buy`, `sell`, `outline`, `ghost`), Card, Badge, Avatar, **Sc
 - **Engine cron**: the 30-second heartbeat via Vercel Cron (two ticks per one-minute invocation with a time budget), one shared `runFullTick()` path, gated by `ENGINE_CRON_ENABLED`, which ships as `false`.
 - **Phase 5**: behavioral logging foundation: `session_id` and recommender-shaped indexes on `behavioral_events`, the canonical event vocabulary with per-type metadata contracts, server-side and browser logging services (validated, silent on failure, batched, session-grouped), and the service-role-only query layer.
 - **Phase 6a**: the design token system, the core component library, the persistent shell (banner with the 30-second countdown, bottom tabs, desktop two-panel layout) and the route skeleton with styled placeholders.
+- **Phase 6b**: Home wired to live data: the person card and ranked row, top movers, category filtering, sparklines, the desktop feed rail, and the behavioural logging that records impressions and dwell.
 
-Deliberately not built yet: page content (person cards, feed items, portfolio, profile), the trading flow (which will write `positions`, `transactions` and `trade_events` through RPCs), the recommendation algorithm and any For You ranking. The heartbeat is wired but switched off.
+Deliberately not built yet: the trading flow (which will write `positions`, `transactions` and `trade_events` through RPCs), the person page, the standalone Feed page, the portfolio and profile screens, and the recommendation algorithm. The heartbeat is wired but switched off.

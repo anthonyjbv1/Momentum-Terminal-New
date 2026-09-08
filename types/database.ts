@@ -836,6 +836,15 @@ export type Database = {
           total_duration_ms: number
         }[]
       }
+      home_momentum: {
+        Args: { p_points?: number; p_sample?: number; p_window?: string }
+        Returns: {
+          change: number
+          person_id: string
+          points: number
+          sparkline: number[]
+        }[]
+      }
       placeholder_financial_mutation: {
         Args: { p_amount_cents: number }
         Returns: undefined

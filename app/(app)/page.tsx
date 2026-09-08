@@ -1,38 +1,26 @@
 import type { Metadata } from "next";
 
-import { Card } from "@/components/ui/card";
-import { PageHeader, SectionHeader } from "@/components/ui/page-header";
-import { PhaseNotice } from "@/components/ui/phase-notice";
-import { SkeletonPersonRow, SkeletonStat } from "@/components/ui/skeleton";
+import { getCurrentUser } from "@/lib/auth";
+import { getHomeBoard } from "@/lib/home/board";
+import { PeopleBoard } from "@/components/home/people-board";
+import { PageHeader } from "@/components/ui/page-header";
 
 export const metadata: Metadata = { title: "Home" };
 
-/** Home: the momentum board. Person cards with live scores arrive in 6b. */
-export default function HomePage() {
+// The board is live: every request reflects whatever the Engine has computed.
+export const dynamic = "force-dynamic";
+
+/** Home: the momentum board — everyone the Engine tracks, ranked. */
+export default async function HomePage() {
+  const [board, user] = await Promise.all([getHomeBoard(), getCurrentUser()]);
+
   return (
     <div className="flex flex-col gap-10">
-      <PageHeader title="Home" description="Every person the Engine tracks, ranked by momentum. Buy the ones heating up, sell the ones cooling off." />
-
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <SkeletonStat />
-        <SkeletonStat />
-        <SkeletonStat />
-        <SkeletonStat />
-      </div>
-
-      <section className="flex flex-col gap-4">
-        <SectionHeader title="People" meta="Ranked by momentum" />
-        <Card className="divide-y divide-line overflow-hidden">
-          <SkeletonPersonRow />
-          <SkeletonPersonRow />
-          <SkeletonPersonRow />
-          <SkeletonPersonRow />
-          <SkeletonPersonRow />
-          <SkeletonPersonRow />
-        </Card>
-      </section>
-
-      <PhaseNotice phase="Phase 6b">Person cards with live Momentum Scores land here.</PhaseNotice>
+      <PageHeader
+        title="Home"
+        description="Every person the Engine tracks, ranked by momentum. Buy the ones heating up, sell the ones cooling off."
+      />
+      <PeopleBoard board={board} loggingEnabled={Boolean(user)} />
     </div>
   );
 }

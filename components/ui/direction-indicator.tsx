@@ -64,16 +64,19 @@ export function formatChange(change: number, precision = 1): string {
 export function DirectionIndicator({ change, size = "md", withLabel = false, iconOnly = false, precision = 1, className }: DirectionIndicatorProps) {
   const direction = directionOf(change);
   const Icon = directionIcon[direction];
-  const value = change === null || change === undefined ? "—" : formatChange(change, precision);
-  const label = directionLabels[direction];
+  // No reading at all (the Engine has not moved this person yet) is a bare
+  // dash: an arrow beside it would imply a measurement that does not exist.
+  const unknown = change === null || change === undefined;
+  const value = unknown ? "—" : formatChange(change, precision);
+  const label = unknown ? "No change yet" : directionLabels[direction];
 
   return (
     <span
       className={cn("num inline-flex items-center gap-0.5 font-medium leading-none", sizes[size].text, directionTone[direction], className)}
-      aria-label={`${label}, ${value}`}
+      aria-label={`${label}${unknown ? "" : `, ${value}`}`}
     >
-      <Icon className={cn(sizes[size].icon, "shrink-0")} strokeWidth={2.5} aria-hidden />
-      {iconOnly ? null : <span>{value}</span>}
+      {unknown ? null : <Icon className={cn(sizes[size].icon, "shrink-0")} strokeWidth={2.5} aria-hidden />}
+      {iconOnly && !unknown ? null : <span>{value}</span>}
       {withLabel ? <span className="ml-1 text-label opacity-80">{label}</span> : null}
     </span>
   );
