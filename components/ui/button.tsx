@@ -4,36 +4,36 @@ import type { ComponentProps } from "react";
 import { cn } from "@/lib/cn";
 
 /**
- * Button. Variants are the platform's verbs:
- *   primary   the one main action on a screen (inverse surface, quiet)
- *   buy       HIGH — the signature green
- *   sell      LOW  — red
- *   outline   secondary actions
+ * Button. Pill-shaped, quiet by default. Variants are the platform's verbs:
+ *   primary   the one main action on a screen (white on black)
+ *   buy       HIGH — green. One of only two coloured things in the interface.
+ *   sell      LOW  — red.  The other one.
+ *   outline   secondary actions: a soft grey surface
  *   ghost     tertiary / icon actions
  */
 export type ButtonVariant = "primary" | "buy" | "sell" | "outline" | "ghost";
 export type ButtonSize = "sm" | "md" | "lg" | "icon";
 
 export const buttonVariants: Record<ButtonVariant, string> = {
-  primary: "bg-surface-inverse text-fg-inverse hover:bg-fg shadow-card",
-  buy: "bg-positive text-positive-fg hover:shadow-glow-positive",
-  sell: "bg-negative text-negative-fg hover:shadow-glow-negative",
-  outline: "border border-line-strong bg-surface text-fg hover:border-fg-faint hover:bg-surface-raised",
-  ghost: "bg-transparent text-fg-secondary hover:bg-surface-raised hover:text-fg",
+  primary: "bg-surface-inverse text-fg-inverse hover:bg-fg-secondary",
+  buy: "bg-positive text-positive-fg hover:brightness-110",
+  sell: "bg-negative text-negative-fg hover:brightness-110",
+  outline: "bg-surface text-fg hover:bg-surface-raised",
+  ghost: "bg-transparent text-fg-secondary hover:bg-surface hover:text-fg",
 };
 
 export const buttonSizes: Record<ButtonSize, string> = {
-  sm: "h-8 gap-1.5 px-3 text-xs",
-  md: "h-10 px-4 text-sm",
-  lg: "h-12 px-6 text-base",
+  sm: "h-9 gap-1.5 px-4 text-sm",
+  md: "h-11 px-5 text-sm",
+  lg: "h-13 px-7 text-base",
   icon: "size-touch",
 };
 
 export const buttonBase =
-  "inline-flex shrink-0 select-none items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium " +
-  "transition-[background-color,border-color,color,box-shadow,transform,filter] duration-150 ease-out " +
-  "hover:brightness-105 active:scale-98 disabled:pointer-events-none disabled:opacity-40 " +
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-canvas " +
+  "inline-flex shrink-0 select-none items-center justify-center gap-2 whitespace-nowrap rounded-full font-medium " +
+  "transition-[background-color,color,transform,filter,opacity] duration-150 ease-out " +
+  "active:scale-97 disabled:pointer-events-none disabled:opacity-40 " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas " +
   "[&_svg]:size-4 [&_svg]:shrink-0";
 
 export interface ButtonProps extends ComponentProps<"button"> {

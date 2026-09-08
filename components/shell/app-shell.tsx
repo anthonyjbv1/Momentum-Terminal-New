@@ -18,13 +18,13 @@ export function AppShell({ children, rail }: { children: ReactNode; rail?: React
     <div className="min-h-dvh">
       <a
         href="#main"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-(--z-toast) focus:rounded-md focus:bg-surface-overlay focus:px-3 focus:py-2 focus:text-sm focus:text-fg"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-(--z-toast) focus:rounded-full focus:bg-surface-overlay focus:px-4 focus:py-2 focus:text-sm focus:text-fg"
       >
         Skip to content
       </a>
       <TopBanner />
-      <div className="mx-auto flex w-full max-w-shell px-4 pt-banner sm:px-6">
-        <main id="main" className="min-w-0 flex-1 py-6 pb-tabbar-safe sm:py-8 md:pb-8 lg:pr-8">
+      <div className="mx-auto flex w-full max-w-shell px-5 pt-banner sm:px-8">
+        <main id="main" className="min-w-0 flex-1 py-8 pb-tabbar-safe sm:py-10 md:pb-10 lg:pr-10">
           {children}
         </main>
         <RightRail>{rail}</RightRail>

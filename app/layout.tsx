@@ -17,7 +17,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   // Browser chrome cannot read CSS, so this mirrors --color-canvas from
   // app/styles/tokens.css. Keep the two in step when recolouring the ground.
-  themeColor: "#0f1114",
+  themeColor: "#000000",
   colorScheme: "dark",
   width: "device-width",
   initialScale: 1,

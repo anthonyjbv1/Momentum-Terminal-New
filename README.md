@@ -86,11 +86,11 @@ components/
                            CountdownTimer, Skeleton*, Input/Field, Sheet, PageHeader, PhaseNotice
   shell/                   AppShell, TopBanner, DesktopNav, BottomNav, RightRail, PulseIndicator, SearchButton, ProfileButton
   engine/engine-clock.ts   shared 30-second Engine clock (useEngineClock)
-  brand/momentum-mark.tsx  the mark and wordmark
+  brand/momentum-mark.tsx  the orbital mark and wordmark
   auth/                    LoginForm, SignupForm, SignOutButton, FormError
 docs/design-system.md      how to change the look; token, component and shell reference
 lib/
-  fonts.ts                 Geist Sans + JetBrains Mono via next/font (self-hosted)
+  fonts.ts                 Inter + JetBrains Mono via next/font (self-hosted)
   cn.ts                    class-name composer (clsx + tailwind-merge)
   env.ts                   environment variable access
   api-auth.ts              constant-time shared-secret check for internal endpoints
@@ -488,9 +488,9 @@ The visual foundation every screen inherits, plus the navigation frame. Full ref
 
 Every visual value lives in **`app/styles/tokens.css`** as a Tailwind 4 `@theme` block: semantic colours (`canvas`, `surface*`, `line*`, `fg*`, `positive`, `negative`, `neutral`, `accent`), the two typefaces, a type scale, the spacing base plus the shell's structural sizes (`banner`, `tabbar`, `rail`, `shell`, `touch`), radii, shadows (glows derive from the semantic colours) and motion. Tailwind's stock palette, fonts, radii and shadows are reset, so `bg-red-500` does not exist; components can only use tokens. Changing a token is a one-line edit that cascades platform-wide, and `lib/__tests__/design-tokens.test.ts` fails the build if a component ever hardcodes a colour, pixel size or arbitrary value.
 
-The palette keeps what the previous platform did well: a near-black ground with a faint cool bias, the signature green for HIGH / Buy / heating, red for LOW / Sell / cooling, electric blue and amber accents, and JetBrains Mono tabular numerals. Geist Sans carries the interface text. Both fonts are self-hosted through `next/font`.
+The look is editorial monochrome: a jet-black ground, neutral grey cards with no borders, white type with a strong hierarchy, generous space. Green and red are the only saturated colours and appear only on Buy / Sell and directional score movement; navigation, focus, status and the timer are white or grey. Inter carries the interface; JetBrains Mono appears only on numbers, through the `num` utility. Both fonts are self-hosted through `next/font`.
 
-Two signature utilities are defined once in `globals.css`: `num` (mono, tabular figures) for every number and `text-label` (uppercase mono micro caption) for eyebrows and badges.
+Two signature utilities are defined once in `globals.css`: `num` (mono, tabular figures) for every number and `text-label` (small uppercase section caption) for section headers.
 
 ### Components (`components/ui`)
 
@@ -498,8 +498,8 @@ Button (`primary`, `buy`, `sell`, `outline`, `ghost`), Card, Badge, Avatar, **Sc
 
 ### The shell
 
-- **Top banner**, fixed on every page and modal: mark, desktop navigation, platform pulse (Market Mood + Engine status, on standby until the heartbeat is on), the **30-second countdown to the next Engine tick**, search (`⌘K`) and profile. Ticks are aligned to wall-clock multiples of 30 s, the cron's cadence, so the countdown is deterministic and identical on every client (`components/engine/engine-clock.ts`).
-- **Bottom tab bar** on mobile: Home, Portfolio, Feed, Profile.
+- **Top banner**, fixed on every page and modal: the orbital mark, desktop navigation (active item white), the Mood pill (on standby until the heartbeat is on), the **30-second countdown to the next Engine tick** as quiet mono digits over a hairline that fills, search (`⌘K`) and profile. Ticks are aligned to wall-clock multiples of 30 s, the cron's cadence, so the countdown is deterministic and identical on every client (`components/engine/engine-clock.ts`).
+- **Bottom tab bar** on mobile: four icons for Home, Portfolio, Feed, Profile, the active one white.
 - **Desktop two-panel layout**: main column plus a sticky right rail. A route provides rail content through the `@rail` parallel slot in `app/(app)`; Home does (the live feed lands there in 6b), the others render none and the column takes the full width.
 - Sheets open **below** the banner, so the timer stays visible above any modal.
 

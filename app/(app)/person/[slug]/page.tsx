@@ -28,36 +28,38 @@ export default async function PersonPage({ params }: { params: Params }) {
   const name = nameFromSlug(slug);
 
   return (
-    <div className="flex flex-col gap-8">
-      <header className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-4">
-          <Avatar name={name} size="lg" />
-          <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-10">
+      <header className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-5">
+          <Avatar name={name} size="xl" />
+          <div className="flex flex-col gap-2">
+            <h1 className="text-4xl font-bold tracking-tighter text-fg sm:text-5xl">{name}</h1>
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-semibold tracking-tight text-fg sm:text-3xl">{name}</h1>
-              <Badge tone="outline">Person</Badge>
+              <Badge>Person</Badge>
+              <Badge tone="warning" dot>
+                Standby
+              </Badge>
             </div>
-            <p className="num text-sm text-fg-muted">/{slug}</p>
           </div>
         </div>
-        <div className="flex flex-col gap-2 sm:items-end">
-          <Skeleton className="h-12 w-36" />
+        <div className="flex flex-col gap-2.5 sm:items-end">
+          <Skeleton className="h-14 w-40" />
           <Skeleton className="h-3 w-24" />
         </div>
       </header>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <SkeletonStat />
         <SkeletonStat />
         <SkeletonStat />
         <SkeletonStat />
       </div>
 
-      <Card className="h-56 sm:h-72">
-        <Skeleton className="size-full rounded-xl" />
+      <Card className="h-56 overflow-hidden sm:h-72">
+        <Skeleton className="size-full rounded-2xl" />
       </Card>
 
-      <section className="flex flex-col gap-3">
+      <section className="flex flex-col gap-4">
         <SectionHeader title="Recent signals" />
         <Card className="divide-y divide-line overflow-hidden">
           <SkeletonFeedItem />

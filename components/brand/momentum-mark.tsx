@@ -3,24 +3,18 @@ import Link from "next/link";
 import { cn } from "@/lib/cn";
 
 /**
- * The Momentum mark: a rising line inside a rounded tile, its endpoint lit in
- * the signature green. Colours come from tokens (fill-/stroke- utilities),
- * so a recolour changes the mark too.
+ * The Momentum Terminal mark: two orbital loops crossing, a hollow at the
+ * centre. Drawn in the current text colour, so it is white on the black
+ * banner and follows any recolour. A vector recreation of the brand asset;
+ * drop the original SVG paths in here (and in app/icon.svg) if they exist.
  */
 export function MomentumMark({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 28 28" className={cn("size-7 shrink-0", className)} aria-hidden>
-      <rect x="0.75" y="0.75" width="26.5" height="26.5" rx="7" className="fill-surface-raised stroke-line-strong" strokeWidth="1.5" />
-      <polyline
-        points="6.5,19.5 11.5,13.5 15.5,16.5 21.5,8.5"
-        fill="none"
-        className="stroke-positive"
-        strokeWidth="2.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <circle cx="21.5" cy="8.5" r="4" className="fill-positive/25" />
-      <circle cx="21.5" cy="8.5" r="2" className="fill-positive" />
+    <svg viewBox="0 0 100 100" className={cn("size-8 shrink-0", className)} aria-hidden>
+      <g fill="none" className="stroke-current" strokeWidth="11" strokeLinecap="round" strokeLinejoin="round">
+        <ellipse cx="50" cy="50" rx="37" ry="15" transform="rotate(45 50 50)" />
+        <ellipse cx="50" cy="50" rx="37" ry="15" transform="rotate(-45 50 50)" />
+      </g>
     </svg>
   );
 }
@@ -32,14 +26,14 @@ export function Logo({ className }: { className?: string }) {
       href="/"
       aria-label="Momentum Terminal — Home"
       className={cn(
-        "flex shrink-0 items-center gap-2.5 rounded-md transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "flex shrink-0 items-center gap-3 rounded-full text-fg transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         className,
       )}
     >
       <MomentumMark />
-      <span className="hidden flex-col leading-none sm:flex">
-        <span className="text-sm font-semibold tracking-tight text-fg">Momentum</span>
-        <span className="text-label text-fg-muted">Terminal</span>
+      <span className="hidden items-baseline gap-1.5 text-base font-semibold tracking-tight sm:flex">
+        Momentum
+        <span className="font-normal text-fg-muted">Terminal</span>
       </span>
     </Link>
   );

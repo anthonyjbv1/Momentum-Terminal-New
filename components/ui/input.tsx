@@ -3,10 +3,10 @@ import type { ComponentProps, ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
 export const inputClassName =
-  "h-11 w-full rounded-md border border-line bg-surface-raised/60 px-3 text-base text-fg placeholder:text-fg-faint " +
-  "transition-[border-color,background-color,box-shadow] duration-150 " +
-  "hover:border-line-strong focus:border-accent focus:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 " +
-  "disabled:opacity-40 aria-invalid:border-negative";
+  "h-12 w-full rounded-xl bg-surface-raised px-4 text-base text-fg placeholder:text-fg-faint " +
+  "ring-1 ring-inset ring-transparent transition-[background-color,box-shadow] duration-150 " +
+  "hover:ring-line focus:ring-line-strong focus-visible:outline-none " +
+  "disabled:opacity-40 aria-invalid:ring-negative/60";
 
 export function Input({ className, ...props }: ComponentProps<"input">) {
   return <input className={cn(inputClassName, className)} {...props} />;
@@ -24,17 +24,17 @@ export interface FieldProps {
 /** Label + control + hint/error, with consistent rhythm. */
 export function Field({ label, htmlFor, hint, error, children, className }: FieldProps) {
   return (
-    <div className={cn("flex flex-col gap-1.5", className)}>
-      <label htmlFor={htmlFor} className="text-xs font-medium text-fg-secondary">
+    <div className={cn("flex flex-col gap-2", className)}>
+      <label htmlFor={htmlFor} className="text-sm font-medium text-fg-secondary">
         {label}
       </label>
       {children}
       {error ? (
-        <p role="alert" className="text-xs text-negative">
+        <p role="alert" className="text-sm text-negative">
           {error}
         </p>
       ) : hint ? (
-        <p className="text-xs text-fg-muted">{hint}</p>
+        <p className="text-sm text-fg-muted">{hint}</p>
       ) : null}
     </div>
   );

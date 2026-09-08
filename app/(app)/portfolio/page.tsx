@@ -9,16 +9,16 @@ export const metadata: Metadata = { title: "Portfolio" };
 
 export default function PortfolioPage() {
   return (
-    <div className="flex flex-col gap-8">
-      <PageHeader eyebrow="Your positions" title="Portfolio" description="Balance, buying power and every open HIGH or LOW position, marked to the latest tick." />
+    <div className="flex flex-col gap-10">
+      <PageHeader title="Portfolio" description="Balance, buying power and every open HIGH or LOW position, marked to the latest tick." />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         <SkeletonStat />
         <SkeletonStat />
         <SkeletonStat className="col-span-2 sm:col-span-1" />
       </div>
 
-      <section className="flex flex-col gap-3">
+      <section className="flex flex-col gap-4">
         <SectionHeader title="Open positions" />
         <Card className="divide-y divide-line overflow-hidden">
           <SkeletonPersonRow />

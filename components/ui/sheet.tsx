@@ -56,7 +56,7 @@ export function Sheet({ open, onClose, title, description, children, size = "md"
         type="button"
         aria-label="Close"
         onClick={onClose}
-        className="absolute inset-0 cursor-default bg-canvas/70 backdrop-blur-sm animate-fade-in"
+        className="absolute inset-0 cursor-default bg-canvas/75 backdrop-blur-sm animate-fade-in"
       />
       <div
         ref={panelRef}
@@ -66,18 +66,18 @@ export function Sheet({ open, onClose, title, description, children, size = "md"
         aria-describedby={description ? descriptionId : undefined}
         tabIndex={-1}
         className={cn(
-          "absolute z-(--z-sheet) flex max-h-full flex-col border border-line bg-surface-overlay shadow-overlay focus-visible:outline-none",
+          "absolute z-(--z-sheet) flex max-h-full flex-col bg-surface-overlay shadow-overlay focus-visible:outline-none",
           // mobile: bottom sheet
-          "inset-x-0 bottom-0 rounded-t-2xl pb-safe animate-slide-up",
+          "inset-x-0 bottom-0 rounded-t-3xl pb-safe animate-slide-up",
           // desktop: centred dialog
-          "sm:inset-auto sm:left-1/2 sm:top-16 sm:w-full sm:-translate-x-1/2 sm:rounded-2xl sm:animate-rise-in",
+          "sm:inset-auto sm:left-1/2 sm:top-20 sm:w-full sm:-translate-x-1/2 sm:rounded-3xl sm:animate-rise-in",
           size === "lg" ? "sm:max-w-2xl" : "sm:max-w-lg",
           className,
         )}
       >
-        <div className="flex items-start justify-between gap-4 px-5 pt-5 sm:px-6">
-          <div className="flex flex-col gap-1">
-            <h2 id={titleId} className="text-lg font-semibold tracking-tight text-fg">
+        <div className="flex items-start justify-between gap-4 px-6 pt-6 sm:px-8 sm:pt-8">
+          <div className="flex flex-col gap-1.5">
+            <h2 id={titleId} className="text-2xl font-semibold tracking-tight text-fg">
               {title}
             </h2>
             {description ? (
@@ -86,11 +86,11 @@ export function Sheet({ open, onClose, title, description, children, size = "md"
               </p>
             ) : null}
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close" className="-mr-2 -mt-2">
+          <Button variant="outline" size="icon" onClick={onClose} aria-label="Close" className="-mr-2 -mt-2 size-10">
             <X />
           </Button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6 sm:px-8 sm:pb-8">{children}</div>
       </div>
     </div>,
     document.body,

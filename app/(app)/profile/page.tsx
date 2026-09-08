@@ -25,26 +25,25 @@ export default async function ProfilePage() {
   const name = profile?.display_name ?? user.email ?? "You";
 
   return (
-    <div className="flex flex-col gap-8">
-      <PageHeader eyebrow="Profile" title={name} description={profile ? `@${profile.username}` : undefined} actions={<SignOutButton />} />
+    <div className="flex flex-col gap-10">
+      <PageHeader title={name} description={profile ? `@${profile.username}` : undefined} actions={<SignOutButton />} />
 
       <Card>
-        <CardContent className="flex items-center gap-5">
+        <CardContent className="flex items-center gap-6">
           <Avatar name={name} src={profile?.avatar_url} size="xl" />
           <div className="flex min-w-0 flex-col gap-1">
-            <p className="truncate text-lg font-semibold tracking-tight text-fg">{name}</p>
+            <p className="truncate text-xl font-semibold tracking-tight text-fg">{name}</p>
             <p className="truncate text-sm text-fg-muted">{user.email}</p>
             {profile ? (
-              <p className="text-xs text-fg-faint">
-                Member since{" "}
-                <span className="num">{new Date(profile.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
+              <p className="text-sm text-fg-faint">
+                Member since {new Date(profile.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
               </p>
             ) : null}
           </div>
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         <SkeletonStat />
         <SkeletonStat />
         <SkeletonStat className="col-span-2 sm:col-span-1" />

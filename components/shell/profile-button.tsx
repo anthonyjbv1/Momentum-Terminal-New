@@ -20,10 +20,10 @@ export async function ProfileButton() {
   if (!profile) {
     return (
       <>
-        <Link href="/login" aria-label="Sign in" className={buttonClassName("ghost", "icon", "sm:hidden")}>
+        <Link href="/login" aria-label="Sign in" className={buttonClassName("outline", "icon", "size-10 sm:hidden")}>
           <CircleUser />
         </Link>
-        <Link href="/login" className={buttonClassName("outline", "sm", "hidden sm:inline-flex")}>
+        <Link href="/login" className={buttonClassName("primary", "sm", "hidden sm:inline-flex")}>
           Sign in
         </Link>
       </>
@@ -34,9 +34,9 @@ export async function ProfileButton() {
     <Link
       href="/profile"
       aria-label={`Profile: ${profile.display_name}`}
-      className="flex size-touch items-center justify-center rounded-full transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="flex size-10 items-center justify-center rounded-full transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
     >
-      <Avatar name={profile.display_name} src={profile.avatar_url} size="sm" />
+      <Avatar name={profile.display_name} src={profile.avatar_url} size="md" />
     </Link>
   );
 }

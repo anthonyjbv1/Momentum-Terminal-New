@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 
 import { NAV_ITEMS, isNavItemActive } from "./nav-items";
 
-/** Banner navigation for md+ screens. The active item carries a green underline. */
+/** Banner navigation for md+ screens. The active item is simply white. */
 export function DesktopNav({ className }: { className?: string }) {
   const pathname = usePathname();
   return (
@@ -20,9 +20,8 @@ export function DesktopNav({ className }: { className?: string }) {
             href={item.href}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "relative inline-flex h-banner items-center px-3 text-sm font-medium transition-colors",
-              "after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:bg-positive after:transition-opacity",
-              active ? "text-fg after:opacity-100" : "text-fg-muted after:opacity-0 hover:text-fg-secondary",
+              "inline-flex h-10 items-center rounded-full px-4 text-sm font-medium transition-colors",
+              active ? "text-fg" : "text-fg-muted hover:text-fg-secondary",
             )}
           >
             {item.label}

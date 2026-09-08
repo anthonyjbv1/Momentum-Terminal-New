@@ -16,9 +16,9 @@ export function SheetDemo() {
       <Button variant="outline" onClick={() => setOpen(true)}>
         Open a sheet
       </Button>
-      <Sheet open={open} onClose={close} title="A modal surface" description="Note the banner and its countdown stay visible above this sheet.">
+      <Sheet open={open} onClose={close} title="A modal surface" description="The banner and its countdown stay visible above this sheet.">
         <SkeletonText lines={4} />
-        <PhaseNotice phase="Design system" className="mt-5">
+        <PhaseNotice phase="Design system" className="mt-6 bg-surface-raised/60">
           Bottom sheet on mobile, centred dialog on desktop. Escape or the backdrop closes it.
         </PhaseNotice>
       </Sheet>

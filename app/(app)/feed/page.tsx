@@ -10,9 +10,8 @@ export const metadata: Metadata = { title: "Feed" };
 
 export default function FeedPage() {
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-10">
       <PageHeader
-        eyebrow="Signals and narratives"
         title="Feed"
         description="What moved, and why: the Engine's read on every signal, as it lands."
         actions={

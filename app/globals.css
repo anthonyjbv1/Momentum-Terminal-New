@@ -82,18 +82,18 @@
    Signature treatments, defined once.
    --------------------------------------------------------------------------- */
 
-/* Numerals: monospaced, tabular, slightly tightened. Use on every number. */
+/* Numerals: the ONLY place the monospace face appears. Tabular, slightly
+   tightened. Put it on scores, prices, deltas, percentages and the clock. */
 @utility num {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
 }
 
-/* Micro label: the terminal's uppercase mono caption. */
+/* Section label: small, uppercase, quietly tracked, in the interface face. */
 @utility text-label {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  line-height: var(--text-2xs--line-height);
+  font-size: var(--text-xs);
+  line-height: var(--text-xs--line-height);
   font-weight: var(--font-weight-medium);
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;

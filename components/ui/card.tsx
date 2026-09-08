@@ -4,29 +4,28 @@ import { cn } from "@/lib/cn";
 
 /**
  * Surface container: the base for person cards, panels and tiles.
- * A card is a raised object on the canvas: one border, one soft shadow,
- * generous radius. `interactive` adds the hover lift for clickable cards.
+ * A soft grey object on the black ground: generous radius, no border, a
+ * whisper of inner light. `interactive` brightens on hover for clickable cards.
  */
 export interface CardProps extends ComponentProps<"div"> {
   interactive?: boolean;
-  /** `raised` for a lighter surface (nested cards, tiles on a card). */
+  /** `raised` for a lighter surface (nested tiles); `ghost` for an outlined, empty slot. */
   tone?: "default" | "raised" | "ghost";
 }
 
 const cardTones: Record<NonNullable<CardProps["tone"]>, string> = {
-  default: "border border-line bg-surface shadow-card",
-  raised: "border border-line bg-surface-raised",
-  ghost: "border border-dashed border-line-strong bg-transparent",
+  default: "bg-surface shadow-card",
+  raised: "bg-surface-raised shadow-card",
+  ghost: "bg-transparent ring-1 ring-inset ring-line",
 };
 
 export function Card({ className, interactive = false, tone = "default", ...props }: CardProps) {
   return (
     <div
       className={cn(
-        "rounded-xl",
+        "rounded-2xl",
         cardTones[tone],
-        interactive &&
-          "transition-[border-color,background-color,transform,box-shadow] duration-200 ease-out hover:-translate-y-px hover:border-line-strong hover:bg-surface-raised/70 hover:shadow-raised",
+        interactive && "transition-[background-color,transform,box-shadow] duration-200 ease-out hover:-translate-y-px hover:bg-surface-raised hover:shadow-raised",
         className,
       )}
       {...props}
@@ -35,11 +34,11 @@ export function Card({ className, interactive = false, tone = "default", ...prop
 }
 
 export function CardHeader({ className, ...props }: ComponentProps<"div">) {
-  return <div className={cn("flex items-start justify-between gap-4 px-5 pt-5", className)} {...props} />;
+  return <div className={cn("flex items-start justify-between gap-4 px-6 pt-6", className)} {...props} />;
 }
 
 export function CardTitle({ className, ...props }: ComponentProps<"h3">) {
-  return <h3 className={cn("text-base font-semibold tracking-tight text-fg", className)} {...props} />;
+  return <h3 className={cn("text-lg font-semibold tracking-tight text-fg", className)} {...props} />;
 }
 
 export function CardDescription({ className, ...props }: ComponentProps<"p">) {
@@ -47,9 +46,9 @@ export function CardDescription({ className, ...props }: ComponentProps<"p">) {
 }
 
 export function CardContent({ className, ...props }: ComponentProps<"div">) {
-  return <div className={cn("px-5 py-5", className)} {...props} />;
+  return <div className={cn("px-6 py-6", className)} {...props} />;
 }
 
 export function CardFooter({ className, ...props }: ComponentProps<"div">) {
-  return <div className={cn("flex items-center gap-3 px-5 pb-5", className)} {...props} />;
+  return <div className={cn("flex items-center gap-3 px-6 pb-6", className)} {...props} />;
 }
