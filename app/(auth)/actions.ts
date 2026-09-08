@@ -18,7 +18,7 @@ const USERNAME_PATTERN = /^[a-z0-9_]{3,30}$/;
 const MIN_PASSWORD_LENGTH = 8;
 
 /** Only allow same-origin relative paths as post-auth destinations. */
-function safeNextPath(raw: FormDataEntryValue | null, fallback = "/account"): string {
+function safeNextPath(raw: FormDataEntryValue | null, fallback = "/profile"): string {
   const value = typeof raw === "string" ? raw : "";
   return value.startsWith("/") && !value.startsWith("//") ? value : fallback;
 }
@@ -88,7 +88,7 @@ export async function signup(_prev: AuthFormState, formData: FormData): Promise<
     password,
     options: {
       data: { username, display_name: displayName || username },
-      emailRedirectTo: `${origin}/auth/callback?next=/account`,
+      emailRedirectTo: `${origin}/auth/callback?next=/profile`,
     },
   });
   if (error) {
@@ -103,7 +103,7 @@ export async function signup(_prev: AuthFormState, formData: FormData): Promise<
 
   if (data.session) {
     // Email confirmation is disabled: the user is signed in immediately.
-    redirect("/account");
+    redirect("/profile");
   }
 
   return {

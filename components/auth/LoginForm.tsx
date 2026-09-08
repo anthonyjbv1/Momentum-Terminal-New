@@ -3,52 +3,35 @@
 import { useActionState } from "react";
 
 import { login, type AuthFormState } from "@/app/(auth)/actions";
+import { Button } from "@/components/ui/button";
+import { Field, Input } from "@/components/ui/input";
+
+import { FormError } from "./FormError";
 
 const initialState: AuthFormState = {};
 
-export function LoginForm({ next }: { next?: string }) {
+export function LoginForm({ next, notice }: { next?: string; notice?: string }) {
   const [state, formAction, pending] = useActionState(login, initialState);
 
   return (
-    <form action={formAction} className="flex flex-col gap-4">
+    <form action={formAction} className="flex flex-col gap-5">
       <input type="hidden" name="next" value={next ?? ""} />
 
-      <label className="flex flex-col gap-1 text-sm">
-        Email
-        <input
-          name="email"
-          type="email"
-          required
-          autoComplete="email"
-          defaultValue={state.values?.email ?? ""}
-          className="rounded border px-3 py-2"
-        />
-      </label>
+      <FormError message={notice} />
 
-      <label className="flex flex-col gap-1 text-sm">
-        Password
-        <input
-          name="password"
-          type="password"
-          required
-          autoComplete="current-password"
-          className="rounded border px-3 py-2"
-        />
-      </label>
+      <Field label="Email" htmlFor="login-email">
+        <Input id="login-email" name="email" type="email" required autoComplete="email" defaultValue={state.values?.email ?? ""} />
+      </Field>
 
-      {state.error && (
-        <p role="alert" className="text-sm text-red-600">
-          {state.error}
-        </p>
-      )}
+      <Field label="Password" htmlFor="login-password">
+        <Input id="login-password" name="password" type="password" required autoComplete="current-password" />
+      </Field>
 
-      <button
-        type="submit"
-        disabled={pending}
-        className="rounded bg-black px-4 py-2 text-white disabled:opacity-50 dark:bg-white dark:text-black"
-      >
+      <FormError message={state.error} />
+
+      <Button type="submit" size="lg" loading={pending} className="w-full">
         {pending ? "Logging in…" : "Log in"}
-      </button>
+      </Button>
     </form>
   );
 }

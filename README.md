@@ -2,7 +2,7 @@
 
 A social data terminal where users take **HIGH** or **LOW** positions on individual people. Each person has a continuously updating Momentum Score driven by their observable real-world data. Users profit when a score moves in their predicted direction; the platform is the sole counterparty. The scoring system is called **the Engine**; its five forces are **Gravity**, **Signals**, **Market Mood**, **Conviction** and **Trading Activity**.
 
-> **Status: Phase 5 (behavioral logging foundation) complete.** On top of the scaffold, schema, auth, ingestion, the Engine and the LLM reasoning layer, the repo now has the collection layer for a future "For You" recommender: a canonical event vocabulary, a validated append-only logging service usable from Server Actions and from the browser (`POST /api/behavioral/log`, batched and debounced), cookie-based browsing-session grouping, and a service-role-only query layer (interaction history, person engagement, co-engagement pairs). No recommendation algorithm, no UI. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`; the trading flow and the product UI are later phases.
+> **Status: Phase 6a (design system + app shell) complete.** On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer and the behavioral logging foundation, the repo now has its visual foundation: a single design-token file that drives every colour, font, size, radius, shadow and motion value (`app/styles/tokens.css`), a polished component library (`components/ui`), and the persistent shell: a top banner with the ever-present 30-second countdown to the next Engine tick, mobile bottom tabs, and a desktop two-panel layout with a right rail. Home, Portfolio, Feed, Profile and `/person/[slug]` exist as styled placeholders; `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`; page content, the trading flow and the recommendation layer are later phases.
 
 ## Stack
 
@@ -30,7 +30,7 @@ Other scripts:
 | `npm run build`     | Production build                                                           |
 | `npm run typecheck` | `tsc --noEmit`                                                             |
 | `npm run lint`      | ESLint (Next.js core-web-vitals + TypeScript rules)                        |
-| `npm test`          | Vitest unit tests (connectors, ingestion, Engine, LLM layer, memory, narratives) |
+| `npm test`          | Vitest unit tests (connectors, ingestion, Engine, LLM layer, memory, narratives, behavioral logging, design-token guard) |
 | `npm run db:link`   | Link the Supabase CLI to the project (one time, after `npx supabase login`) |
 | `npm run db:push`   | Apply any migrations in `supabase/migrations` that are not yet applied     |
 | `npm run db:types`  | Regenerate `types/database.ts` from the linked database                    |
@@ -62,15 +62,36 @@ Reserved for later phases (listed as comments in the example file): `OPENAI_API_
 
 ```
 app/
-  (auth)/                  login + signup pages and their Server Actions
+  layout.tsx               root: fonts, metadata, viewport
+  globals.css              Tailwind + base styles + the signature utilities (num, text-label, skeleton)
+  styles/tokens.css        THE design tokens (colour, type, spacing, radius, shadow, motion)
+  (app)/                   every product route, inside the shell
+    layout.tsx             AppShell with the @rail parallel slot
+    page.tsx               Home (placeholder)
+    portfolio/ feed/ profile/ person/[slug]/   placeholder pages
+    design/                living design-system reference
+    @rail/                 per-route desktop rail content (Home has one; the rest return null)
+    loading.tsx            route-level skeleton
+  (auth)/                  login + signup pages (inside a minimal banner layout) and their Server Actions
   auth/callback/route.ts   email confirmation / magic-link landing
-  account/page.tsx         minimal protected page
+  account/page.tsx         redirects to /profile
+  not-found.tsx            404, with the banner
+  icon.svg                 favicon (static mirror of the brand mark)
   api/ingest/route.ts      ingestion runner endpoint (INGEST_SECRET)
   api/engine/tick/route.ts Engine tick endpoint (ENGINE_SECRET, ?dryRun=1)
   api/engine/cron/route.ts the heartbeat: Vercel Cron target, gated by ENGINE_CRON_ENABLED
   api/behavioral/log/route.ts client-side behavioral logging (cookie auth, batched, RLS-scoped insert)
-components/auth/           LoginForm, SignupForm, SignOutButton
+components/
+  ui/                      the primitives: Button, Card, Badge, Avatar, ScoreDisplay, DirectionIndicator,
+                           CountdownTimer, Skeleton*, Input/Field, Sheet, PageHeader, PhaseNotice
+  shell/                   AppShell, TopBanner, DesktopNav, BottomNav, RightRail, PulseIndicator, SearchButton, ProfileButton
+  engine/engine-clock.ts   shared 30-second Engine clock (useEngineClock)
+  brand/momentum-mark.tsx  the mark and wordmark
+  auth/                    LoginForm, SignupForm, SignOutButton, FormError
+docs/design-system.md      how to change the look; token, component and shell reference
 lib/
+  fonts.ts                 Geist Sans + JetBrains Mono via next/font (self-hosted)
+  cn.ts                    class-name composer (clsx + tailwind-merge)
   env.ts                   environment variable access
   api-auth.ts              constant-time shared-secret check for internal endpoints
   supabase.ts              typed browser client
@@ -459,6 +480,33 @@ The default window is 90 days. Only canonical event types are counted.
 - Verified on the live project under simulated roles: own inserts succeed; inserts as another user, malformed types, array metadata, client-chosen `id` / `created_at`, updates, deletes, anon access and user calls to the aggregate functions are all rejected.
 - This data exists for personalisation. Retention, export and deletion must follow whatever privacy policy the platform adopts; deleting an account already cascades to its events.
 
+## Design system and app shell (Phase 6a)
+
+The visual foundation every screen inherits, plus the navigation frame. Full reference: [`docs/design-system.md`](docs/design-system.md).
+
+### Tokens
+
+Every visual value lives in **`app/styles/tokens.css`** as a Tailwind 4 `@theme` block: semantic colours (`canvas`, `surface*`, `line*`, `fg*`, `positive`, `negative`, `neutral`, `accent`), the two typefaces, a type scale, the spacing base plus the shell's structural sizes (`banner`, `tabbar`, `rail`, `shell`, `touch`), radii, shadows (glows derive from the semantic colours) and motion. Tailwind's stock palette, fonts, radii and shadows are reset, so `bg-red-500` does not exist; components can only use tokens. Changing a token is a one-line edit that cascades platform-wide, and `lib/__tests__/design-tokens.test.ts` fails the build if a component ever hardcodes a colour, pixel size or arbitrary value.
+
+The palette keeps what the previous platform did well: a near-black ground with a faint cool bias, the signature green for HIGH / Buy / heating, red for LOW / Sell / cooling, electric blue and amber accents, and JetBrains Mono tabular numerals. Geist Sans carries the interface text. Both fonts are self-hosted through `next/font`.
+
+Two signature utilities are defined once in `globals.css`: `num` (mono, tabular figures) for every number and `text-label` (uppercase mono micro caption) for eyebrows and badges.
+
+### Components (`components/ui`)
+
+Button (`primary`, `buy`, `sell`, `outline`, `ghost`), Card, Badge, Avatar, **ScoreDisplay** (the signature number: bright integer, quiet decimal, direction read at the baseline), DirectionIndicator (heating / cooling / flat), **CountdownTimer**, Skeleton family, Input + Field, Sheet (modal), PageHeader, PhaseNotice. `/design` renders all of them with sample values.
+
+### The shell
+
+- **Top banner**, fixed on every page and modal: mark, desktop navigation, platform pulse (Market Mood + Engine status, on standby until the heartbeat is on), the **30-second countdown to the next Engine tick**, search (`⌘K`) and profile. Ticks are aligned to wall-clock multiples of 30 s, the cron's cadence, so the countdown is deterministic and identical on every client (`components/engine/engine-clock.ts`).
+- **Bottom tab bar** on mobile: Home, Portfolio, Feed, Profile.
+- **Desktop two-panel layout**: main column plus a sticky right rail. A route provides rail content through the `@rail` parallel slot in `app/(app)`; Home does (the live feed lands there in 6b), the others render none and the column takes the full width.
+- Sheets open **below** the banner, so the timer stays visible above any modal.
+
+### Routes
+
+`/` Home, `/portfolio`, `/feed`, `/profile` (signed in), `/person/[slug]`, `/design`, plus `/login`, `/signup`, `/account` (redirects to `/profile`). All are styled placeholders with skeletons and a "Phase 6x" notice where real content lands.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -467,5 +515,6 @@ The default window is 90 days. Only canonical event types are counted.
 - **Phase 4**: provider-agnostic LLM abstraction with an Anthropic adapter and three stubs, model routing, per-entity memory with seeded baselines and cheap evolution, the `LLMScorer` with anomaly awareness and rules fallback, usage logging with a per-tick call cap, narratives for meaningful moves.
 - **Engine cron**: the 30-second heartbeat via Vercel Cron (two ticks per one-minute invocation with a time budget), one shared `runFullTick()` path, gated by `ENGINE_CRON_ENABLED`, which ships as `false`.
 - **Phase 5**: behavioral logging foundation: `session_id` and recommender-shaped indexes on `behavioral_events`, the canonical event vocabulary with per-type metadata contracts, server-side and browser logging services (validated, silent on failure, batched, session-grouped), and the service-role-only query layer.
+- **Phase 6a**: the design token system, the core component library, the persistent shell (banner with the 30-second countdown, bottom tabs, desktop two-panel layout) and the route skeleton with styled placeholders.
 
-Deliberately not built yet: the recommendation algorithm and any For You ranking, the user trading flow (which will write `positions`, `transactions` and `trade_events` through RPCs), person profiles, feeds, portfolio pages, and any visual design. The heartbeat is wired but switched off.
+Deliberately not built yet: page content (person cards, feed items, portfolio, profile), the trading flow (which will write `positions`, `transactions` and `trade_events` through RPCs), the recommendation algorithm and any For You ranking. The heartbeat is wired but switched off.

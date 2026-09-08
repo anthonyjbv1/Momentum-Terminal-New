@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 28" width="28" height="28">
+  <!-- Static mirror of components/brand/momentum-mark.tsx: favicons cannot read CSS tokens. -->
+  <rect x="0.75" y="0.75" width="26.5" height="26.5" rx="7" fill="#1c1e23" stroke="#2f3238" stroke-width="1.5"/>
+  <polyline points="6.5,19.5 11.5,13.5 15.5,16.5 21.5,8.5" fill="none" stroke="#3ecf6e" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="21.5" cy="8.5" r="4" fill="#3ecf6e" fill-opacity="0.25"/>
+  <circle cx="21.5" cy="8.5" r="2" fill="#3ecf6e"/>
+</svg>

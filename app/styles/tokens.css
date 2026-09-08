@@ -1,0 +1,192 @@
+/* =============================================================================
+   Momentum Terminal — design tokens
+
+   THE ONE PLACE visual values live. Every component references these through
+   Tailwind utilities (bg-surface, text-fg-muted, font-mono, rounded-lg,
+   shadow-card, h-banner …) or CSS variables (var(--color-positive)).
+   Change a value here and it cascades across the whole platform.
+
+   Tailwind 4 reads this @theme block as its configuration: each variable
+   becomes a utility class AND a CSS custom property. The `initial` resets at
+   the top remove Tailwind's stock palette, fonts, radii and shadows, so a
+   class like `bg-red-500` or `rounded-lg` (stock) simply does not exist —
+   only the tokens below do. That is what keeps components token-only.
+
+   The palette is inherited from the previous platform: a near-black ground
+   with a faint cool bias, the signature green for HIGH / Buy / heating, red
+   for LOW / Sell / cooling, electric blue and amber as accents, and
+   monospaced tabular numerals for everything numeric.
+   ============================================================================= */
+
+@theme {
+  --color-*: initial;
+  --font-*: initial;
+  --text-*: initial;
+  --tracking-*: initial;
+  --radius-*: initial;
+  --shadow-*: initial;
+  --animate-*: initial;
+
+  /* ---------------------------------------------------------------------------
+     Color — grounds (back to front)
+     --------------------------------------------------------------------------- */
+  --color-canvas: oklch(10% 0.008 240);           /* page background */
+  --color-surface: oklch(13.5% 0.01 240);         /* cards, panels */
+  --color-surface-raised: oklch(17% 0.012 240);   /* hover states, inputs, chips */
+  --color-surface-overlay: oklch(20% 0.014 240);  /* sheets, popovers, menus */
+  --color-surface-inverse: oklch(93% 0.01 240);   /* primary buttons */
+
+  /* Lines */
+  --color-line: oklch(22% 0.01 240);
+  --color-line-strong: oklch(30% 0.012 240);
+
+  /* Text */
+  --color-fg: oklch(93% 0.01 240);
+  --color-fg-secondary: oklch(74% 0.012 240);
+  --color-fg-muted: oklch(56% 0.012 240);
+  --color-fg-faint: oklch(40% 0.012 240);
+  --color-fg-inverse: oklch(12% 0.01 240);
+
+  /* ---------------------------------------------------------------------------
+     Color — semantics. Direction colour is the platform's one loud voice:
+     positive = HIGH / Buy / heating, negative = LOW / Sell / cooling,
+     neutral = flat / standby. accent is for interface emphasis (links,
+     focus, selection), never for direction.
+     --------------------------------------------------------------------------- */
+  --color-positive: oklch(72% 0.18 145);
+  --color-positive-fg: oklch(14% 0.03 145);
+  --color-negative: oklch(65% 0.21 25);
+  --color-negative-fg: oklch(98% 0.005 25);
+  --color-neutral: oklch(78% 0.16 65);
+  --color-neutral-fg: oklch(16% 0.03 65);
+  --color-accent: oklch(65% 0.22 250);
+  --color-accent-fg: oklch(98% 0.005 250);
+
+  --color-brand: var(--color-positive);
+  --color-ring: var(--color-accent);
+
+  /* ---------------------------------------------------------------------------
+     Typography. The font variables are set on <html> by lib/fonts.ts
+     (next/font, self-hosted). Swap a face there and here.
+     --------------------------------------------------------------------------- */
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-jetbrains-mono), "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg: 1.0625rem;
+  --text-lg--line-height: 1.625rem;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl: 1.875rem;
+  --text-3xl--line-height: 2.25rem;
+  --text-4xl: 2.375rem;
+  --text-4xl--line-height: 2.625rem;
+  --text-5xl: 3rem;
+  --text-5xl--line-height: 1;
+  --text-6xl: 3.75rem;
+  --text-6xl--line-height: 1;
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --tracking-tighter: -0.03em;
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0em;
+  --tracking-wide: 0.04em;
+  --tracking-label: 0.08em;
+  --tracking-widest: 0.14em;
+
+  /* ---------------------------------------------------------------------------
+     Spacing. `--spacing` is the base unit for the numeric scale (p-4 = 1rem).
+     Named sizes below are the shell's structural dimensions.
+     --------------------------------------------------------------------------- */
+  --spacing: 0.25rem;
+  --spacing-banner: 3.5rem;   /* top banner height */
+  --spacing-tabbar: 4rem;     /* bottom tab bar height (mobile) */
+  --spacing-rail: 21rem;      /* right-hand rail width (desktop) */
+  --spacing-shell: 80rem;     /* max content width */
+  --spacing-touch: 2.75rem;   /* minimum tap target */
+
+  /* ---------------------------------------------------------------------------
+     Shape
+     --------------------------------------------------------------------------- */
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+  --radius-full: 9999px;
+
+  /* ---------------------------------------------------------------------------
+     Depth. Glows derive from the semantic colours, so they follow a recolour.
+     --------------------------------------------------------------------------- */
+  --shadow-card: inset 0 1px 0 0 color-mix(in oklab, var(--color-fg) 3%, transparent), 0 12px 32px -16px oklch(0% 0 0 / 0.7);
+  --shadow-raised: inset 0 1px 0 0 color-mix(in oklab, var(--color-fg) 5%, transparent), 0 20px 48px -20px oklch(0% 0 0 / 0.8);
+  --shadow-overlay: 0 24px 64px -16px oklch(0% 0 0 / 0.85), 0 0 0 1px color-mix(in oklab, var(--color-fg) 6%, transparent);
+  --shadow-glow-positive: 0 0 0 1px color-mix(in oklab, var(--color-positive) 45%, transparent), 0 0 20px 2px color-mix(in oklab, var(--color-positive) 25%, transparent);
+  --shadow-glow-negative: 0 0 0 1px color-mix(in oklab, var(--color-negative) 45%, transparent), 0 0 20px 2px color-mix(in oklab, var(--color-negative) 25%, transparent);
+  --shadow-glow-accent: 0 0 0 1px color-mix(in oklab, var(--color-accent) 45%, transparent), 0 0 20px 2px color-mix(in oklab, var(--color-accent) 25%, transparent);
+
+  /* ---------------------------------------------------------------------------
+     Motion
+     --------------------------------------------------------------------------- */
+  --default-transition-duration: 160ms;
+  --default-transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --animate-pulse-soft: pulse-soft 2.4s ease-in-out infinite;
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  --animate-fade-in: fade-in 200ms ease-out both;
+  --animate-rise-in: rise-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-slide-up: slide-up 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-tick-flash: tick-flash 800ms ease-out;
+
+  @keyframes pulse-soft {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+  @keyframes shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes rise-in {
+    from { opacity: 0; transform: translateY(8px) scale(0.99); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes slide-up {
+    from { transform: translateY(100%); }
+    to { transform: none; }
+  }
+  @keyframes tick-flash {
+    0% { color: var(--color-positive); }
+    100% { color: inherit; }
+  }
+}
+
+/* Layering. Not a Tailwind namespace, so plain custom properties; used as
+   z-(--z-banner) etc. The banner sits above sheets so the countdown timer is
+   visible on every page AND every modal. */
+:root {
+  --z-rail: 10;
+  --z-overlay: 30;
+  --z-sheet: 35;
+  --z-tabbar: 40;
+  --z-banner: 50;
+  --z-toast: 60;
+}

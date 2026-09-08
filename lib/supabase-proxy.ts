@@ -5,7 +5,7 @@ import { getSupabasePublishableKey, getSupabaseUrl } from "@/lib/env";
 import type { Database } from "@/types/database";
 
 /** Routes that require a signed-in user. Prefix match. */
-const PROTECTED_PREFIXES = ["/account"];
+const PROTECTED_PREFIXES = ["/account", "/portfolio", "/profile"];
 
 /** Routes that only make sense when signed out. Exact match. */
 const SIGNED_OUT_ONLY_ROUTES = ["/login", "/signup"];
@@ -59,7 +59,7 @@ export async function updateSession(request: NextRequest): Promise<NextResponse>
 
   if (isSignedIn && SIGNED_OUT_ONLY_ROUTES.includes(pathname)) {
     const url = request.nextUrl.clone();
-    url.pathname = "/account";
+    url.pathname = "/profile";
     url.search = "";
     return withCookies(NextResponse.redirect(url), response);
   }
