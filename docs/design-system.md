@@ -15,7 +15,7 @@ Every visual value lives in **`app/styles/tokens.css`**, inside one `@theme` blo
 | The interface typeface           | point the `inter` `path` in `lib/fonts.ts` at a new file, keep the `--font-inter` variable (or point `--font-sans` at a new one) |
 | The numeric typeface             | same, for `--font-jetbrains-mono` → `--font-mono`                                             |
 | Type scale                       | `--text-*` and the paired `--text-*--line-height`                                             |
-| Corner radius                    | `--radius-*` (cards use `2xl`, sheets `3xl`, buttons `full`)                                  |
+| Corner radius                    | `--radius-*` (cards `2xl` 17px, sheets `3xl` 20px, inputs `xl` 14px; pills and circles use `full`) |
 | Elevation                        | `--shadow-*` (an inner highlight, not a drop shadow)                                          |
 | Banner / tab bar / rail sizes    | `--spacing-banner`, `--spacing-tabbar`, `--spacing-rail`, `--spacing-shell`, `--spacing-touch` |
 | Motion                           | `--animate-*`, `--default-transition-duration`, `--ease-out-expo`                              |

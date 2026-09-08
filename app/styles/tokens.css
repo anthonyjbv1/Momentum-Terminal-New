@@ -119,15 +119,20 @@
   --spacing-touch: 2.75rem;   /* minimum tap target */
 
   /* ---------------------------------------------------------------------------
-     Shape. Soft, generous.
+     Shape. Tight, intentional: felt but not attention-grabbing.
+
+     The rectangular scale is a single ×0.72 step down from the original,
+     rounded to whole pixels, so the hierarchy is preserved — larger surfaces
+     still carry more radius than small ones. `full` is untouched: pills,
+     avatars and round icon buttons stay circular.
      --------------------------------------------------------------------------- */
-  --radius-xs: 0.375rem;
-  --radius-sm: 0.5rem;
-  --radius-md: 0.75rem;
-  --radius-lg: 1rem;
-  --radius-xl: 1.25rem;
-  --radius-2xl: 1.5rem;
-  --radius-3xl: 1.75rem;
+  --radius-xs: 0.25rem;      /*  4px */
+  --radius-sm: 0.375rem;     /*  6px */
+  --radius-md: 0.5625rem;    /*  9px */
+  --radius-lg: 0.75rem;      /* 12px — skeletons */
+  --radius-xl: 0.875rem;     /* 14px — inputs */
+  --radius-2xl: 1.0625rem;   /* 17px — cards, panels, tiles */
+  --radius-3xl: 1.25rem;     /* 20px — sheets */
   --radius-full: 9999px;
 
   /* ---------------------------------------------------------------------------
