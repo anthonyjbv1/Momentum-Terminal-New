@@ -67,12 +67,12 @@ app/
   styles/tokens.css        THE design tokens (colour, type, spacing, radius, shadow, motion)
   (app)/                   every product route, inside the shell
     layout.tsx             AppShell with the @rail parallel slot
-    page.tsx               Home: the live board
-    person/[slug]/         the person page (page, loading skeleton, not-found)
+    (home)/                Home: the live board, with its route-level loading skeleton
+    person/[slug]/         the person page (slug resolved in the shell for a real 404; sections stream behind a skeleton) + not-found
     portfolio/ feed/ profile/   placeholder pages
     design/                living design-system reference
     @rail/                 per-route desktop rail content (Home and person pages have one; the rest return null)
-    loading.tsx            route-level skeleton
+    error.tsx              error boundary for every page in the shell
   (auth)/                  login + signup pages (inside a minimal banner layout) and their Server Actions
   auth/callback/route.ts   email confirmation / magic-link landing
   account/page.tsx         redirects to /profile
@@ -557,7 +557,9 @@ Logging is skipped entirely when nobody is signed in, since the log endpoint wou
 
 ## Person profile (Phase 6c)
 
-`/person/[slug]` — the page every Home card routes to. Desktop is two panels (identity, score and history, the five forces in the main column; signals in the right rail); mobile is one column in the same order with the signals last and Buy / Sell fixed above the tab bar. An unknown slug is a real 404 inside the shell.
+`/person/[slug]` — the page every Home card routes to. Desktop is two panels (identity, score and history, the five forces in the main column; signals in the right rail); mobile is one column in the same order with the signals last and Buy / Sell fixed above the tab bar.
+
+An unknown slug is a real HTTP 404 inside the shell. The slug is resolved before anything streams (Home's `loading.tsx` therefore lives in its own `(home)` route group rather than above every page, since a `notFound()` thrown inside a Suspense boundary can only ever be a 200); the readings behind the sections then stream in behind a skeleton of the page's own shape.
 
 ### What it shows
 

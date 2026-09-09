@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 
 import { getCurrentUser } from "@/lib/auth";
 import { getPersonBySlug, getPersonProfile, getPersonSignals, getRenderedAt } from "@/lib/person/profile";
 import { BackLink } from "@/components/person/back-link";
 import { Dossier } from "@/components/person/dossier";
 import { ForcesPanel } from "@/components/person/forces-panel";
+import { ProfileSkeleton } from "@/components/person/profile-skeleton";
 import { ScorePanel } from "@/components/person/score-panel";
 import { SignalsList } from "@/components/person/signals-list";
 import { TradeBar } from "@/components/person/trade-bar";
@@ -21,6 +23,11 @@ import { ProfileLogger } from "@/components/person/use-profile-logging";
  * column with Buy / Sell fixed above the tab bar. Every reading comes from
  * the database as it stands: with the Engine dormant the page says so, in
  * every section, rather than inventing movement.
+ *
+ * The slug is resolved in the shell, before anything streams, so an unknown
+ * person is a real HTTP 404 (a not-found thrown inside a Suspense boundary
+ * can only ever be a 200). The readings behind the sections then stream in
+ * behind a skeleton of the page's own shape.
  */
 
 // The score and its history are live readings; never serve a stale page.
@@ -42,17 +49,28 @@ export default async function PersonPage({ params }: { params: Params }) {
   const person = await getPersonBySlug(slug);
   if (!person) notFound();
 
-  const [profile, signals, user] = await Promise.all([getPersonProfile(slug), getPersonSignals(person.id), getCurrentUser()]);
+  return (
+    <div className="flex flex-col gap-10 pb-28 md:pb-0">
+      <BackLink />
+      <Suspense fallback={<ProfileSkeleton />}>
+        <ProfileBody slug={slug} personId={person.id} />
+      </Suspense>
+    </div>
+  );
+}
+
+/** Everything below the back link: the readings, streamed in once they are loaded. */
+async function ProfileBody({ slug, personId }: { slug: string; personId: string }) {
+  const [profile, signals, user] = await Promise.all([getPersonProfile(slug), getPersonSignals(personId), getCurrentUser()]);
+  // The person was found a moment ago; only a deactivation in between lands here.
   if (!profile) notFound();
 
   const loggingEnabled = Boolean(user);
   const renderedAt = getRenderedAt();
 
   return (
-    <div className="flex flex-col gap-10 pb-28 md:pb-0">
+    <div className="flex flex-col gap-10">
       <ProfileLogger personId={profile.person.id} enabled={loggingEnabled} />
-
-      <BackLink />
 
       <Dossier person={profile.person} state={profile.state} conviction={profile.conviction} />
 

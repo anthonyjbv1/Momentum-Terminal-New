@@ -100,5 +100,5 @@ Layering lives in `:root` as `--z-*` custom properties, used as `z-(--z-banner)`
 - No default browser styling: base layer sets ground, text, selection, focus rings, scrollbars, `cursor: pointer` on buttons.
 - Spacing on the 4px scale only; structural sizes are named tokens. Sections sit 40px apart; cards pad 24px.
 - Transitions on every interactive element (180ms default); `prefers-reduced-motion` collapses all motion.
-- Loading states: `app/(app)/loading.tsx` plus per-slot skeletons; placeholders never render empty.
+- Loading states: `app/(app)/(home)/loading.tsx` for Home, an in-page Suspense skeleton on the person page (so an unknown slug can still be a real 404), plus per-slot skeletons; placeholders never render empty.
 - Tap targets are at least `--spacing-touch` (44px); text on coloured buttons uses the paired `*-fg` token for contrast.

@@ -1,12 +1,15 @@
 import { Card } from "@/components/ui/card";
 import { Skeleton, SkeletonFeedItem } from "@/components/ui/skeleton";
 
-/** Route-level loading state: the profile's shape, shimmering, in the order the real page lands. */
-export default function PersonLoading() {
+/**
+ * The profile's shape while its readings load: identity, score and history,
+ * the five forces, and (below lg) the signal list, in the order the real
+ * sections land. Rendered inside the page's Suspense boundary, so the slug
+ * has already been checked by the time this shows.
+ */
+export function ProfileSkeleton() {
   return (
-    <div className="flex flex-col gap-10 pb-28 animate-fade-in md:pb-0" aria-busy aria-label="Loading">
-      <Skeleton className="h-4 w-16" />
-
+    <div className="flex flex-col gap-10 animate-fade-in" aria-busy aria-label="Loading">
       {/* Identity */}
       <div className="flex flex-col gap-4">
         <Skeleton className="h-3 w-16" />
@@ -71,7 +74,7 @@ export default function PersonLoading() {
         </Card>
       </div>
 
-      {/* Signals (mobile / tablet) */}
+      {/* Signals (below lg; the rail has its own skeleton) */}
       <div className="flex flex-col gap-4 lg:hidden">
         <Skeleton className="h-3 w-16" />
         <Card className="divide-y divide-line">
