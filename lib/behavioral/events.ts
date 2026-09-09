@@ -27,6 +27,7 @@ export const BEHAVIORAL_EVENT_TYPES = [
   "search",
   "view_feed",
   "swipe",
+  "change_range",
 ] as const;
 
 export type BehavioralEventType = (typeof BEHAVIORAL_EVENT_TYPES)[number];
@@ -93,6 +94,11 @@ export const BEHAVIORAL_EVENT_DEFINITIONS: Record<BehavioralEventType, Behaviora
     description: "Swiped on a person card.",
     requiresPerson: true,
     metadata: "{ action: 'left' | 'right' | 'up' | 'down' }  ('direction' is accepted as an alias)",
+  },
+  change_range: {
+    description: "Switched the score chart to another time range on a person.",
+    requiresPerson: true,
+    metadata: "{ range: string (non-empty, e.g. 1h | 24h | 7d | all), surface?: string }",
   },
 };
 
@@ -298,6 +304,11 @@ const TYPE_CHECKS: Partial<Record<BehavioralEventType, TypeCheck>> = {
       return { ok: false, reason: "metadata.signal_id must be a UUID" };
     }
     return { ok: true, metadata };
+  },
+  change_range: (metadata) => {
+    const range = typeof metadata?.range === "string" ? metadata.range.trim().toLowerCase() : "";
+    if (!range) return { ok: false, reason: "change_range requires metadata.range (non-empty string)" };
+    return { ok: true, metadata: { ...metadata, range } };
   },
 };
 

@@ -1,74 +1,76 @@
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 
-import { Avatar } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
-import { SectionHeader } from "@/components/ui/page-header";
-import { PhaseNotice } from "@/components/ui/phase-notice";
-import { Skeleton, SkeletonFeedItem, SkeletonStat } from "@/components/ui/skeleton";
+import { getCurrentUser } from "@/lib/auth";
+import { getPersonBySlug, getPersonProfile, getPersonSignals, getRenderedAt } from "@/lib/person/profile";
+import { BackLink } from "@/components/person/back-link";
+import { Dossier } from "@/components/person/dossier";
+import { ForcesPanel } from "@/components/person/forces-panel";
+import { ScorePanel } from "@/components/person/score-panel";
+import { SignalsList } from "@/components/person/signals-list";
+import { TradeBar } from "@/components/person/trade-bar";
+import { ProfileLogger } from "@/components/person/use-profile-logging";
+
+/**
+ * /person/[slug] — one person's page (Phase 6c).
+ *
+ *   identity → score and history → the five forces → signals
+ *
+ * Desktop puts the signals in the right rail (app/(app)/@rail/person/[slug])
+ * and the Buy / Sell entry beside the score; mobile stacks everything in one
+ * column with Buy / Sell fixed above the tab bar. Every reading comes from
+ * the database as it stands: with the Engine dormant the page says so, in
+ * every section, rather than inventing movement.
+ */
+
+// The score and its history are live readings; never serve a stale page.
+export const dynamic = "force-dynamic";
 
 type Params = Promise<{ slug: string }>;
 
-/** "kendrick-lamar" → "Kendrick Lamar" until the person record is wired in 6c. */
-function nameFromSlug(slug: string): string {
-  return slug
-    .split("-")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
 export async function generateMetadata({ params }: { params: Params }): Promise<Metadata> {
   const { slug } = await params;
-  return { title: nameFromSlug(slug) };
+  const person = await getPersonBySlug(slug).catch(() => null);
+  return person
+    ? { title: person.displayName, description: `${person.displayName}'s Momentum Score, history, the five forces and signals.` }
+    : { title: "Not found" };
 }
 
 export default async function PersonPage({ params }: { params: Params }) {
   const { slug } = await params;
-  const name = nameFromSlug(slug);
+
+  const person = await getPersonBySlug(slug);
+  if (!person) notFound();
+
+  const [profile, signals, user] = await Promise.all([getPersonProfile(slug), getPersonSignals(person.id), getCurrentUser()]);
+  if (!profile) notFound();
+
+  const loggingEnabled = Boolean(user);
+  const renderedAt = getRenderedAt();
 
   return (
-    <div className="flex flex-col gap-10">
-      <header className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-5">
-          <Avatar name={name} size="xl" />
-          <div className="flex flex-col gap-2">
-            <h1 className="text-4xl font-bold tracking-tighter text-fg sm:text-5xl">{name}</h1>
-            <div className="flex items-center gap-2">
-              <Badge>Person</Badge>
-              <Badge tone="warning" dot>
-                Standby
-              </Badge>
-            </div>
-          </div>
-        </div>
-        <div className="flex flex-col gap-2.5 sm:items-end">
-          <Skeleton className="h-14 w-40" />
-          <Skeleton className="h-3 w-24" />
-        </div>
-      </header>
+    <div className="flex flex-col gap-10 pb-28 md:pb-0">
+      <ProfileLogger personId={profile.person.id} enabled={loggingEnabled} />
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <SkeletonStat />
-        <SkeletonStat />
-        <SkeletonStat />
-        <SkeletonStat />
-      </div>
+      <BackLink />
 
-      <Card className="h-56 overflow-hidden sm:h-72">
-        <Skeleton className="size-full rounded-2xl" />
-      </Card>
+      <Dossier person={profile.person} state={profile.state} conviction={profile.conviction} />
 
-      <section className="flex flex-col gap-4">
-        <SectionHeader title="Recent signals" />
-        <Card className="divide-y divide-line overflow-hidden">
-          <SkeletonFeedItem />
-          <SkeletonFeedItem />
-          <SkeletonFeedItem />
-        </Card>
-      </section>
+      <ScorePanel profile={profile} loggingEnabled={loggingEnabled} renderedAt={renderedAt} />
 
-      <PhaseNotice phase="Phase 6c">Score history, the five forces, signals and the Buy / Sell actions land here.</PhaseNotice>
+      <ForcesPanel forces={profile.forces} latestTick={profile.latestTick} />
+
+      {/* On desktop the signals live in the rail; below lg they follow the forces. */}
+      <SignalsList
+        className="lg:hidden"
+        items={signals}
+        personId={profile.person.id}
+        personName={profile.person.displayName}
+        loggingEnabled={loggingEnabled}
+        renderedAt={renderedAt}
+      />
+
+      <TradeBar person={profile.person} />
     </div>
   );
 }

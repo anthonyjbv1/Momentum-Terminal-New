@@ -78,8 +78,8 @@ export function SearchButton({ loggingEnabled = false }: { loggingEnabled?: bool
           <SkeletonPersonRow />
           <SkeletonPersonRow />
         </div>
-        <PhaseNotice phase="Phase 6c" className="mt-5">
-          Results arrive with the person pages. Browse the ranked board on Home in the meantime.
+        <PhaseNotice phase="Later phase" className="mt-5">
+          Results arrive with the search build. Browse the ranked board on Home in the meantime.
         </PhaseNotice>
       </Sheet>
     </>

@@ -2,7 +2,7 @@
 
 A social data terminal where users take **HIGH** or **LOW** positions on individual people. Each person has a continuously updating Momentum Score driven by their observable real-world data. Users profit when a score moves in their predicted direction; the platform is the sole counterparty. The scoring system is called **the Engine**; its five forces are **Gravity**, **Signals**, **Market Mood**, **Conviction** and **Trading Activity**.
 
-> **Status: Phase 6b (Home / discovery) complete.** On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation and the editorial-monochrome shell, **Home is now wired to real data**: the 16 tracked people are read from the database, ranked by momentum, and shown as a top-movers row and a ranked list, with category filtering, sparklines, and impression / dwell logging. The desktop rail previews the newest signals and narratives. Portfolio, Feed and `/person/[slug]` are still styled placeholders; `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0 and the board reads as awaiting its first tick. The trading flow and the recommendation layer are later phases.
+> **Status: Phase 6c (person profile page) complete.** On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation, the editorial-monochrome shell and the live Home board, **`/person/[slug]` is now a real page**: an identity dossier (name, category, tracked since, STATE, CONVICTION), the Momentum Score with its change over a chosen range, the score line with 1H / 24H / 7D / ALL and the gravity target as a reference, the five forces as of the latest tick, the person's signals and Engine narratives, and a Buy / Sell entry that opens nothing until the trading flow lands. Unknown slugs are a real 404. Portfolio and Feed are still styled placeholders; `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0, every chart is honestly empty, every STATE reads Stable and every force reads idle. The trading flow and the recommendation layer are later phases.
 
 ## Stack
 
@@ -30,7 +30,7 @@ Other scripts:
 | `npm run build`     | Production build                                                           |
 | `npm run typecheck` | `tsc --noEmit`                                                             |
 | `npm run lint`      | ESLint (Next.js core-web-vitals + TypeScript rules)                        |
-| `npm test`          | Vitest unit tests (connectors, ingestion, Engine, LLM layer, memory, narratives, behavioral logging, design-token guard) |
+| `npm test`          | Vitest unit tests (connectors, ingestion, Engine, LLM layer, memory, narratives, behavioral logging, Home and profile models, design-token guard) |
 | `npm run db:link`   | Link the Supabase CLI to the project (one time, after `npx supabase login`) |
 | `npm run db:push`   | Apply any migrations in `supabase/migrations` that are not yet applied     |
 | `npm run db:types`  | Regenerate `types/database.ts` from the linked database                    |
@@ -67,10 +67,11 @@ app/
   styles/tokens.css        THE design tokens (colour, type, spacing, radius, shadow, motion)
   (app)/                   every product route, inside the shell
     layout.tsx             AppShell with the @rail parallel slot
-    page.tsx               Home (placeholder)
-    portfolio/ feed/ profile/ person/[slug]/   placeholder pages
+    page.tsx               Home: the live board
+    person/[slug]/         the person page (page, loading skeleton, not-found)
+    portfolio/ feed/ profile/   placeholder pages
     design/                living design-system reference
-    @rail/                 per-route desktop rail content (Home has one; the rest return null)
+    @rail/                 per-route desktop rail content (Home and person pages have one; the rest return null)
     loading.tsx            route-level skeleton
   (auth)/                  login + signup pages (inside a minimal banner layout) and their Server Actions
   auth/callback/route.ts   email confirmation / magic-link landing
@@ -86,6 +87,7 @@ components/
                            CountdownTimer, Skeleton*, Input/Field, Sheet, PageHeader, PhaseNotice
   shell/                   AppShell, TopBanner, DesktopNav, BottomNav, RightRail, PulseIndicator, SearchButton, ProfileButton
   home/                    PersonCard + PersonRow, Sparkline, CategoryFilter, PeopleBoard, FeedPreview, impression logging
+  person/                  Dossier, ScorePanel (+ ScoreChart, RangeToggle), ForcesPanel, SignalsList, TradeBar / TradeActions, BackLink, profile logging
   engine/engine-clock.ts   shared 30-second Engine clock (useEngineClock)
   brand/momentum-mark.tsx  renders public/brand/momentum-mark.png (the brand asset, unmodified) + wordmark
   auth/                    LoginForm, SignupForm, SignOutButton, FormError
@@ -134,6 +136,9 @@ lib/
     board.ts               Home's server reads: the board and the feed preview (service role)
     board-model.ts         pure ranking, mover selection and category options
     relative-time.ts       compact "3m" / "2h" feed stamps
+  person/
+    profile.ts             the person page's server reads: person, chart series, forces, signals (service role, per-request cached)
+    profile-model.ts       pure rules: ranges, period change, the STATE threshold, CONVICTION bands, force readings, signal merge
 proxy.ts                   Next.js proxy (formerly middleware)
 vercel.json                cron schedule: /api/engine/cron every minute
 supabase/migrations/       SQL migrations (applied in order)
@@ -159,6 +164,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260907143920_engine_tables.sql`         | `people.last_tick_at` + generated `buy_price`/`sell_price`, `engine_ticks`, `score_events`, `trade_events`, `apply_engine_tick()` |
 | `20260907195432_behavioral_logging_foundation.sql` | `behavioral_events.session_id`, format-only `event_type` check, metadata check, recommender indexes, column-level insert grant, three service-role-only aggregate functions |
 | `20260908114758_home_board_reads.sql`      | `home_momentum()` (per-person change + sparkline over a trailing window), `signals`/`narratives` newest-first indexes for the feed rail |
+| `20260909010607_person_profile_reads.sql`  | `person_score_series()` (one person's history since a point in time, downsampled by time into bounded slices with open / close / tick count) for the profile chart |
 | `20260907153228_llm_memory_narratives.sql` | `person_memory` (+ 16 seeded profiles), `llm_usage`, `narratives`, with RLS                  |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
@@ -434,8 +440,9 @@ The collection layer for a future recommendation algorithm ("For You"). It recor
 | `search`          | optional   | `{ query: string, result_count?: integer }`                             |
 | `view_feed`       | optional   | `{ feed?: string }` (home, trending, for_you, …)                        |
 | `swipe`           | required   | `{ action: "left" \| "right" \| "up" \| "down" }`                       |
+| `change_range`    | required   | `{ range: string, surface?: string }` (1h, 24h, 7d, all — the profile chart) |
 
-`validateBehavioralEvent()` enforces all of this (and normalises: uppercase direction, trimmed query, lowercase swipe action, rounded and clamped duration). All money is integer cents, as everywhere else.
+`validateBehavioralEvent()` enforces all of this (and normalises: uppercase direction, trimmed query, lowercase swipe action and range, rounded and clamped duration). All money is integer cents, as everywhere else.
 
 ### Logging from server code
 
@@ -548,6 +555,42 @@ Wired to the Phase 5 client, fire-and-forget:
 
 Logging is skipped entirely when nobody is signed in, since the log endpoint would reject those events anyway.
 
+## Person profile (Phase 6c)
+
+`/person/[slug]` — the page every Home card routes to. Desktop is two panels (identity, score and history, the five forces in the main column; signals in the right rail); mobile is one column in the same order with the signals last and Buy / Sell fixed above the tab bar. An unknown slug is a real 404 inside the shell.
+
+### What it shows
+
+- **Identity** — a labelled dossier grid: small grey uppercase label, large white value, hairline rules. NAME (the largest value after the score), CATEGORY, TRACKED SINCE (`people.created_at`), STATE and CONVICTION, with the avatar alongside (monogram when there is no image). REGION is not shown: `people` has no such column, and the page invents nothing. Every label describes market or score state; the only coloured value is STATE, and only because it reads direction.
+- **Momentum score** — the score in large monospaced numerals; beneath it the change over the selected range in points and percent, coloured by direction; the gravity target (`revert_target`), spread, and the Buy / Sell quotes in small type.
+- **Score history** — one thin white line, a recessive grid, a single score axis, three time marks, the gravity target as a faint dashed reference (or a note that it sits above / below the visible range), and a crosshair with the exact score and time on hover or touch. Ranges are 1H / 24H / 7D / ALL; a range with fewer than two slices of history is disabled, never drawn flat. A gap between ticks wider than three slices breaks the line, so a pause in the Engine reads as a pause. No history at all is an empty state that says so.
+- **The five forces** — Gravity, Signals, Market Mood, Conviction, Trading Activity, each with what it measures and the points it contributed on the person's **latest tick**, as a diverging bar from a centre line. A force with no row on that tick did nothing and reads 0.00; before the first tick every force is present and marked *Idle*.
+- **Signals** — the person's signals and Engine narratives merged newest first: source (data source name, or *The Engine*), age, headline, and the recorded score impact where there is one. Tapping an item opens its detail (exact time, sentiment and confidence, score before → after for a narrative). Read-only, with a real empty state.
+- **Buy / Sell** — green Buy and red Sell, showing the current quotes. Tapping shows a one-line note that trading opens with Phase 6e and does nothing else.
+
+### The STATE threshold
+
+`STATE_RULE` in `lib/person/profile-model.ts`: over the **trailing 24 hours** of `score_history`, a person is **Heating** when at least **10 ticks** were recorded and the score rose by **≥ 1.0 point** from the first of those ticks to the last, **Cooling** when it fell by ≥ 1.0, and **Stable** otherwise — including when fewer than ten ticks exist, and when there is no history at all. The caption under the value says which case applies (the 24h change, or how many ticks exist against the ten needed). With the Engine dormant every person reads Stable, which is the honest reading.
+
+### CONVICTION
+
+Read from the Conviction force on the latest tick, using the concentration the Engine recorded (open capital on the person over their allocation cap): **Low** at or below 60 %, **Moderate** to 85 %, **High** above — the same bands as `DEFAULT_ENGINE_CONFIG.conviction`, pinned by a test. A ticked person with no Conviction row is Low (the force writes no row when it is zero); before the first tick the value is `—`.
+
+### Data
+
+`lib/person/profile.ts` reads on the server through the service-role client, for the same reason Home does (the page is public; anon has no policies). Per request: the `people` row by slug; `person_score_series()` once per range (time-bucketed in Postgres, so a week of two-ticks-a-minute history is 168 rows, not 20 000); the newest `score_history` row for the latest tick number; that tick's `score_events`; and the newest `signals` and `narratives`. Everything is wrapped in React `cache()`, so the page, its metadata and the rail share one set of queries.
+
+### Behavioural logging
+
+| Event | When |
+| --- | --- |
+| `view_person` | the page mounts (`{ source: "profile" }`) |
+| `time_spent` | the dwell on the page, paused while the tab is hidden, closed on leaving (`{ surface: "profile" }`) |
+| `change_range` | the chart range is switched (`{ range, surface: "profile" }`) |
+| `expand_signal` | a signal or narrative is opened (`{ signal_id?, headline, kind, surface }`) |
+
+As on Home, everything is fire-and-forget and skipped entirely when nobody is signed in.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -558,5 +601,6 @@ Logging is skipped entirely when nobody is signed in, since the log endpoint wou
 - **Phase 5**: behavioral logging foundation: `session_id` and recommender-shaped indexes on `behavioral_events`, the canonical event vocabulary with per-type metadata contracts, server-side and browser logging services (validated, silent on failure, batched, session-grouped), and the service-role-only query layer.
 - **Phase 6a**: the design token system, the core component library, the persistent shell (banner with the 30-second countdown, bottom tabs, desktop two-panel layout) and the route skeleton with styled placeholders.
 - **Phase 6b**: Home wired to live data: the person card and ranked row, top movers, category filtering, sparklines, the desktop feed rail, and the behavioural logging that records impressions and dwell.
+- **Phase 6c**: the person profile page: the identity dossier with the STATE and CONVICTION readings, the hero score with period change, the score line with ranges and the gravity reference, the five forces, the signal list, the Buy / Sell entry stub, `person_score_series()`, and the `change_range` event.
 
-Deliberately not built yet: the trading flow (which will write `positions`, `transactions` and `trade_events` through RPCs), the person page, the standalone Feed page, the portfolio and profile screens, and the recommendation algorithm. The heartbeat is wired but switched off.
+Deliberately not built yet: the trading flow (which will write `positions`, `transactions` and `trade_events` through RPCs), the standalone Feed page, the portfolio and profile screens, search results, and the recommendation algorithm. The heartbeat is wired but switched off.

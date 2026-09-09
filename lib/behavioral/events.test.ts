@@ -13,7 +13,7 @@ const PERSON = "11111111-1111-4111-8111-111111111111";
 const SESSION = "22222222-2222-4222-8222-222222222222";
 
 describe("canonical event types", () => {
-  it("lists the ten documented types, each with a definition", () => {
+  it("lists the eleven documented types, each with a definition", () => {
     expect([...BEHAVIORAL_EVENT_TYPES]).toEqual([
       "view_person",
       "time_spent",
@@ -25,6 +25,7 @@ describe("canonical event types", () => {
       "search",
       "view_feed",
       "swipe",
+      "change_range",
     ]);
     for (const type of BEHAVIORAL_EVENT_TYPES) {
       expect(BEHAVIORAL_EVENT_DEFINITIONS[type].description.length).toBeGreaterThan(0);
@@ -120,6 +121,13 @@ describe("validateBehavioralEvent", () => {
     it("expand_signal checks signal_id when present", () => {
       expect(validateBehavioralEvent({ eventType: "expand_signal", personId: PERSON, metadata: { signal_id: "abc" } }).ok).toBe(false);
       expect(validateBehavioralEvent({ eventType: "expand_signal", personId: PERSON, metadata: { headline: "Drake drops album" } }).ok).toBe(true);
+    });
+
+    it("change_range needs a person and a range, and normalises the range", () => {
+      expect(validateBehavioralEvent({ eventType: "change_range", metadata: { range: "24h" } })).toEqual({ ok: false, reason: "change_range requires personId" });
+      expect(validateBehavioralEvent({ eventType: "change_range", personId: PERSON }).ok).toBe(false);
+      const ok = validateBehavioralEvent({ eventType: "change_range", personId: PERSON, metadata: { range: " 24H ", surface: "profile" } });
+      expect(ok.ok && ok.event.metadata).toEqual({ range: "24h", surface: "profile" });
     });
   });
 });

@@ -121,6 +121,11 @@
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+/* Anchors a fixed bar directly above the mobile tab bar (and the home indicator). */
+@utility bottom-tabbar-safe {
+  bottom: calc(var(--spacing-tabbar) + env(safe-area-inset-bottom));
+}
+
 /* Viewport height below the fixed banner (sticky rails, full-height panels). */
 @utility max-h-under-banner {
   max-height: calc(100dvh - var(--spacing-banner));

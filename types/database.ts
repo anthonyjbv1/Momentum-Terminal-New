@@ -845,6 +845,15 @@ export type Database = {
           sparkline: number[]
         }[]
       }
+      person_score_series: {
+        Args: { p_person_id: string; p_points?: number; p_since?: string }
+        Returns: {
+          bucket_at: string
+          open: number
+          samples: number
+          score: number
+        }[]
+      }
       placeholder_financial_mutation: {
         Args: { p_amount_cents: number }
         Returns: undefined
