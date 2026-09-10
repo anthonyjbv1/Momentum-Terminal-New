@@ -133,8 +133,8 @@ export function pickMovers(people: BoardPerson[], count = MOVER_COUNT): BoardPer
     .slice(0, count);
 }
 
-/** Category filter options, most populated first, with an "All" entry in front. */
-export function categoryOptions(people: BoardPerson[]): CategoryOption[] {
+/** Category filter options, most populated first, with an "All" entry in front. Anything with a category will do (the Feed passes bare people rows). */
+export function categoryOptions(people: Array<{ category: string }>): CategoryOption[] {
   const counts = new Map<string, number>();
   for (const person of people) counts.set(person.category, (counts.get(person.category) ?? 0) + 1);
 

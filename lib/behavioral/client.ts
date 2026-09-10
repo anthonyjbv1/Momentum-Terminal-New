@@ -57,7 +57,9 @@ const noopLog = () => {};
 
 function coalesceKey(event: ValidatedBehavioralEvent): string {
   const surface = typeof event.metadata?.surface === "string" ? event.metadata.surface : "";
-  return `${event.personId}|${event.sessionId ?? ""}|${surface}`;
+  // Dwell on one feed entry stays distinct from dwell on another entry about the same person.
+  const entry = typeof event.metadata?.entry_id === "string" ? event.metadata.entry_id : "";
+  return `${event.personId}|${event.sessionId ?? ""}|${surface}|${entry}`;
 }
 
 export function createBehavioralQueue(options: BehavioralQueueOptions): BehavioralQueue {
@@ -235,7 +237,13 @@ export function flushBehavioralEvents(): Promise<void> {
  *
  *   useEffect(() => startDwell({ personId, surface: "profile" }), [personId]);
  */
-export function startDwell(options: { personId: string; surface?: string; now?: () => number }): () => void {
+export function startDwell(options: {
+  personId: string;
+  surface?: string;
+  /** Extra metadata carried on the time_spent event (e.g. the feed entry the dwell belongs to). */
+  metadata?: Record<string, unknown>;
+  now?: () => number;
+}): () => void {
   const now = options.now ?? Date.now;
   const startedAt = now();
   let stopped = false;
@@ -247,7 +255,11 @@ export function startDwell(options: { personId: string; surface?: string; now?: 
     trackEvent({
       eventType: "time_spent",
       personId: options.personId,
-      metadata: options.surface ? { duration_ms: duration, surface: options.surface } : { duration_ms: duration },
+      metadata: {
+        ...(options.metadata ?? {}),
+        ...(options.surface ? { surface: options.surface } : {}),
+        duration_ms: duration,
+      },
     });
   };
 }

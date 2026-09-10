@@ -45,11 +45,8 @@ const PERSON_COLUMNS =
 /** Most signal / narrative items the page lists. */
 const SIGNAL_LIMIT = 30;
 
-/**
- * The request's render time, shared by the page and its rail so relative
- * ages ("3m") agree everywhere on the page and between server and client.
- */
-export const getRenderedAt = cache((): number => Date.now());
+/** The request's render time; lives in lib/render-time.ts, re-exported for the profile routes. */
+export { getRenderedAt } from "@/lib/render-time";
 
 /** The person behind a slug, or null when there is no active person by that name. */
 export const getPersonBySlug = cache(async (slug: string): Promise<ProfilePerson | null> => {

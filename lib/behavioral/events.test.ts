@@ -13,7 +13,7 @@ const PERSON = "11111111-1111-4111-8111-111111111111";
 const SESSION = "22222222-2222-4222-8222-222222222222";
 
 describe("canonical event types", () => {
-  it("lists the eleven documented types, each with a definition", () => {
+  it("lists the fourteen documented types, each with a definition", () => {
     expect([...BEHAVIORAL_EVENT_TYPES]).toEqual([
       "view_person",
       "time_spent",
@@ -26,6 +26,9 @@ describe("canonical event types", () => {
       "view_feed",
       "swipe",
       "change_range",
+      "view_entry",
+      "scroll_depth",
+      "filter_change",
     ]);
     for (const type of BEHAVIORAL_EVENT_TYPES) {
       expect(BEHAVIORAL_EVENT_DEFINITIONS[type].description.length).toBeGreaterThan(0);
@@ -121,6 +124,29 @@ describe("validateBehavioralEvent", () => {
     it("expand_signal checks signal_id when present", () => {
       expect(validateBehavioralEvent({ eventType: "expand_signal", personId: PERSON, metadata: { signal_id: "abc" } }).ok).toBe(false);
       expect(validateBehavioralEvent({ eventType: "expand_signal", personId: PERSON, metadata: { headline: "Drake drops album" } }).ok).toBe(true);
+    });
+
+    it("view_entry needs a person, an entry id and a known kind", () => {
+      expect(validateBehavioralEvent({ eventType: "view_entry", metadata: { entry_id: "e1", kind: "narrative" } }).ok).toBe(false);
+      expect(validateBehavioralEvent({ eventType: "view_entry", personId: PERSON, metadata: { kind: "narrative" } }).ok).toBe(false);
+      expect(validateBehavioralEvent({ eventType: "view_entry", personId: PERSON, metadata: { entry_id: "e1", kind: "headline" } }).ok).toBe(false);
+      expect(validateBehavioralEvent({ eventType: "view_entry", personId: PERSON, metadata: { entry_id: "e1", kind: "signal", position: -1 } }).ok).toBe(false);
+      const ok = validateBehavioralEvent({ eventType: "view_entry", personId: PERSON, metadata: { entry_id: " e1 ", kind: "Narrative", feed: "feed", position: 3, pinned: true } });
+      expect(ok.ok && ok.event.metadata).toEqual({ entry_id: "e1", kind: "narrative", feed: "feed", position: 3, pinned: true });
+    });
+
+    it("scroll_depth needs a feed and a whole percentage", () => {
+      expect(validateBehavioralEvent({ eventType: "scroll_depth", metadata: { depth_pct: 50 } }).ok).toBe(false);
+      expect(validateBehavioralEvent({ eventType: "scroll_depth", metadata: { feed: "feed", depth_pct: 101 } }).ok).toBe(false);
+      expect(validateBehavioralEvent({ eventType: "scroll_depth", metadata: { feed: "feed", depth_pct: 12.5 } }).ok).toBe(false);
+      const ok = validateBehavioralEvent({ eventType: "scroll_depth", metadata: { feed: "feed", depth_pct: 75, entries_seen: 18 } });
+      expect(ok.ok && ok.event).toMatchObject({ personId: null, metadata: { feed: "feed", depth_pct: 75, entries_seen: 18 } });
+    });
+
+    it("filter_change needs a surface, a filter and a value", () => {
+      expect(validateBehavioralEvent({ eventType: "filter_change", metadata: { surface: "feed", filter: "category" } }).ok).toBe(false);
+      const ok = validateBehavioralEvent({ eventType: "filter_change", metadata: { surface: "feed", filter: "category", value: " creator " } });
+      expect(ok.ok && ok.event.metadata).toEqual({ surface: "feed", filter: "category", value: "creator" });
     });
 
     it("change_range needs a person and a range, and normalises the range", () => {

@@ -2,7 +2,7 @@
 
 A social data terminal where users take **HIGH** or **LOW** positions on individual people. Each person has a continuously updating Momentum Score driven by their observable real-world data. Users profit when a score moves in their predicted direction; the platform is the sole counterparty. The scoring system is called **the Engine**; its five forces are **Gravity**, **Signals**, **Market Mood**, **Conviction** and **Trading Activity**.
 
-> **Status: Phase 6c (person profile page) complete.** On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation, the editorial-monochrome shell and the live Home board, **`/person/[slug]` is now a real page**: an identity dossier (name, category, tracked since, STATE, CONVICTION), the Momentum Score with its change over a chosen range, the score line with 1H / 24H / 7D / ALL and the gravity target as a reference, the five forces as of the latest tick, the person's signals and Engine narratives, and a Buy / Sell entry that opens nothing until the trading flow lands. Unknown slugs are a real 404. Portfolio and Feed are still styled placeholders; `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0, every chart is honestly empty, every STATE reads Stable and every force reads idle. The trading flow and the recommendation layer are later phases.
+> **Status: Phase 6d (the Feed) complete.** On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation, the editorial-monochrome shell, the live Home board and the person profile page, **`/feed` is now the wire**: the Engine's narratives and the signals it has yet to explain, across all sixteen people, newest first, in one narrator's voice, with a pinned treatment for unusually large moves, the category filter, bounded infinite scroll, and the densest behavioural logging on the platform (impressions, dwell, scroll depth, filter changes, tap-throughs). Ordering is chronological with a documented swap point for a future personalised ranker. Portfolio is still a styled placeholder; `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0, every chart is honestly empty, every STATE reads Stable, every force reads idle and the Feed is quiet, and says so. The trading flow and the recommendation layer are later phases.
 
 ## Stack
 
@@ -69,7 +69,8 @@ app/
     layout.tsx             AppShell with the @rail parallel slot
     (home)/                Home: the live board, with its route-level loading skeleton
     person/[slug]/         the person page (slug resolved in the shell for a real 404; sections stream behind a skeleton) + not-found
-    portfolio/ feed/ profile/   placeholder pages
+    feed/                  the Feed (page, loading skeleton); its rail is a glance at the board
+    portfolio/ profile/    placeholder pages
     design/                living design-system reference
     @rail/                 per-route desktop rail content (Home and person pages have one; the rest return null)
     error.tsx              error boundary for every page in the shell
@@ -88,6 +89,7 @@ components/
   shell/                   AppShell, TopBanner, DesktopNav, BottomNav, RightRail, PulseIndicator, SearchButton, ProfileButton
   home/                    PersonCard + PersonRow, Sparkline, CategoryFilter, PeopleBoard, FeedPreview, impression logging
   person/                  Dossier, ScorePanel (+ ScoreChart, RangeToggle), ForcesPanel, SignalsList, TradeBar / TradeActions, BackLink, profile logging
+  feed/                    FeedStream, FeedEntry, FeedEmpty, BoardGlance (the rail), feed logging (impressions, dwell, scroll depth)
   engine/engine-clock.ts   shared 30-second Engine clock (useEngineClock)
   brand/momentum-mark.tsx  renders public/brand/momentum-mark.png (the brand asset, unmodified) + wordmark
   auth/                    LoginForm, SignupForm, SignOutButton, FormError
@@ -139,6 +141,10 @@ lib/
   person/
     profile.ts             the person page's server reads: person, chart series, forces, signals (service role, per-request cached)
     profile-model.ts       pure rules: ranges, period change, the STATE threshold, CONVICTION bands, force readings, signal merge
+  feed/
+    feed.ts                the Feed's server reads: a page of entries, the roster (service role)
+    feed-model.ts          pure rules: the entry, the Engine's framing of a raw signal, HIGH_IMPACT_THRESHOLD and the pinned selection, filtering, paging
+    ranking.ts             THE ORDERING SWAP POINT: chronological now, a personalised ranker plugs in here later
 proxy.ts                   Next.js proxy (formerly middleware)
 vercel.json                cron schedule: /api/engine/cron every minute
 supabase/migrations/       SQL migrations (applied in order)
@@ -166,6 +172,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260908114758_home_board_reads.sql`      | `home_momentum()` (per-person change + sparkline over a trailing window), `signals`/`narratives` newest-first indexes for the feed rail |
 | `20260909010607_person_profile_reads.sql`  | `person_score_series()` (one person's history since a point in time, downsampled by time into bounded slices with open / close / tick count) for the profile chart |
 | `20260910172052_position_direction_gating.sql` | `platform_settings` (one row, `shorting_enabled` default false), `shorting_enabled()`, `net_position_cents()`, the pure `resolve_position_order()` netting rule, the service-role `assert_position_direction()` guard, and the `positions_enforce_direction` trigger |
+| `20260910181957_feed_reads.sql`            | `feed_entries()`: narratives and the signals no narrative explains, across all active people, newest first with keyset pagination; narratives carry the signals processed for the person in the same tick as evidence |
 | `20260907153228_llm_memory_narratives.sql` | `person_memory` (+ 16 seeded profiles), `llm_usage`, `narratives`, with RLS                  |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
@@ -444,8 +451,11 @@ The collection layer for a future recommendation algorithm ("For You"). It recor
 | `view_feed`       | optional   | `{ feed?: string }` (home, trending, for_you, …)                        |
 | `swipe`           | required   | `{ action: "left" \| "right" \| "up" \| "down" }`                       |
 | `change_range`    | required   | `{ range: string, surface?: string }` (1h, 24h, 7d, all — the profile chart) |
+| `view_entry`      | required   | `{ entry_id: string, kind: "narrative" \| "signal", feed?: string, position?: integer, pinned?: boolean }` (a feed entry came into view) |
+| `scroll_depth`    | optional   | `{ feed: string, depth_pct: integer 0..100, entries_seen?: integer }` (logged at 25 / 50 / 75 / 100 % and on leaving) |
+| `filter_change`   | optional   | `{ surface: string, filter: string, value: string }`                    |
 
-`validateBehavioralEvent()` enforces all of this (and normalises: uppercase direction, trimmed query, lowercase swipe action and range, rounded and clamped duration). All money is integer cents, as everywhere else.
+`validateBehavioralEvent()` enforces all of this (and normalises: uppercase direction, trimmed query, lowercase swipe action, range and entry kind, rounded and clamped duration). All money is integer cents, as everywhere else. `time_spent` events are coalesced client-side per person, surface and `entry_id`, so two feed entries about the same person keep separate dwells.
 
 ### Logging from server code
 
@@ -617,6 +627,44 @@ Enforcement is server-side, twice over:
 
 `net_position_cents(user, person)` (open HIGH cents minus open LOW cents) is the measure both use. The interface reflects the setting through `getPlatformSettings()`: under the gate the Sell control explains that it closes a position. No trading flow is built yet; this is the constraint and the guard, ready for it.
 
+## The Feed (Phase 6d)
+
+`/feed` — the ambient surface: the Engine narrating what it observes across the whole board, newest first, for people who scroll rather than search. Reachable from the tab bar and the desktop nav. Read-only.
+
+### One narrator
+
+Two kinds of entry share the stream, and both speak as the Engine. A **narrative** is a sentence the Engine wrote when a score moved meaningfully in a tick, shown exactly as stored, with the move it recorded and, as evidence, the signals it processed for that person in that tick (matched through the tick's time window; the tables have no direct link). A **signal** is a raw observation no narrative explains yet: not processed, or processed in a tick whose move did not warrant a sentence. Raw headlines from connectors, and the RSS feed in particular, can read like news, so a signal entry is framed in presentation only — *A YouTube signal on Drake read +0.2.*, *An RSS signal on Drake is waiting for the Engine's next read.* — with the headline quoted beneath it. Stored text is never rewritten. Source attribution is the last, smallest, greyest line of every entry: *The Engine · via YouTube*, *Observed via RSS*.
+
+### The entry
+
+Avatar, name and category (a link to the person); the Engine's sentence as the hero; the recorded score impact, the only colour in an entry (green up, red down), beside a recessive relative time; the attribution line; and a quiet *What the Engine saw* that opens the evidence beneath. Entries sit in one card separated by hairlines, with generous vertical rhythm: this is a surface people scroll for minutes.
+
+### Notable moves
+
+An entry whose recorded impact is at or beyond **`HIGH_IMPACT_THRESHOLD` = 2.0 points** in either direction, within the last `PINNED_WINDOW_HOURS` (24), takes the pinned treatment at the top: the same composition set larger, with more air, at most `PINNED_MAX` (3), strongest first, and taken out of the stream below so nothing appears twice. Structural prominence only: no banner, no badge, no colour beyond the direction rule. When nothing qualifies the section does not exist. All three are named constants in `lib/feed/feed-model.ts`, to be retuned once real signals exist.
+
+### Filtering, paging, ordering
+
+The category filter is Home's component and options, derived from the people table; it filters the loaded entries instantly. Paging is keyset (`occurred_at`, `id`) through `feed_entries()`, `FEED_PAGE_SIZE` (24) at a time, triggered by a sentinel below the list from `FEED_PREFETCH_MARGIN_PX` (600) away, with the next rows taking shape in place inside the same card; the stream holds at most `FEED_MAX_ENTRIES` (240) and then says so, so memory and the DOM stay bounded. Ordering is chronological, newest first, through `rankFeed()` in `lib/feed/ranking.ts`: that call is the one place a personalised ranker will plug in later. There is no For You toggle and no placeholder heuristic, on purpose.
+
+### Behavioural logging
+
+| Event | When |
+| --- | --- |
+| `view_feed` | the stream mounts (`{ feed: "feed" }`) |
+| `view_entry` | an entry is at least half in view, once per entry, with its position and whether it was pinned |
+| `time_spent` | for as long as an entry stays in view, per entry (`{ surface: "feed", entry_id, kind }`) |
+| `scroll_depth` | at 25 / 50 / 75 / 100 % of the page, and the furthest point reached on leaving |
+| `expand_signal` | an entry's detail opened (`{ entry_id, kind, headline, signal_id? }`) |
+| `filter_change` | the category filter changed (`{ surface: "feed", filter: "category", value }`) |
+| `view_person` | a tap through to a person (`{ source: "feed_tap", entry_id, kind }`) |
+
+Impressions and dwell come from one IntersectionObserver over the stream; everything goes through the Phase 5 client queue, batched and coalesced, and is skipped entirely when nobody is signed in. `view_entry`, `scroll_depth` and `filter_change` are the three additions to the Phase 5 vocabulary; no migration was needed.
+
+### Empty
+
+With the Engine dormant the Feed is empty, and that is the state it ships in: *Quiet on the wire.*, a line on what will land here, and the roster of the sixteen people being tracked as small monograms, each a link to its profile. Nothing is synthesised.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -629,5 +677,6 @@ Enforcement is server-side, twice over:
 - **Phase 6b**: Home wired to live data: the person card and ranked row, top movers, category filtering, sparklines, the desktop feed rail, and the behavioural logging that records impressions and dwell.
 - **Phase 6c**: the person profile page: the identity dossier with the STATE and CONVICTION readings, the hero score with period change, the score line with ranges and the gravity reference, the five forces, the signal list, the Buy / Sell entry stub, `person_score_series()`, and the `change_range` event.
 - **Phase 6c+**: the live chart (monotone spline, phase-locked pulse, 700 ms tick reveal, bounded sliding window, 2.0-point y floor, reduced-motion aware), the monochrome Buy / Sell controls, position direction gating behind `platform_settings.shorting_enabled`, and the baseline-relative Trading Activity force.
+- **Phase 6d**: the Feed: `feed_entries()`, the entry in one Engine voice with the raw-signal framing, the pinned high-impact treatment behind `HIGH_IMPACT_THRESHOLD`, the category filter, bounded keyset infinite scroll, the chronological ranker with its swap point, the empty state, the board glance in the rail, and the `view_entry` / `scroll_depth` / `filter_change` events.
 
-Deliberately not built yet: the trading flow (which will write `positions`, `transactions` and `trade_events` through RPCs), the standalone Feed page, the portfolio and profile screens, search results, and the recommendation algorithm. The heartbeat is wired but switched off.
+Deliberately not built yet: the trading flow (which will write `positions`, `transactions` and `trade_events` through RPCs), the portfolio and profile screens, search results, and the recommendation algorithm (For You). The heartbeat is wired but switched off.

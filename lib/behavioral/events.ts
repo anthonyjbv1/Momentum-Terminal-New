@@ -28,6 +28,9 @@ export const BEHAVIORAL_EVENT_TYPES = [
   "view_feed",
   "swipe",
   "change_range",
+  "view_entry",
+  "scroll_depth",
+  "filter_change",
 ] as const;
 
 export type BehavioralEventType = (typeof BEHAVIORAL_EVENT_TYPES)[number];
@@ -99,6 +102,21 @@ export const BEHAVIORAL_EVENT_DEFINITIONS: Record<BehavioralEventType, Behaviora
     description: "Switched the score chart to another time range on a person.",
     requiresPerson: true,
     metadata: "{ range: string (non-empty, e.g. 1h | 24h | 7d | all), surface?: string }",
+  },
+  view_entry: {
+    description: "A feed entry about a person came into view (an impression).",
+    requiresPerson: true,
+    metadata: "{ entry_id: string (non-empty), kind: 'narrative' | 'signal', feed?: string, position?: integer >= 0, pinned?: boolean }",
+  },
+  scroll_depth: {
+    description: "How far down a feed the user scrolled; logged at milestones.",
+    requiresPerson: false,
+    metadata: "{ feed: string (non-empty), depth_pct: integer 0..100, entries_seen?: integer >= 0 }",
+  },
+  filter_change: {
+    description: "Changed a filter on a surface (e.g. the category filter on the Feed).",
+    requiresPerson: false,
+    metadata: "{ surface: string (non-empty), filter: string (non-empty), value: string (non-empty) }",
   },
 };
 
@@ -309,6 +327,39 @@ const TYPE_CHECKS: Partial<Record<BehavioralEventType, TypeCheck>> = {
     const range = typeof metadata?.range === "string" ? metadata.range.trim().toLowerCase() : "";
     if (!range) return { ok: false, reason: "change_range requires metadata.range (non-empty string)" };
     return { ok: true, metadata: { ...metadata, range } };
+  },
+  view_entry: (metadata) => {
+    const entryId = typeof metadata?.entry_id === "string" ? metadata.entry_id.trim() : "";
+    if (!entryId) return { ok: false, reason: "view_entry requires metadata.entry_id (non-empty string)" };
+    const kind = typeof metadata?.kind === "string" ? metadata.kind.trim().toLowerCase() : "";
+    if (kind !== "narrative" && kind !== "signal") {
+      return { ok: false, reason: "view_entry requires metadata.kind (narrative | signal)" };
+    }
+    if (metadata?.position !== undefined && !isNonNegativeInteger(metadata.position)) {
+      return { ok: false, reason: "metadata.position must be an integer >= 0" };
+    }
+    return { ok: true, metadata: { ...metadata, entry_id: entryId, kind } };
+  },
+  scroll_depth: (metadata) => {
+    const feed = typeof metadata?.feed === "string" ? metadata.feed.trim() : "";
+    if (!feed) return { ok: false, reason: "scroll_depth requires metadata.feed (non-empty string)" };
+    const depth = metadata?.depth_pct;
+    if (!isNonNegativeInteger(depth) || depth > 100) {
+      return { ok: false, reason: "scroll_depth requires metadata.depth_pct (integer 0..100)" };
+    }
+    if (metadata?.entries_seen !== undefined && !isNonNegativeInteger(metadata.entries_seen)) {
+      return { ok: false, reason: "metadata.entries_seen must be an integer >= 0" };
+    }
+    return { ok: true, metadata: { ...metadata, feed } };
+  },
+  filter_change: (metadata) => {
+    const surface = typeof metadata?.surface === "string" ? metadata.surface.trim() : "";
+    const filter = typeof metadata?.filter === "string" ? metadata.filter.trim() : "";
+    const value = typeof metadata?.value === "string" ? metadata.value.trim() : "";
+    if (!surface || !filter || !value) {
+      return { ok: false, reason: "filter_change requires metadata.surface, metadata.filter and metadata.value (non-empty strings)" };
+    }
+    return { ok: true, metadata: { ...metadata, surface, filter, value } };
   },
 };
 

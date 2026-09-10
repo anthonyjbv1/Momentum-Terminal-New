@@ -90,14 +90,20 @@ describe("createBehavioralQueue", () => {
     queue.track({ eventType: "time_spent", personId: PERSON, metadata: { duration_ms: 700 } });
     queue.track({ eventType: "time_spent", personId: OTHER, metadata: { duration_ms: 100 } });
     queue.track({ eventType: "time_spent", personId: PERSON, metadata: { duration_ms: 50, surface: "feed" } });
-    expect(queue.size()).toBe(3);
+    // Two feed entries about the same person keep separate dwells.
+    queue.track({ eventType: "time_spent", personId: PERSON, metadata: { duration_ms: 300, surface: "feed", entry_id: "e1" } });
+    queue.track({ eventType: "time_spent", personId: PERSON, metadata: { duration_ms: 200, surface: "feed", entry_id: "e2" } });
+    queue.track({ eventType: "time_spent", personId: PERSON, metadata: { duration_ms: 100, surface: "feed", entry_id: "e1" } });
+    expect(queue.size()).toBe(5);
 
     await scheduler.advance(BEHAVIORAL_LIMITS.flushDelayMs);
     const events = sent[0].batch.events;
-    expect(events).toHaveLength(3);
+    expect(events).toHaveLength(5);
     expect(events[0]).toMatchObject({ personId: PERSON, metadata: { duration_ms: 1500 } });
     expect(events[1]).toMatchObject({ personId: OTHER, metadata: { duration_ms: 100 } });
     expect(events[2]).toMatchObject({ personId: PERSON, metadata: { duration_ms: 50, surface: "feed" } });
+    expect(events[3]).toMatchObject({ metadata: { duration_ms: 400, entry_id: "e1" } });
+    expect(events[4]).toMatchObject({ metadata: { duration_ms: 200, entry_id: "e2" } });
   });
 
   it("drops invalid events without throwing", async () => {

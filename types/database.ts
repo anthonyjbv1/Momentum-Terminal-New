@@ -865,6 +865,26 @@ export type Database = {
           total_duration_ms: number
         }[]
       }
+      feed_entries: {
+        Args: { p_before?: string; p_before_id?: string; p_limit?: number }
+        Returns: {
+          evidence: Json
+          id: string
+          impact: number
+          kind: string
+          occurred_at: string
+          person_avatar: string
+          person_category: string
+          person_id: string
+          person_name: string
+          person_slug: string
+          score_after: number
+          score_before: number
+          sources: string[]
+          text: string
+          tick_number: number
+        }[]
+      }
       home_momentum: {
         Args: { p_points?: number; p_sample?: number; p_window?: string }
         Returns: {
