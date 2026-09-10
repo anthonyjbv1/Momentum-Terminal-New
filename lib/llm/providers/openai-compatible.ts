@@ -4,7 +4,7 @@ import { LLMError, type LLMProvider, type LLMResponse } from "../types";
  * Generic OpenAI-compatible adapter — STUB. Interface-compliant; throws until
  * implemented. Covers Groq, Together.ai, Fireworks, vLLM, Ollama and most
  * open-source inference services, which all speak the OpenAI Chat Completions
- * wire format.
+ * request and response format.
  *
  * TODO(activation): POST {OPENAI_COMPATIBLE_BASE_URL}/chat/completions with
  * Authorization: Bearer {OPENAI_COMPATIBLE_API_KEY}; map systemPrompt ->

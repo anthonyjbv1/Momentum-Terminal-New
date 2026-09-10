@@ -40,7 +40,7 @@ export function FeedPreview({ items }: { items: FeedPreviewItem[] }) {
       ) : (
         <Card tone="ghost">
           <div className="flex flex-col gap-2 px-5 py-8 text-center">
-            <p className="text-sm font-medium text-fg-secondary">Nothing on the wire yet</p>
+            <p className="text-sm font-medium text-fg-secondary">Nothing in the Feed yet</p>
             <p className="text-sm text-fg-muted">Signals and the Engine&rsquo;s read on them appear here once ingestion runs.</p>
           </div>
         </Card>

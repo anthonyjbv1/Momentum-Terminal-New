@@ -217,6 +217,42 @@ export type Database = {
           },
         ]
       }
+      narrative_signals: {
+        Row: {
+          created_at: string
+          narrative_id: string
+          relation: string
+          signal_id: string
+        }
+        Insert: {
+          created_at?: string
+          narrative_id: string
+          relation?: string
+          signal_id: string
+        }
+        Update: {
+          created_at?: string
+          narrative_id?: string
+          relation?: string
+          signal_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "narrative_signals_narrative_id_fkey"
+            columns: ["narrative_id"]
+            isOneToOne: false
+            referencedRelation: "narratives"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "narrative_signals_signal_id_fkey"
+            columns: ["signal_id"]
+            isOneToOne: false
+            referencedRelation: "signals"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       narratives: {
         Row: {
           created_at: string
@@ -893,6 +929,10 @@ export type Database = {
           points: number
           sparkline: number[]
         }[]
+      }
+      record_narratives: {
+        Args: { p_narratives: Json }
+        Returns: number
       }
       net_position_cents: {
         Args: { p_person_id: string; p_user_id: string }

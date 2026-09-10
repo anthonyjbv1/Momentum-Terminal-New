@@ -22,12 +22,16 @@ import { formatSigned } from "@/lib/person/profile-model";
 /**
  * THE HIGH-IMPACT THRESHOLD, in score points. An entry whose recorded score
  * impact is at least this far from zero, in either direction, qualifies for
- * the pinned treatment at the top of the Feed. Two points is beyond what a
- * single tier-one signal can move a score on its own (1.5 × 1.5 = 2.25 is
- * the ceiling) and roughly four narrative-worthy moves, so it marks a tick
- * that genuinely stood out. Retune once real signals exist.
+ * the pinned treatment at the top of the Feed.
+ *
+ * TUNABLE — A STARTING VALUE. On a 0–100 score with Gravity pulling every
+ * person back toward baseline on every tick, a move the size of a full
+ * chart height (Y_RANGE_FLOOR is 2.0) may be rare enough that the section
+ * never appears and the treatment is never seen working. 1.25 sits well
+ * under that while staying above what one routine signal moves a score.
+ * Raise it once the real distribution of score moves is observable.
  */
-export const HIGH_IMPACT_THRESHOLD = 2.0;
+export const HIGH_IMPACT_THRESHOLD = 1.25;
 
 /** Only entries this recent are considered for the pinned treatment. */
 export const PINNED_WINDOW_HOURS = 24;
@@ -58,7 +62,13 @@ export interface FeedPerson {
   avatarUrl: string | null;
 }
 
-/** A signal behind an entry: the evidence the Engine read. */
+export type FeedEvidenceRelation = "direct" | "inverse_pair";
+
+/**
+ * A signal behind an entry: the evidence the Engine read. For a narrative
+ * this is exactly what the Engine linked when it wrote the sentence
+ * (narrative_signals); nothing is inferred from timing.
+ */
 export interface FeedEvidence {
   id: string;
   headline: string;
@@ -68,6 +78,10 @@ export interface FeedEvidence {
   sentiment: string | null;
   confidence: number | null;
   processed: boolean | null;
+  /** direct: about the entry's own person. inverse_pair: the paired person's signal, whose move the narrative reacts to. */
+  relation: FeedEvidenceRelation;
+  /** The paired person, for inverse_pair evidence; null otherwise. */
+  person: { name: string; slug: string } | null;
 }
 
 export interface FeedEntry {
@@ -129,6 +143,9 @@ function toEvidence(value: unknown): FeedEvidence[] {
     if (typeof item !== "object" || item === null) continue;
     const record = item as Record<string, unknown>;
     if (typeof record.id !== "string" || typeof record.headline !== "string") continue;
+    const relation: FeedEvidenceRelation = record.relation === "inverse_pair" ? "inverse_pair" : "direct";
+    const personName = typeof record.person_name === "string" ? record.person_name : null;
+    const personSlug = typeof record.person_slug === "string" ? record.person_slug : "";
     out.push({
       id: record.id,
       headline: record.headline,
@@ -138,6 +155,8 @@ function toEvidence(value: unknown): FeedEvidence[] {
       sentiment: typeof record.sentiment === "string" ? record.sentiment : null,
       confidence: toNullableNumber(record.confidence),
       processed: typeof record.processed === "boolean" ? record.processed : null,
+      relation,
+      person: relation === "inverse_pair" && personName ? { name: personName, slug: personSlug } : null,
     });
   }
   return out;

@@ -104,6 +104,7 @@ export const getPersonProfile = cache(async (slug: string): Promise<PersonProfil
       .select("tick_number, recorded_at")
       .eq("person_id", person.id)
       .order("recorded_at", { ascending: false })
+      .order("tick_number", { ascending: false })
       .limit(1)
       .maybeSingle(),
     // The forces of the latest tick. Six rows at most per tick (five forces
@@ -113,6 +114,7 @@ export const getPersonProfile = cache(async (slug: string): Promise<PersonProfil
       .select("force, impact, tick_number, details")
       .eq("person_id", person.id)
       .order("tick_number", { ascending: false })
+      .order("id")
       .limit(12),
   ]);
 
@@ -143,12 +145,14 @@ export const getPersonSignals = cache(async (personId: string): Promise<ProfileS
       .select("id, headline, occurred_at, impact_score, sentiment_label, sentiment_confidence, processed, data_sources(display_name)")
       .eq("person_id", personId)
       .order("occurred_at", { ascending: false })
+      .order("id", { ascending: false })
       .limit(SIGNAL_LIMIT),
     supabase
       .from("narratives")
       .select("id, text, created_at, score_before, score_after")
       .eq("person_id", personId)
       .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
       .limit(SIGNAL_LIMIT),
   ]);
 

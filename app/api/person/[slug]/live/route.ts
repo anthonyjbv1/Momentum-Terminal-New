@@ -43,6 +43,7 @@ export async function GET(request: Request, { params }: { params: Params }) {
       .select("score, recorded_at")
       .eq("person_id", person.id)
       .order("recorded_at", { ascending: false })
+      .order("tick_number", { ascending: false })
       .limit(MAX_TICKS);
     query = since ? query.gt("recorded_at", since.toISOString()) : query.gte("recorded_at", new Date(Date.now() - DEFAULT_LOOKBACK_MS).toISOString());
 

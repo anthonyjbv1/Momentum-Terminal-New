@@ -74,6 +74,7 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
         .eq("data_source_id", dataSourceId)
         .eq("metric_key", metricKey)
         .order("recorded_at", { ascending: false })
+        .order("id", { ascending: false })
         .limit(1)
         .maybeSingle();
       if (error) throw new Error(`Failed to load snapshot ${metricKey}: ${error.message}`);

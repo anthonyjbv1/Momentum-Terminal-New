@@ -468,7 +468,8 @@ export function mergeSignals(signals: SignalRow[], narratives: NarrativeRow[], l
       };
     }),
   ];
-  return items.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)).slice(0, limit);
+  // Newest first, then id, so items at the same instant keep one order on every load.
+  return items.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || b.id.localeCompare(a.id)).slice(0, limit);
 }
 
 /** The raw signal id behind a merged item, for the expand_signal event. Null for narratives. */

@@ -87,8 +87,9 @@ export function categoryLabel(category: string): string {
 }
 
 /**
- * Ranks people by momentum: score descending, then name, so the order is
- * stable when scores tie — which they all do until the Engine first ticks.
+ * Ranks people by momentum: score descending, then name, then id, so the
+ * order is total and stable when scores tie — which they all do until the
+ * Engine first ticks — and identical on every load.
  */
 export function rankPeople(rows: PersonRow[], momentum: MomentumRow[]): BoardPerson[] {
   const byPerson = new Map(momentum.map((row) => [row.person_id, row]));
@@ -115,7 +116,7 @@ export function rankPeople(rows: PersonRow[], momentum: MomentumRow[]): BoardPer
         rank: 0,
       } satisfies BoardPerson;
     })
-    .sort((a, b) => b.score - a.score || a.displayName.localeCompare(b.displayName))
+    .sort((a, b) => b.score - a.score || a.displayName.localeCompare(b.displayName) || a.id.localeCompare(b.id))
     .map((person, index) => ({ ...person, rank: index + 1 }));
 }
 

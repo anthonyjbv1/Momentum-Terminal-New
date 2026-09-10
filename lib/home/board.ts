@@ -85,11 +85,13 @@ export async function getFeedPreview(limit = 8): Promise<FeedPreviewItem[]> {
       .from("narratives")
       .select("id, text, created_at, people(slug, display_name)")
       .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
       .limit(limit),
     supabase
       .from("signals")
       .select("id, headline, occurred_at, people(slug, display_name), data_sources(display_name)")
       .order("occurred_at", { ascending: false })
+      .order("id", { ascending: false })
       .limit(limit),
   ]);
 
@@ -117,5 +119,6 @@ export async function getFeedPreview(limit = 8): Promise<FeedPreviewItem[]> {
     })),
   ];
 
-  return items.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)).slice(0, limit);
+  // Newest first, then id, so two items at the same instant keep one order on every load.
+  return items.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || b.id.localeCompare(a.id)).slice(0, limit);
 }

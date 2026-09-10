@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/ui/page-header";
 
 /**
- * /feed — the wire (Phase 6d).
+ * /feed — the Feed (Phase 6d).
  *
  * The Engine narrating what it observes across the whole board, newest
  * first: its own sentences about meaningful moves, and the signals it has

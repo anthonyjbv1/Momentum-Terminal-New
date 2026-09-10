@@ -103,6 +103,7 @@ export async function getUserInteractionHistory(
       .eq("user_id", userId)
       .gte("created_at", since)
       .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
       .limit(recentLimit),
   ]);
   if (aggregates.error) throw new Error(`behavioral_user_history failed: ${aggregates.error.message}`);
@@ -158,7 +159,7 @@ export async function getUserInteractionHistory(
     userId,
     since,
     totals,
-    people: [...people.values()].sort((a, b) => b.lastInteractedAt.localeCompare(a.lastInteractedAt)),
+    people: [...people.values()].sort((a, b) => b.lastInteractedAt.localeCompare(a.lastInteractedAt) || a.personId.localeCompare(b.personId)),
     recent: (recentRows.data ?? []).map((row) => ({
       id: row.id,
       eventType: row.event_type,

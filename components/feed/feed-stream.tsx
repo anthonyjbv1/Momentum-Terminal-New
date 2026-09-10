@@ -162,7 +162,7 @@ export function FeedStream({ initialPage, categories, roster, loggingEnabled, re
 
         {stream.length === 0 && !loading ? (
           <Card tone="ghost">
-            <p className="px-6 py-10 text-center text-sm text-fg-muted">Nothing from {categoryName} on the wire yet.</p>
+            <p className="px-6 py-10 text-center text-sm text-fg-muted">Nothing from {categoryName} in the Feed yet.</p>
           </Card>
         ) : (
           <Card className="flex flex-col divide-y divide-line">
@@ -195,7 +195,7 @@ export function FeedStream({ initialPage, categories, roster, loggingEnabled, re
                 Showing the latest <span className="num">{FEED_MAX_ENTRIES}</span> entries.
               </>
             ) : (
-              "That is everything on the wire."
+              "That is everything in the Feed."
             )}
           </p>
         ) : null}

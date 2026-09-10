@@ -2,7 +2,7 @@
 
 A social data terminal where users take **HIGH** or **LOW** positions on individual people. Each person has a continuously updating Momentum Score driven by their observable real-world data. Users profit when a score moves in their predicted direction; the platform is the sole counterparty. The scoring system is called **the Engine**; its five forces are **Gravity**, **Signals**, **Market Mood**, **Conviction** and **Trading Activity**.
 
-> **Status: Phase 6d (the Feed) complete.** On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation, the editorial-monochrome shell, the live Home board and the person profile page, **`/feed` is now the wire**: the Engine's narratives and the signals it has yet to explain, across all sixteen people, newest first, in one narrator's voice, with a pinned treatment for unusually large moves, the category filter, bounded infinite scroll, and the densest behavioural logging on the platform (impressions, dwell, scroll depth, filter changes, tap-throughs). Ordering is chronological with a documented swap point for a future personalised ranker. Portfolio is still a styled placeholder; `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0, every chart is honestly empty, every STATE reads Stable, every force reads idle and the Feed is quiet, and says so. The trading flow and the recommendation layer are later phases.
+> **Status: Phase 6d+ (the Feed, and its correctness pass) complete.** On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation, the editorial-monochrome shell, the live Home board and the person profile page, **`/feed` is built**: the Engine's narratives and the signals it has yet to explain, across all sixteen people, newest first, in one narrator's voice, with a pinned treatment for unusually large moves, the category filter, bounded infinite scroll, and the densest behavioural logging on the platform (impressions, dwell, scroll depth, filter changes, tap-throughs). Ordering is chronological, with a unique tiebreaker on every ordering in the app, and a documented swap point for a future personalised ranker. Every narrative records the signals that produced it (`narrative_signals`), written by the Engine as it writes the sentence; nothing about evidence is inferred. Portfolio is still a styled placeholder; `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0, every chart is honestly empty, every STATE reads Stable, every force reads idle and the Feed is quiet, and says so. The trading flow and the recommendation layer are later phases.
 
 ## Stack
 
@@ -118,7 +118,7 @@ lib/
     config.ts              EVERY tuning constant (DEFAULT_ENGINE_CONFIG), incl. llm / narratives / memory
     sentiment/             SentimentScorer interface, RulesBasedScorer, LLMScorer (+ prompts), registry
     memory/                person_memory types, store (Supabase + cache + in-memory), update logic
-    narratives.ts          narratives for meaningful moves (LLM sentence reuse or templates)
+    narratives.ts          narratives for meaningful moves (LLM sentence reuse or templates), each with the signals that produced it
     post-tick.ts           after a persisted tick: narratives + memory updates (never fail the tick)
     forces/                gravity, signals, market-mood, conviction, trading-activity
     inverse-pairs.ts       second-pass inverse-pair adjustments
@@ -172,7 +172,8 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260908114758_home_board_reads.sql`      | `home_momentum()` (per-person change + sparkline over a trailing window), `signals`/`narratives` newest-first indexes for the feed rail |
 | `20260909010607_person_profile_reads.sql`  | `person_score_series()` (one person's history since a point in time, downsampled by time into bounded slices with open / close / tick count) for the profile chart |
 | `20260910172052_position_direction_gating.sql` | `platform_settings` (one row, `shorting_enabled` default false), `shorting_enabled()`, `net_position_cents()`, the pure `resolve_position_order()` netting rule, the service-role `assert_position_direction()` guard, and the `positions_enforce_direction` trigger |
-| `20260910181957_feed_reads.sql`            | `feed_entries()`: narratives and the signals no narrative explains, across all active people, newest first with keyset pagination; narratives carry the signals processed for the person in the same tick as evidence |
+| `20260910181957_feed_reads.sql`            | `feed_entries()`: narratives and the signals no narrative explains, across all active people, newest first with keyset pagination on `(occurred_at, id)` (its tick-window evidence join was replaced in the next migration) |
+| `20260910191918_narrative_signals.sql`     | `narrative_signals` (narrative ↔ signal, many-to-many, `relation` direct / inverse_pair) with the `narrative_signals_enforce_person` integrity trigger, the service-role `record_narratives()` write path (sentence and links in one transaction), and `feed_entries()` rewritten to read evidence from the link only — no tick-window inference, no fallback |
 | `20260907153228_llm_memory_narratives.sql` | `person_memory` (+ 16 seeded profiles), `llm_usage`, `narratives`, with RLS                  |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
@@ -314,7 +315,7 @@ curl -X POST -H "x-engine-secret: $ENGINE_SECRET" http://localhost:3000/api/engi
 Expected: the headline scores positive at confidence 0.8, so Drake gets a Signals impact of `1.5 × 1.0 (tier 2) × 0.8 = +1.20` on top of Gravity; Kendrick Lamar gets the inverse-pair adjustment `−(1.20 × 0.40) = −0.48` plus a small Market Mood lift; everyone else gets Market Mood only (`0.25 × 1.20 / 15 ≈ +0.02`). The signal row now has `processed = true`, `impact_score = 1.2`, `sentiment_label = 'positive'`, `sentiment_confidence = 0.8`. Inspect:
 
 ```sql
-select slug, current_score, spread, buy_price, sell_price, last_tick_at from public.people order by current_score desc;
+select slug, current_score, spread, buy_price, sell_price, last_tick_at from public.people order by current_score desc, id;
 select tick_number, person_id, force, impact from public.score_events order by tick_number desc, impact desc;
 select tick_number, mood, people_updated, signals_processed from public.engine_ticks order by tick_number desc;
 ```
@@ -542,7 +543,7 @@ The discovery surface, and the first screen reading live data.
 - **Top movers** — four featured cards: the biggest absolute score moves over the trailing hour. Before the Engine has ticked nobody has moved, so the section becomes **Leading the board** with an *Awaiting first tick* badge and simply shows the top of the ranking.
 - **People** — every active person as a ranked row: position, avatar, name, category, sparkline, score and direction.
 - **Category filter** — All / Executive / Creator / Musician / Athlete / Founder, derived from the `people` rows and counted. Filtering is instant: the server sends all 16 and the client only chooses which to show. The featured row follows the filter, while rank numbers stay board-wide.
-- **Live feed rail** (desktop, ≥ lg) — the newest Engine narratives and raw signals merged newest first, each linking to its person, with a *Nothing on the wire yet* empty state.
+- **Live feed rail** (desktop, ≥ lg) — the newest Engine narratives and raw signals merged newest first, each linking to its person, with a *Nothing in the Feed yet* empty state.
 
 Colour discipline holds: the score is white, the sparkline grey, and only the direction indicator is ever green or red. A person with no history yet shows a bare `—` rather than an arrow, because there is no measurement to point anywhere.
 
@@ -550,7 +551,7 @@ Colour discipline holds: the score is white, the sparkline grey, and only the di
 
 `lib/home/board.ts` reads on the server through the **service-role client**. `people` and friends are readable by signed-in users under RLS and carry no per-user data, but Home is public — a signed-out visitor using the publishable key would see nothing, since anon has no policies anywhere. Reading in trusted server code keeps the board public without granting anon a blanket read on the schema.
 
-Movement comes from `home_momentum()` (see the migration table): per person, the change over a trailing window plus a downsampled sparkline, computed in Postgres so the page never pulls a growing history table across the wire. A person with no rows in the window is treated as *no movement yet*, not as a change of zero.
+Movement comes from `home_momentum()` (see the migration table): per person, the change over a trailing window plus a downsampled sparkline, computed in Postgres so the page never pulls a growing history table over the network. A person with no rows in the window is treated as *no movement yet*, not as a change of zero.
 
 `lib/home/board-model.ts` holds the pure half — ranking, mover selection, category options — so it is unit-tested without any I/O. Ranking is score descending, then name, which keeps the order stable while every score is tied at 50.0.
 
@@ -633,7 +634,7 @@ Enforcement is server-side, twice over:
 
 ### One narrator
 
-Two kinds of entry share the stream, and both speak as the Engine. A **narrative** is a sentence the Engine wrote when a score moved meaningfully in a tick, shown exactly as stored, with the move it recorded and, as evidence, the signals it processed for that person in that tick (matched through the tick's time window; the tables have no direct link). A **signal** is a raw observation no narrative explains yet: not processed, or processed in a tick whose move did not warrant a sentence. Raw headlines from connectors, and the RSS feed in particular, can read like news, so a signal entry is framed in presentation only — *A YouTube signal on Drake read +0.2.*, *An RSS signal on Drake is waiting for the Engine's next read.* — with the headline quoted beneath it. Stored text is never rewritten. Source attribution is the last, smallest, greyest line of every entry: *The Engine · via YouTube*, *Observed via RSS*.
+Two kinds of entry share the stream, and both speak as the Engine. A **narrative** is a sentence the Engine wrote when a score moved meaningfully in a tick, shown exactly as stored, with the move it recorded and, as evidence, exactly the signals the Engine linked to it when it wrote the sentence (`narrative_signals`, decided at generation time in `lib/engine/narratives.ts`: every signal in the batch behind an LLM sentence, the non-zero signals behind a template sentence that quotes a headline, none behind a move carried by Gravity, Market Mood, Conviction or Trading Activity; an inverse-pair sentence links the paired person's signals, marked as theirs). Nothing is inferred from timing, and there is no fallback: a narrative with no links shows no evidence. A **signal** is a raw observation no narrative links to directly: not yet processed, or processed without producing a sentence. Raw headlines from connectors, and the RSS feed in particular, can read like news, so a signal entry is framed in presentation only — *A YouTube signal on Drake read +0.2.*, *An RSS signal on Drake is waiting for the Engine's next read.* — with the headline quoted beneath it. Stored text is never rewritten. Source attribution is the last, smallest, greyest line of every entry: *The Engine · via YouTube*, *Observed via RSS*.
 
 ### The entry
 
@@ -641,11 +642,13 @@ Avatar, name and category (a link to the person); the Engine's sentence as the h
 
 ### Notable moves
 
-An entry whose recorded impact is at or beyond **`HIGH_IMPACT_THRESHOLD` = 2.0 points** in either direction, within the last `PINNED_WINDOW_HOURS` (24), takes the pinned treatment at the top: the same composition set larger, with more air, at most `PINNED_MAX` (3), strongest first, and taken out of the stream below so nothing appears twice. Structural prominence only: no banner, no badge, no colour beyond the direction rule. When nothing qualifies the section does not exist. All three are named constants in `lib/feed/feed-model.ts`, to be retuned once real signals exist.
+An entry whose recorded impact is at or beyond **`HIGH_IMPACT_THRESHOLD` = 1.25 points** in either direction (a starting value, deliberately under the chart's 2.0-point floor so the section can actually appear under constant mean reversion; to be raised once the real distribution of moves is observable), within the last `PINNED_WINDOW_HOURS` (24), takes the pinned treatment at the top: the same composition set larger, with more air, at most `PINNED_MAX` (3), strongest first, and taken out of the stream below so nothing appears twice. Structural prominence only: no banner, no badge, no colour beyond the direction rule. When nothing qualifies the section does not exist. All three are named constants in `lib/feed/feed-model.ts`, to be retuned once real signals exist.
 
 ### Filtering, paging, ordering
 
 The category filter is Home's component and options, derived from the people table; it filters the loaded entries instantly. Paging is keyset (`occurred_at`, `id`) through `feed_entries()`, `FEED_PAGE_SIZE` (24) at a time, triggered by a sentinel below the list from `FEED_PREFETCH_MARGIN_PX` (600) away, with the next rows taking shape in place inside the same card; the stream holds at most `FEED_MAX_ENTRIES` (240) and then says so, so memory and the DOM stay bounded. Ordering is chronological, newest first, through `rankFeed()` in `lib/feed/ranking.ts`: that call is the one place a personalised ranker will plug in later. There is no For You toggle and no placeholder heuristic, on purpose.
+
+Every ordering carries a unique tiebreaker: the cursor and the SQL order on `(occurred_at, id)`, so a page boundary inside a run of identical timestamps neither skips nor repeats an entry and identical queries return identical order; the board ranks by score, then name, then id; every newest-first list with a limit (the Home rail preview, a profile's signals and narratives, the Engine's signal intake) orders by its timestamp and then `id`. `lib/feed/feed-entries.db.test.ts` proves the cursor against a real Postgres (PGlite, with the migrations applied verbatim), including forty entries at one microsecond-identical instant across a page boundary.
 
 ### Behavioural logging
 
@@ -663,7 +666,7 @@ Impressions and dwell come from one IntersectionObserver over the stream; everyt
 
 ### Empty
 
-With the Engine dormant the Feed is empty, and that is the state it ships in: *Quiet on the wire.*, a line on what will land here, and the roster of the sixteen people being tracked as small monograms, each a link to its profile. Nothing is synthesised.
+With the Engine dormant the Feed is empty, and that is the state it ships in: *Quiet across the board.*, a line on what will land here, and the roster of the sixteen people being tracked as small monograms, each a link to its profile. Nothing is synthesised.
 
 ## Scope so far
 
@@ -678,5 +681,6 @@ With the Engine dormant the Feed is empty, and that is the state it ships in: *Q
 - **Phase 6c**: the person profile page: the identity dossier with the STATE and CONVICTION readings, the hero score with period change, the score line with ranges and the gravity reference, the five forces, the signal list, the Buy / Sell entry stub, `person_score_series()`, and the `change_range` event.
 - **Phase 6c+**: the live chart (monotone spline, phase-locked pulse, 700 ms tick reveal, bounded sliding window, 2.0-point y floor, reduced-motion aware), the monochrome Buy / Sell controls, position direction gating behind `platform_settings.shorting_enabled`, and the baseline-relative Trading Activity force.
 - **Phase 6d**: the Feed: `feed_entries()`, the entry in one Engine voice with the raw-signal framing, the pinned high-impact treatment behind `HIGH_IMPACT_THRESHOLD`, the category filter, bounded keyset infinite scroll, the chronological ranker with its swap point, the empty state, the board glance in the rail, and the `view_entry` / `scroll_depth` / `filter_change` events.
+- **Phase 6d+**: the Feed correctness pass: `narrative_signals`, written by the Engine at generation time through `record_narratives()` and read by `feed_entries()` with the tick-window inference removed outright; `HIGH_IMPACT_THRESHOLD` lowered to 1.25 as a starting value; the Feed's vocabulary settled; a unique tiebreaker on every ordering, app-wide; and the in-process Postgres test harness (`lib/__tests__/pglite.ts`) that runs the migrations verbatim so SQL is tested as SQL.
 
 Deliberately not built yet: the trading flow (which will write `positions`, `transactions` and `trade_events` through RPCs), the portfolio and profile screens, search results, and the recommendation algorithm (For You). The heartbeat is wired but switched off.

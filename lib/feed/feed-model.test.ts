@@ -75,7 +75,7 @@ describe("toFeedEntry", () => {
       sources: ["YouTube"],
     });
     expect(made?.evidence).toHaveLength(1);
-    expect(made?.evidence[0]).toMatchObject({ source: "YouTube", impact: 1.4, sentiment: "positive", confidence: 0.82 });
+    expect(made?.evidence[0]).toMatchObject({ source: "YouTube", impact: 1.4, sentiment: "positive", confidence: 0.82, relation: "direct", person: null });
   });
 
   it("frames a raw signal in the Engine's voice and quotes the headline beneath", () => {
@@ -164,11 +164,11 @@ describe("selection", () => {
   });
 
   it("pins recorded moves at or beyond the threshold, strongest first, at most PINNED_MAX, within the window", () => {
-    expect(HIGH_IMPACT_THRESHOLD).toBe(2);
+    expect(HIGH_IMPACT_THRESHOLD).toBe(1.25);
     expect(PINNED_WINDOW_HOURS).toBe(24);
     const entries = [
-      entry({ id: "small", impact: 1.9 }),
-      entry({ id: "exact", impact: 2.0 }),
+      entry({ id: "small", impact: 1.2 }),
+      entry({ id: "exact", impact: 1.25 }),
       entry({ id: "down", impact: -3.1 }),
       entry({ id: "old", impact: 5, occurredAt: iso(NOW - 25 * 3_600_000) }),
       entry({ id: "big", impact: 2.6 }),
@@ -178,6 +178,8 @@ describe("selection", () => {
     const pinned = selectPinned(entries, NOW);
     expect(pinned.map((item) => item.id)).toEqual(["down", "bigger", "big"]);
     expect(pinned).toHaveLength(PINNED_MAX);
+    // At the threshold qualifies; just under it does not.
+    expect(selectPinned([entry({ id: "small", impact: 1.2 }), entry({ id: "exact", impact: -1.25 })], NOW).map((item) => item.id)).toEqual(["exact"]);
     expect(selectPinned([entry({ id: "quiet", impact: 0.4 })], NOW)).toEqual([]);
   });
 });

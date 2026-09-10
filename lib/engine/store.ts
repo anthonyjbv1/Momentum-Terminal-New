@@ -58,7 +58,10 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
           .from("signals")
           .select("id, person_id, headline, raw_payload, occurred_at, created_at, source:data_sources!inner(name, tier)")
           .eq("processed", false)
+          // Oldest first, then id: one ingestion run stamps a whole batch with
+          // the same created_at, and the cap must cut it the same way every time.
           .order("created_at")
+          .order("id")
           .limit(config.tick.maxSignalsPerTick),
         client.from("positions").select("person_id, amount_cents").eq("is_open", true),
         client.from("signals").select("person_id, sentiment_confidence").eq("processed", true).gte("processed_at", depthSince),
@@ -182,7 +185,7 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
         people: people.filter((p) => p.is_active).map((p) => ({ ...p })),
         signals: signals
           .filter((s) => !s.processed && activeIds.has(s.personId))
-          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))
           .slice(0, config.tick.maxSignalsPerTick),
         openCapitalCentsByPerson: new Map(Object.entries(seed.openCapitalCents ?? {})),
         signalActivityByPerson: aggregateSignalActivity(

@@ -54,6 +54,18 @@ describe("rankPeople", () => {
     expect(ranked.map((p) => p.slug)).toEqual(["drake", "elon-musk", "kai-cenat", "mrbeast"]);
   });
 
+  it("breaks a full tie on score and name by id, so the order is total and identical on every load", () => {
+    const twins = [
+      person({ id: "p9", slug: "twin-b", display_name: "Twin" }),
+      person({ id: "p2", slug: "twin-a", display_name: "Twin" }),
+      person({ id: "p5", slug: "twin-c", display_name: "Twin" }),
+    ];
+    const once = rankPeople(twins, []).map((p) => p.slug);
+    const again = rankPeople([...twins].reverse(), []).map((p) => p.slug);
+    expect(once).toEqual(["twin-a", "twin-c", "twin-b"]);
+    expect(again).toEqual(once);
+  });
+
   it("treats a person with no momentum row as flat, not as a zero change", () => {
     const [only] = rankPeople([DRAKE], []);
     expect(only).toMatchObject({ change: null, points: 0, sparkline: [], direction: "neutral" });

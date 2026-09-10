@@ -12,14 +12,15 @@ import { Avatar } from "@/components/ui/avatar";
 import { DirectionIndicator, directionOf } from "@/components/ui/direction-indicator";
 
 /**
- * One entry on the wire. The Engine's sentence is the hero; the person is
+ * One entry in the Feed. The Engine's sentence is the hero; the person is
  * identified and tappable; the recorded score impact is the only colour;
  * the source line is small, grey and last. A `prominent` entry (the pinned
  * treatment) is the same composition set larger and given more air: it is
  * structural prominence, not an alarm.
  *
- * Detail opens beneath: for a narrative, the signals the Engine read that
- * tick; for a raw signal, how the Engine has treated it so far.
+ * Detail opens beneath: for a narrative, exactly the signals the Engine
+ * linked when it wrote the sentence (an inverse-pair signal is shown as the
+ * paired person's); for a raw signal, how the Engine has treated it so far.
  */
 export interface FeedEntryProps {
   entry: FeedEntryModel;
@@ -166,7 +167,17 @@ function Detail({ entry }: { entry: FeedEntryModel }) {
           {entry.evidence.map((item) => (
             <li key={item.id} className="flex items-start gap-3 py-2.5 first:pt-0 last:pb-0">
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="text-xs text-fg-muted">{item.source ?? "Signal"}</span>
+                <span className="text-xs text-fg-muted">
+                  {item.relation === "inverse_pair" && item.person ? (
+                    <>
+                      <Link href={`/person/${item.person.slug}`} className="text-fg-secondary underline-offset-4 hover:underline">
+                        {item.person.name}
+                      </Link>
+                      <span className="text-fg-faint"> · </span>
+                    </>
+                  ) : null}
+                  {item.source ?? "Signal"}
+                </span>
                 <span className="text-sm leading-relaxed text-fg-secondary">&ldquo;{item.headline}&rdquo;</span>
               </div>
               {item.impact !== null ? (
@@ -176,7 +187,7 @@ function Detail({ entry }: { entry: FeedEntryModel }) {
           ))}
         </ul>
       ) : (
-        <p className="text-xs text-fg-muted">No signals were processed for this move; the other forces carried it.</p>
+        <p className="text-xs text-fg-muted">No signal produced this move; the other forces carried it.</p>
       )}
     </div>
   );

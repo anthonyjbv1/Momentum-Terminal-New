@@ -45,7 +45,8 @@ export const getFeedRoster = cache(async (): Promise<RosterPerson[]> => {
     .from("people")
     .select("id, slug, display_name, category, avatar_url")
     .eq("is_active", true)
-    .order("display_name");
+    .order("display_name")
+    .order("id");
   if (error) throw new Error(`Could not load people: ${error.message}`);
   return (data ?? []).map((row) => ({ id: row.id, slug: row.slug, name: row.display_name, category: row.category, avatarUrl: row.avatar_url }));
 });

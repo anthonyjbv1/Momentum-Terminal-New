@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * The Feed's desktop rail: a glance at the board, not a second copy of the
- * wire. The biggest movers of the hour with their scores, each a link.
+ * Feed. The biggest movers of the hour with their scores, each a link.
  */
 export default async function FeedRail() {
   const board = await getHomeBoard();

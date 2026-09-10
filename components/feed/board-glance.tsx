@@ -9,7 +9,7 @@ import { SectionHeader } from "@/components/ui/page-header";
 import { ScoreDisplay } from "@/components/ui/score-display";
 
 /**
- * The Feed's desktop rail: a glance at the board while you scroll the wire.
+ * The Feed's desktop rail: a glance at the board while you scroll the Feed.
  * The four biggest movers of the last hour (or, before the Engine's first
  * tick, the top of the ranking), each a link to its person. Reads what Home
  * reads; shows less of it.

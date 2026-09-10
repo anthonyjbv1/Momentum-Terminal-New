@@ -53,9 +53,44 @@ describe("narratives", () => {
       scoreBefore: 50,
       scoreAfter: 51.24,
       source: "llm",
+      signals: [{ signalId: "s1", relation: "direct" }],
     });
-    expect(rows[1]).toMatchObject({ source: "template", text: "Kendrick Lamar's momentum slipped as Drake's surge pulled the pair the other way." });
-    expect(rows[2]).toMatchObject({ source: "template", text: "MrBeast drifted up with a broadly positive market mood." });
+    expect(rows[1]).toMatchObject({
+      source: "template",
+      text: "Kendrick Lamar's momentum slipped as Drake's surge pulled the pair the other way.",
+      // Produced by Drake's signal, and recorded as such.
+      signals: [{ signalId: "s1", relation: "inverse_pair" }],
+    });
+    expect(rows[2]).toMatchObject({ source: "template", text: "MrBeast drifted up with a broadly positive market mood.", signals: [] });
+  });
+
+  it("links exactly the signals that produced each narrative: several, one, none", () => {
+    const sentence = "Drake's momentum climbed on an album drop and a sold-out tour.";
+    const tick: TickSummary = {
+      ...summary,
+      people: [
+        person({ id: "d", slug: "drake", displayName: "Drake", previousScore: 50, newScore: 51.8, change: 1.8, forces: { gravity: 0.04, signals: 1.76 }, signalsProcessed: 3 }),
+        person({ id: "m", slug: "mrbeast", displayName: "MrBeast", previousScore: 50, newScore: 50.9, change: 0.9, forces: { gravity: 0.05, signals: 0.85 }, signalsProcessed: 2 }),
+        person({ id: "e", slug: "elon-musk", displayName: "Elon Musk", previousScore: 50, newScore: 50.7, change: 0.7, forces: { gravity: 0.04, market_mood: 0.66 } }),
+      ],
+      signals: [
+        // One LLM batch for Drake: both signals carry the same sentence, so both produced it.
+        { id: "s1", personSlug: "drake", headline: "Drake drops surprise album", label: "positive", confidence: 0.8, direction: 1, impact: 1.2, scorer: "llm", narrative: sentence },
+        { id: "s2", personSlug: "drake", headline: "Drake tour sells out", label: "positive", confidence: 0.7, direction: 1, impact: 0.56, scorer: "llm", narrative: sentence },
+        // Pre-filtered before the LLM saw it: not part of the batch, not evidence.
+        { id: "s3", personSlug: "drake", headline: "Drake weekly streams: 480M (baseline)", label: "neutral", confidence: 0.1, direction: 0, impact: 0, scorer: "prefilter" },
+        // MrBeast's template sentence quotes the one signal that moved the score; the zero-impact one did not.
+        { id: "s4", personSlug: "mrbeast", headline: "MrBeast upload passes 40M views", label: "positive", confidence: 0.8, direction: 1, impact: 0.85, scorer: "rules" },
+        { id: "s5", personSlug: "mrbeast", headline: "MrBeast subscriber count: 300M (baseline)", label: "neutral", confidence: 0.2, direction: 0, impact: 0, scorer: "rules" },
+      ],
+    };
+    const rows = buildNarratives(tick, DEFAULT_ENGINE_CONFIG.narratives);
+    expect(rows.map((row) => [row.personId, row.source, row.signals])).toEqual([
+      ["d", "llm", [{ signalId: "s1", relation: "direct" }, { signalId: "s2", relation: "direct" }]],
+      ["m", "template", [{ signalId: "s4", relation: "direct" }]],
+      ["e", "template", []],
+    ]);
+    expect(rows[1].text).toBe('MrBeast\'s momentum climbed on "MrBeast upload passes 40M views".');
   });
 
   it("caps the number of narratives per tick", () => {
