@@ -70,15 +70,31 @@ export interface EngineConfig {
     /** Absolute cap of the negative side. */
     cap: number;
   };
-  /** FORCE 5 — Trading Activity (live Buy/Sell velocity). */
+  /**
+   * FORCE 5 — Trading Activity (live Buy/Sell velocity), measured against a
+   * rolling baseline rather than against zero.
+   *
+   * TUNABLES: `baselineHours` and `weight` are the two knobs expected to move
+   * once real flow exists. Retune them against live trade_events when the
+   * heartbeat is on, and again when platform_settings.shorting_enabled is
+   * flipped and flow can go negative.
+   */
   tradingActivity: {
-    /** Rolling window for net flow, in seconds. */
+    /** Rolling window for the current net flow, in seconds. */
     windowSeconds: number;
-    /** History used for the mean / standard deviation of windowed net flow, in hours. */
-    historyHours: number;
-    /** Only act when the current conviction score is beyond mean ± this many standard deviations. */
+    /**
+     * BASELINE WINDOW. How far back the rolling baseline reaches, in hours:
+     * the mean of windowed net flow over this span is "normal flow" for the
+     * person, its standard deviation is the noise floor. Longer is steadier
+     * and slower to adopt a new normal; shorter adapts faster.
+     */
+    baselineHours: number;
+    /** Only act when the current flow score is further than this many baseline standard deviations from the baseline mean. */
     thresholdStdDevs: number;
-    /** adjustment = convictionScore * weight. */
+    /**
+     * SCALING FACTOR. adjustment = (flowScore − baselineMean) · weight, where
+     * flowScore is net flow as a fraction of max_allocation_cents.
+     */
     weight: number;
     /** Multiplier when no signal confirms the move this tick (pump protection). */
     unconfirmedDampening: number;
@@ -175,7 +191,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   },
   tradingActivity: {
     windowSeconds: 60,
-    historyHours: 24,
+    baselineHours: 24,
     thresholdStdDevs: 1.5,
     weight: 0.25,
     unconfirmedDampening: 0.4,

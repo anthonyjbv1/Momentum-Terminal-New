@@ -165,6 +165,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260907195432_behavioral_logging_foundation.sql` | `behavioral_events.session_id`, format-only `event_type` check, metadata check, recommender indexes, column-level insert grant, three service-role-only aggregate functions |
 | `20260908114758_home_board_reads.sql`      | `home_momentum()` (per-person change + sparkline over a trailing window), `signals`/`narratives` newest-first indexes for the feed rail |
 | `20260909010607_person_profile_reads.sql`  | `person_score_series()` (one person's history since a point in time, downsampled by time into bounded slices with open / close / tick count) for the profile chart |
+| `20260910172052_position_direction_gating.sql` | `platform_settings` (one row, `shorting_enabled` default false), `shorting_enabled()`, `net_position_cents()`, the pure `resolve_position_order()` netting rule, the service-role `assert_position_direction()` guard, and the `positions_enforce_direction` trigger |
 | `20260907153228_llm_memory_narratives.sql` | `person_memory` (+ 16 seeded profiles), `llm_usage`, `narratives`, with RLS                  |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
@@ -191,6 +192,7 @@ All of these are applied to the `Momentum Terminal` Supabase project and recorde
 | `narratives`          | The Engine's one-sentence explanation of a meaningful move (`source` = llm or template)       |
 | `portfolio_history`   | Portfolio value time series per user                                                          |
 | `behavioral_events`   | Append-only interaction log with `session_id`; canonical `event_type` list lives in code       |
+| `platform_settings`   | One row of platform-wide switches: `shorting_enabled` (default false). Service-role write only |
 
 ### Row level security
 
@@ -204,6 +206,7 @@ RLS is enabled on every table. The `anon` role has no policies anywhere.
 | `behavioral_events`                                                                                                                                 | read own; insert own (`user_id, event_type, person_id, metadata, session_id` only); no update/delete | full               |
 | `people`, `data_sources`, `person_data_sources`, `inverse_pairs`, `score_history`, `signals`, `source_snapshots`, `engine_ticks`, `score_events`, `person_memory`, `narratives` | read all                                                | full (only writer) |
 | `llm_usage`                                                                                                                                         | no access                                                                    | full (only writer) |
+| `platform_settings`                                                                                                                                 | read                                                                         | full (only writer) |
 
 ### Financial writes
 
@@ -260,7 +263,7 @@ update public.data_sources set is_active = true where name = 'youtube';
 | **Signals**          | per signal: `baseImpact (1.5) · tier multiplier (T1 1.5, T2 1.0, T3 0.5, T4/5 0.3) · confidence · direction`; summed, capped at ±10 per tick | 0 |
 | **Market Mood**      | mood = platform-wide mean of this tick's Signals impacts; impact = `fraction (0.25) · sensitivity (1.0, per-slug overridable) · mood excluding the person's own signals`, mood clamped to ±2 and impact to ±0.5 (the brakes) | 0 |
 | **Conviction**       | concentration = open capital on the person / `max_allocation_cents`; 0–60 % → 0, 60–85 % → +0.05…+0.15, > 85 % → −0.05…−0.15, capped at −0.30 | 0 (no positions) |
-| **Trading Activity** | conviction score = net Buy−Sell flow in the last 60 s / `max_allocation_cents` (clamped ±1); fires only beyond mean ± 1.5 σ of the 24 h windowed history; adjustment = score · 0.25, × 0.4 when no signal confirms the move, capped ±0.30, skipped below 15 % concentration | 0 (no trades) |
+| **Trading Activity** | flow score = net Buy−Sell flow in the last 60 s / `max_allocation_cents` (clamped ±1); **baseline** = the same score for every 60 s window over the trailing **24 h** (`baselineHours`); deviation = flow score − baseline mean; fires only when \|deviation\| > 1.5 σ of the baseline; adjustment = deviation · 0.25 (`weight`), × 0.4 when no signal confirms the move, capped ±0.30, skipped below 15 % concentration. Baseline-relative so that long-only flow (which can only be ≥ 0) is not a permanent lift: steady inflow is the baseline, a burst above it lifts, a lull below it lowers. Unchanged when shorting is enabled. | 0 (no trades) |
 
 `newScore = clamp(score + Σ forces, 35, 100)`.
 
@@ -593,6 +596,27 @@ Read from the Conviction force on the latest tick, using the concentration the E
 
 As on Home, everything is fire-and-forget and skipped entirely when nobody is signed in.
 
+### The live chart (Phase 6c+)
+
+The score line is built for a 30-second cadence, not a sub-second one. Between ticks the line is still and a leading-edge dot at the last point breathes: a halo that swells and fades over exactly one 30-second cycle, phase-locked to the banner countdown (the CSS animation runs on the wall clock with a negative delay, so both reset at the same instant). At the tick the page polls `/api/person/[slug]/live` for ticks newer than its last point; when one lands the line grows into the new value over 700 ms with an ease-out curve, the dot travels to the new point, the axis domains glide rather than jump, and the window slides: points older than the range fall off the left edge and the series is capped (`MAX_LIVE_POINTS`) so the DOM and memory stay flat. The line is monotone cubic, white, unfilled; colour lives only in the change figure above it. The y-axis clamps to the data but never spans fewer than `Y_RANGE_FLOOR` = **2.0 points**, so a 0.02-point move stays a flicker instead of a cliff. `prefers-reduced-motion` removes the pulse and applies each tick directly. With no history the empty state stands; nothing is synthesised.
+
+## Position direction gating (Phase 6c+)
+
+The platform launches **long-only**. `public.platform_settings.shorting_enabled` (one row, default `false`) is the gate, and it lives in the database so the write path and the interface read the same value. Flip it with the service role, never from code:
+
+```sql
+update public.platform_settings set shorting_enabled = true, updated_at = now() where id;
+```
+
+The rule, in `resolve_position_order()` and mirrored by `lib/trading/direction.ts`: a **Buy** first closes any LOW exposure, then opens HIGH with the rest; a **Sell** first closes any HIGH exposure, then opens LOW with the rest. That last step is what the gate controls. While the flag is false a Sell that would take the user's net position on a person below zero is rejected with a clear error; when it is true the same Sell opens a LOW position and net-short exposure is allowed, with no code change.
+
+Enforcement is server-side, twice over:
+
+- `assert_position_direction(user, person, side, cents)` is the service-role guard the trading flow's order RPC (Phase 6e) calls first, inside its transaction; it returns the exact split to apply (cents closed, cents opened, direction, net after).
+- `positions_enforce_direction` is an AFTER trigger on `positions`: any change that leaves a user net short on a person while the flag is false is rejected, whatever wrote the row.
+
+`net_position_cents(user, person)` (open HIGH cents minus open LOW cents) is the measure both use. The interface reflects the setting through `getPlatformSettings()`: under the gate the Sell control explains that it closes a position. No trading flow is built yet; this is the constraint and the guard, ready for it.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -604,5 +628,6 @@ As on Home, everything is fire-and-forget and skipped entirely when nobody is si
 - **Phase 6a**: the design token system, the core component library, the persistent shell (banner with the 30-second countdown, bottom tabs, desktop two-panel layout) and the route skeleton with styled placeholders.
 - **Phase 6b**: Home wired to live data: the person card and ranked row, top movers, category filtering, sparklines, the desktop feed rail, and the behavioural logging that records impressions and dwell.
 - **Phase 6c**: the person profile page: the identity dossier with the STATE and CONVICTION readings, the hero score with period change, the score line with ranges and the gravity reference, the five forces, the signal list, the Buy / Sell entry stub, `person_score_series()`, and the `change_range` event.
+- **Phase 6c+**: the live chart (monotone spline, phase-locked pulse, 700 ms tick reveal, bounded sliding window, 2.0-point y floor, reduced-motion aware), the restrained Buy / Sell controls, position direction gating behind `platform_settings.shorting_enabled`, and the baseline-relative Trading Activity force.
 
 Deliberately not built yet: the trading flow (which will write `positions`, `transactions` and `trade_events` through RPCs), the standalone Feed page, the portfolio and profile screens, search results, and the recommendation algorithm. The heartbeat is wired but switched off.

@@ -1,31 +1,60 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { cn } from "@/lib/cn";
+import {
+  GAP_SLICES,
+  TICK_REVEAL_MS,
+  blendSeries,
+  easeOutCubic,
+  gridValues,
+  lerp,
+  scoreDomain,
+  seriesPath,
+  timeDomain,
+  toTimed,
+  type TimedScore,
+} from "@/lib/person/chart-math";
+import { LIVE_TICK_MS } from "@/lib/person/live-series";
 import { RANGES, type RangeKey, type SeriesPoint } from "@/lib/person/profile-model";
+import { useReducedMotion } from "@/components/ui/use-reduced-motion";
 
 /**
- * The score line. One thin white line on the black ground, a recessive grid,
- * one axis (score, on the right), three time marks along the bottom, the
- * gravity target as a faint dashed reference, and a crosshair with a small
- * tooltip on hover or touch. No gradients, no fills, no glow.
+ * The score line, built for a 30-second cadence.
  *
- * Only score_history is drawn. The database omits empty slices, and a gap
- * between ticks wider than three slices breaks the line rather than bridging
- * it, so a pause in the Engine reads as a pause.
+ * Between ticks the line is still and the leading dot breathes: one slow
+ * cycle per tick, phase-locked to the banner countdown (the CSS animation
+ * runs on the wall clock with a negative delay, so both reset together).
+ * When a tick lands (`version` changes) the line grows into the new value
+ * over TICK_REVEAL_MS with an ease-out curve: the leading point travels from
+ * the old end to the new one, the axis domains glide, and points that have
+ * aged out slide off the left edge under the clip. A one-shot ring leaves
+ * the dot at that moment.
+ *
+ * One thin white monotone spline on the black ground, a recessive grid, a
+ * single score axis on the right, three time marks, the gravity target as a
+ * faint dashed reference, and a crosshair with the exact score and time on
+ * hover or touch. No gradients, no fills, no glow. Colour never touches the
+ * line; direction lives in the change figure above the chart.
+ *
+ * The vertical axis clamps to the data but never spans fewer than
+ * Y_RANGE_FLOOR points (lib/person/chart-math.ts). prefers-reduced-motion
+ * removes the breath and the ripple and applies each tick directly.
  */
 export interface ScoreChartProps {
   points: SeriesPoint[];
   range: RangeKey;
   revertTarget: number;
   personName: string;
+  /** Bumps when live ticks arrive; each change animates the reveal. */
+  version?: number;
+  /** The Engine's cadence, for the breath. Defaults to the real 30 seconds. */
+  cadenceMs?: number;
   className?: string;
 }
 
 const MARGIN = { top: 18, right: 52, bottom: 28, left: 12 };
-/** Consecutive ticks further apart than this many slices are drawn as a break. */
-const GAP_SLICES = 3;
 
 interface Size {
   width: number;
@@ -49,47 +78,6 @@ function useSize<T extends HTMLElement>(ref: React.RefObject<T | null>): Size | 
   return size;
 }
 
-/** 1, 2, 5 × 10ⁿ: the step that gives about `target` gridlines across `span`. */
-export function niceStep(span: number, target = 4): number {
-  const raw = Math.max(span, Number.EPSILON) / target;
-  const magnitude = 10 ** Math.floor(Math.log10(raw));
-  const normalised = raw / magnitude;
-  const step = normalised <= 1 ? 1 : normalised <= 2 ? 2 : normalised <= 5 ? 5 : 10;
-  return step * magnitude;
-}
-
-export function gridValues(lo: number, hi: number): number[] {
-  const step = niceStep(hi - lo);
-  const values: number[] = [];
-  for (let value = Math.ceil(lo / step) * step; value <= hi + step / 1000; value += step) {
-    values.push(Number(value.toFixed(6)));
-    if (values.length > 12) break;
-  }
-  return values;
-}
-
-/**
- * The vertical domain: the data padded by a fifth of its span (never less
- * than a point of span, so a quiet line is not stretched into drama), widened
- * to include the gravity target when it is within a span of the data.
- */
-export function scoreDomain(points: SeriesPoint[], revertTarget: number): { lo: number; hi: number; gravityInRange: boolean } {
-  let dataMin = Infinity;
-  let dataMax = -Infinity;
-  for (const point of points) {
-    if (point.score < dataMin) dataMin = point.score;
-    if (point.score > dataMax) dataMax = point.score;
-  }
-  const span = Math.max(dataMax - dataMin, 1);
-  let lo = dataMin - span * 0.2;
-  let hi = dataMax + span * 0.2;
-  if (revertTarget >= lo - span && revertTarget <= hi + span) {
-    lo = Math.min(lo, revertTarget - span * 0.15);
-    hi = Math.max(hi, revertTarget + span * 0.15);
-  }
-  return { lo, hi, gravityInRange: revertTarget >= lo && revertTarget <= hi };
-}
-
 const clockFormat = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
 const dayFormat = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
 const dayClockFormat = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -100,43 +88,112 @@ function axisTime(ms: number, spanMs: number): string {
   return spanMs <= TWO_DAYS ? clockFormat.format(ms) : dayFormat.format(ms);
 }
 
-export function ScoreChart({ points, range, revertTarget, personName, className }: ScoreChartProps) {
+interface Transition {
+  from: TimedScore[];
+  to: TimedScore[];
+  startedAt: number;
+}
+
+export function ScoreChart({ points, range, revertTarget, personName, version = 0, cadenceMs = LIVE_TICK_MS, className }: ScoreChartProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const size = useSize(wrapperRef);
+  const clipId = useId();
+  const reducedMotion = useReducedMotion();
   const [hover, setHover] = useState<number | null>(null);
 
-  const drawable = points.length >= 2;
+  const timed = useMemo(() => toTimed(points), [points]);
+  const drawable = timed.length >= 2;
   const rangeDefinition = RANGES.find((definition) => definition.key === range) ?? RANGES[0];
 
+  // The tick reveal. A version change means new ticks: animate from what was
+  // on screen to what is now true. A range switch keeps the version, so it
+  // simply shows the other series.
+  const shownRef = useRef<TimedScore[]>(timed);
+  const versionRef = useRef(version);
+  const [transition, setTransition] = useState<Transition | null>(null);
+  const [progress, setProgress] = useState(1);
+
+  useEffect(() => {
+    if (version === versionRef.current) {
+      shownRef.current = timed;
+      return;
+    }
+    versionRef.current = version;
+    const from = shownRef.current;
+    shownRef.current = timed;
+    if (reducedMotion || from.length < 2 || timed.length < 2) {
+      setTransition(null);
+      setProgress(1);
+      return;
+    }
+    setTransition({ from, to: timed, startedAt: performance.now() });
+    setProgress(0);
+  }, [timed, version, reducedMotion]);
+
+  useEffect(() => {
+    if (!transition) return;
+    let frame = 0;
+    const step = (now: number) => {
+      const t = Math.min(1, (now - transition.startedAt) / TICK_REVEAL_MS);
+      setProgress(t);
+      if (t < 1) frame = requestAnimationFrame(step);
+      else setTransition(null);
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [transition]);
+
+  // The breath is phase-locked to the wall clock, like the banner countdown:
+  // the animation runs for one cadence and starts with a negative delay equal
+  // to the time already elapsed in the current cycle. Set on the element
+  // directly (an external system), re-synced whenever a tick lands so tab
+  // throttling cannot let it drift.
+  const breathRef = useRef<SVGCircleElement>(null);
+  const ready = drawable && size !== null && size.width > 0;
+  useEffect(() => {
+    const element = breathRef.current;
+    if (!element) return;
+    element.style.animationDuration = `${cadenceMs}ms`;
+    element.style.animationDelay = `-${Date.now() % cadenceMs}ms`;
+  }, [cadenceMs, version, ready]);
+
+  const frame = useMemo(() => {
+    if (!drawable) return null;
+    const eased = transition ? easeOutCubic(progress) : 1;
+    const series = transition ? blendSeries(transition.from, transition.to, eased) : timed;
+    const target = { ...timeDomain(timed), ...scoreDomain(timed, revertTarget) };
+    if (!transition) return { series, domain: target, transitioning: false };
+    const origin = { ...timeDomain(transition.from), ...scoreDomain(transition.from, revertTarget) };
+    return {
+      series,
+      domain: {
+        t0: lerp(origin.t0, target.t0, eased),
+        t1: lerp(origin.t1, target.t1, eased),
+        lo: lerp(origin.lo, target.lo, eased),
+        hi: lerp(origin.hi, target.hi, eased),
+        gravityInRange: target.gravityInRange,
+      },
+      transitioning: true,
+    };
+  }, [drawable, transition, progress, timed, revertTarget]);
+
   const geometry = useMemo(() => {
-    if (!drawable || !size || size.width === 0) return null;
+    if (!frame || !size || size.width === 0) return null;
     const innerWidth = Math.max(size.width - MARGIN.left - MARGIN.right, 1);
     const innerHeight = Math.max(size.height - MARGIN.top - MARGIN.bottom, 1);
-
-    const times = points.map((point) => Date.parse(point.at));
-    const t0 = times[0];
-    const t1 = Math.max(times[times.length - 1], t0 + 1);
-    const { lo, hi, gravityInRange } = scoreDomain(points, revertTarget);
-
+    const { t0, t1, lo, hi } = frame.domain;
     const x = (t: number) => MARGIN.left + ((t - t0) / (t1 - t0)) * innerWidth;
     const y = (v: number) => MARGIN.top + ((hi - v) / (hi - lo)) * innerHeight;
 
     const sliceMs = rangeDefinition.windowMs !== null ? rangeDefinition.windowMs / rangeDefinition.points : (t1 - t0) / rangeDefinition.points;
     const gapMs = Math.max(sliceMs * GAP_SLICES, 1);
 
-    const xs = times.map(x);
-    const ys = points.map((point) => y(point.score));
-    let path = "";
-    for (let index = 0; index < points.length; index += 1) {
-      const broke = index === 0 || times[index] - times[index - 1] > gapMs;
-      path += `${broke ? "M" : "L"}${xs[index].toFixed(1)},${ys[index].toFixed(1)} `;
-    }
+    const plotted = frame.series.map((point) => ({ t: point.t, score: point.score, x: x(point.t), y: y(point.score) }));
+    const lead = plotted[plotted.length - 1];
 
-    const first = points[0];
-    const last = points[points.length - 1];
-    let min = first;
-    let max = first;
-    for (const point of points) {
+    let min = timed[0];
+    let max = timed[0];
+    for (const point of timed) {
       if (point.score < min.score) min = point;
       if (point.score > max.score) max = point;
     }
@@ -144,33 +201,33 @@ export function ScoreChart({ points, range, revertTarget, personName, className 
     return {
       innerWidth,
       innerHeight,
+      x,
+      y,
       t0,
       t1,
       lo,
       hi,
-      gravityInRange,
-      x,
-      y,
-      xs,
-      ys,
-      path: path.trim(),
+      gravityInRange: frame.domain.gravityInRange,
+      transitioning: frame.transitioning,
+      plotted,
+      path: seriesPath(plotted, gapMs),
+      lead,
       grid: gridValues(lo, hi),
-      first,
-      last,
+      first: timed[0],
+      last: timed[timed.length - 1],
       min,
       max,
     };
-  }, [drawable, points, rangeDefinition, revertTarget, size]);
+  }, [frame, size, rangeDefinition, timed]);
 
   const onPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (!geometry) return;
+    if (!geometry || geometry.transitioning) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const px = event.clientX - rect.left;
-    // Nearest point by x; the arrays are short enough for a linear scan.
     let best = 0;
     let bestDistance = Infinity;
-    for (let index = 0; index < geometry.xs.length; index += 1) {
-      const distance = Math.abs(geometry.xs[index] - px);
+    for (let index = 0; index < geometry.plotted.length; index += 1) {
+      const distance = Math.abs(geometry.plotted[index].x - px);
       if (distance < bestDistance) {
         bestDistance = distance;
         best = index;
@@ -183,7 +240,7 @@ export function ScoreChart({ points, range, revertTarget, personName, className 
     ? `${personName}, momentum score over ${rangeDefinition.label}: from ${geometry.first.score.toFixed(1)} to ${geometry.last.score.toFixed(1)}, low ${geometry.min.score.toFixed(1)}, high ${geometry.max.score.toFixed(1)}.`
     : `${personName}, momentum score over ${rangeDefinition.label}: no history yet.`;
 
-  const hovered = hover !== null && geometry && points[hover] ? { point: points[hover], x: geometry.xs[hover], y: geometry.ys[hover] } : null;
+  const hovered = hover !== null && geometry && !geometry.transitioning && geometry.plotted[hover] ? geometry.plotted[hover] : null;
 
   return (
     <div ref={wrapperRef} className={cn("relative h-56 w-full select-none sm:h-72", className)}>
@@ -203,6 +260,12 @@ export function ScoreChart({ points, range, revertTarget, personName, className 
             onPointerLeave={() => setHover(null)}
             onPointerCancel={() => setHover(null)}
           >
+            <defs>
+              <clipPath id={clipId}>
+                <rect x={MARGIN.left} y={0} width={geometry.innerWidth} height={size.height - MARGIN.bottom} />
+              </clipPath>
+            </defs>
+
             {/* Grid and score axis, on the right */}
             {geometry.grid.map((value) => {
               const gy = geometry.y(value);
@@ -249,9 +312,16 @@ export function ScoreChart({ points, range, revertTarget, personName, className 
               </text>
             ))}
 
-            {/* The line */}
-            <path d={geometry.path} fill="none" className="stroke-fg" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-            <circle cx={geometry.xs[geometry.xs.length - 1]} cy={geometry.ys[geometry.ys.length - 1]} r={3} className="fill-fg" />
+            {/* The line, clipped so aged-out points slide away under the left edge */}
+            <g clipPath={`url(#${clipId})`}>
+              <path d={geometry.path} fill="none" className="stroke-fg" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+            </g>
+
+            {/* The leading edge: the dot, its breath, and the ring that marks a tick landing */}
+            <g transform={`translate(${geometry.lead.x.toFixed(2)} ${geometry.lead.y.toFixed(2)})`}>
+              {version > 0 ? <circle key={`ripple-${version}`} r={4} className="fill-fg opacity-0 transform-fill-box animate-ripple" /> : null}
+              <circle ref={breathRef} r={3.5} className="fill-fg transform-fill-box animate-breathe" />
+            </g>
 
             {/* Crosshair */}
             {hovered ? (
@@ -267,9 +337,9 @@ export function ScoreChart({ points, range, revertTarget, personName, className 
               className="pointer-events-none absolute top-0 flex -translate-x-1/2 flex-col items-center gap-0.5 rounded-md bg-surface-overlay px-2.5 py-1.5 shadow-raised"
               style={{ left: Math.min(Math.max(hovered.x, 56), size.width - 56) }}
             >
-              <span className="num text-sm font-semibold leading-none text-fg">{hovered.point.score.toFixed(1)}</span>
+              <span className="num text-sm font-semibold leading-none text-fg">{hovered.score.toFixed(1)}</span>
               <span className="num whitespace-nowrap text-2xs text-fg-muted">
-                {(geometry.t1 - geometry.t0 <= TWO_DAYS ? clockFormat : dayClockFormat).format(Date.parse(hovered.point.at))}
+                {(geometry.t1 - geometry.t0 <= TWO_DAYS ? clockFormat : dayClockFormat).format(hovered.t)}
               </span>
             </div>
           ) : null}

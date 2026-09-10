@@ -131,6 +131,13 @@
   max-height: calc(100dvh - var(--spacing-banner));
 }
 
+/* Lets a CSS transform on an SVG element scale about its own centre rather
+   than the SVG's origin (the chart's pulsing dot). */
+@utility transform-fill-box {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
 /* Hide the scrollbar but keep scrolling (horizontal chip rows). */
 @utility scrollbar-none {
   scrollbar-width: none;

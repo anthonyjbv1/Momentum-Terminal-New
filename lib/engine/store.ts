@@ -50,7 +50,7 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
   return {
     async loadTickContext(now, config) {
       const depthSince = new Date(now.getTime() - config.spread.depthWindowHours * 3600 * 1000).toISOString();
-      const tradesSince = new Date(now.getTime() - config.tradingActivity.historyHours * 3600 * 1000).toISOString();
+      const tradesSince = new Date(now.getTime() - config.tradingActivity.baselineHours * 3600 * 1000).toISOString();
 
       const [people, signals, positions, activity, trades, pairs, lastTick] = await Promise.all([
         client.from("people").select("*").eq("is_active", true).order("slug"),

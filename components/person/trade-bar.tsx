@@ -8,8 +8,9 @@ import { Button } from "@/components/ui/button";
 
 /**
  * Buy / Sell entry points. The trading flow itself is Phase 6e; until then a
- * tap acknowledges quietly and opens nothing. Green Buy and red Sell are the
- * only coloured controls on the page.
+ * tap acknowledges quietly and opens nothing. Buy and Sell are the only
+ * coloured controls on the page, and they wear their colour as a label on a
+ * deep fill (see --color-buy / --color-sell), not as a shout.
  *
  *   TradeActions  inline, beside the score, from the md breakpoint up
  *   TradeBar      fixed above the tab bar on mobile
@@ -39,52 +40,72 @@ function useTradeStub() {
   return { notice, tap };
 }
 
+/** The quote beside the verb, in the label colour. */
 function Quote({ label, price }: { label: string; price: number | null }) {
   return (
     <span className="inline-flex items-baseline gap-2">
       <span>{label}</span>
-      {price !== null ? <span className="num text-xs font-medium opacity-80">{price.toFixed(1)}</span> : null}
+      {price !== null ? <span className="num text-xs font-medium">{price.toFixed(1)}</span> : null}
     </span>
   );
 }
 
-function StubNotice({ notice, className }: { notice: TradeSide | null; className?: string }) {
+/**
+ * What a tap says. Under the launch gate (long-only) a Sell can only close a
+ * position, and the note says so; the database enforces it either way.
+ */
+function stubMessage(side: TradeSide, shortingEnabled: boolean): string {
+  if (side === "buy") return "Buy opens with the trading flow in Phase 6e.";
+  return shortingEnabled ? "Sell opens with the trading flow in Phase 6e." : "Sell closes an open position. Trading opens with Phase 6e.";
+}
+
+function StubNotice({ notice, shortingEnabled, className }: { notice: TradeSide | null; shortingEnabled: boolean; className?: string }) {
   return (
     <p role="status" aria-live="polite" className={cn("text-xs text-fg-muted", className)}>
-      {notice ? `${notice === "buy" ? "Buy" : "Sell"} opens with the trading flow in Phase 6e.` : " "}
+      {notice ? stubMessage(notice, shortingEnabled) : " "}
     </p>
   );
 }
 
-export function TradeActions({ person, className }: { person: ProfilePerson; className?: string }) {
+export interface TradeControlProps {
+  person: ProfilePerson;
+  /** platform_settings.shorting_enabled, read on the server. */
+  shortingEnabled: boolean;
+  /** Live quotes when the page has them; falls back to the person's. */
+  buyPrice?: number | null;
+  sellPrice?: number | null;
+  className?: string;
+}
+
+export function TradeActions({ person, shortingEnabled, buyPrice, sellPrice, className }: TradeControlProps) {
   const { notice, tap } = useTradeStub();
   return (
     <div className={cn("flex flex-col items-stretch gap-2 md:items-end", className)}>
       <div className="flex gap-2">
         <Button variant="buy" size="md" className="min-w-28" onClick={() => tap("buy")} aria-label={`Buy ${person.displayName}`}>
-          <Quote label="Buy" price={person.buyPrice} />
+          <Quote label="Buy" price={buyPrice ?? person.buyPrice} />
         </Button>
         <Button variant="sell" size="md" className="min-w-28" onClick={() => tap("sell")} aria-label={`Sell ${person.displayName}`}>
-          <Quote label="Sell" price={person.sellPrice} />
+          <Quote label="Sell" price={sellPrice ?? person.sellPrice} />
         </Button>
       </div>
-      <StubNotice notice={notice} className="min-h-4 md:text-right" />
+      <StubNotice notice={notice} shortingEnabled={shortingEnabled} className="min-h-4 md:text-right" />
     </div>
   );
 }
 
-export function TradeBar({ person }: { person: ProfilePerson }) {
+export function TradeBar({ person, shortingEnabled, buyPrice, sellPrice }: Omit<TradeControlProps, "className">) {
   const { notice, tap } = useTradeStub();
   return (
     <div className="fixed inset-x-0 bottom-tabbar-safe z-(--z-tabbar) border-t border-line bg-canvas/85 backdrop-blur-xl md:hidden">
       <div className="mx-auto flex max-w-shell flex-col gap-1.5 px-5 pb-3 pt-2.5">
-        <StubNotice notice={notice} className="min-h-4 text-center" />
+        <StubNotice notice={notice} shortingEnabled={shortingEnabled} className="min-h-4 text-center" />
         <div className="flex gap-3">
           <Button variant="buy" size="lg" className="flex-1" onClick={() => tap("buy")} aria-label={`Buy ${person.displayName}`}>
-            <Quote label="Buy" price={person.buyPrice} />
+            <Quote label="Buy" price={buyPrice ?? person.buyPrice} />
           </Button>
           <Button variant="sell" size="lg" className="flex-1" onClick={() => tap("sell")} aria-label={`Sell ${person.displayName}`}>
-            <Quote label="Sell" price={person.sellPrice} />
+            <Quote label="Sell" price={sellPrice ?? person.sellPrice} />
           </Button>
         </div>
       </div>

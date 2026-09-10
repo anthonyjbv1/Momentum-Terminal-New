@@ -4,13 +4,13 @@ import { Suspense } from "react";
 
 import { getCurrentUser } from "@/lib/auth";
 import { getPersonBySlug, getPersonProfile, getPersonSignals, getRenderedAt } from "@/lib/person/profile";
+import { getPlatformSettings } from "@/lib/trading/settings";
 import { BackLink } from "@/components/person/back-link";
 import { Dossier } from "@/components/person/dossier";
 import { ForcesPanel } from "@/components/person/forces-panel";
 import { ProfileSkeleton } from "@/components/person/profile-skeleton";
 import { ScorePanel } from "@/components/person/score-panel";
 import { SignalsList } from "@/components/person/signals-list";
-import { TradeBar } from "@/components/person/trade-bar";
 import { ProfileLogger } from "@/components/person/use-profile-logging";
 
 /**
@@ -61,7 +61,12 @@ export default async function PersonPage({ params }: { params: Params }) {
 
 /** Everything below the back link: the readings, streamed in once they are loaded. */
 async function ProfileBody({ slug, personId }: { slug: string; personId: string }) {
-  const [profile, signals, user] = await Promise.all([getPersonProfile(slug), getPersonSignals(personId), getCurrentUser()]);
+  const [profile, signals, user, settings] = await Promise.all([
+    getPersonProfile(slug),
+    getPersonSignals(personId),
+    getCurrentUser(),
+    getPlatformSettings(),
+  ]);
   // The person was found a moment ago; only a deactivation in between lands here.
   if (!profile) notFound();
 
@@ -74,7 +79,8 @@ async function ProfileBody({ slug, personId }: { slug: string; personId: string 
 
       <Dossier person={profile.person} state={profile.state} conviction={profile.conviction} />
 
-      <ScorePanel profile={profile} loggingEnabled={loggingEnabled} renderedAt={renderedAt} />
+      {/* Score, history, the live feed and both Buy / Sell placements (the mobile bar is fixed, so it lives here too). */}
+      <ScorePanel profile={profile} loggingEnabled={loggingEnabled} renderedAt={renderedAt} shortingEnabled={settings.shortingEnabled} />
 
       <ForcesPanel forces={profile.forces} latestTick={profile.latestTick} />
 
@@ -87,8 +93,6 @@ async function ProfileBody({ slug, personId }: { slug: string; personId: string 
         loggingEnabled={loggingEnabled}
         renderedAt={renderedAt}
       />
-
-      <TradeBar person={profile.person} />
     </div>
   );
 }

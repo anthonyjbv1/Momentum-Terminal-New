@@ -13,20 +13,31 @@ import { ScoreDisplay } from "@/components/ui/score-display";
 
 import { RangeToggle } from "./range-toggle";
 import { ScoreChart } from "./score-chart";
-import { TradeActions } from "./trade-bar";
+import { TradeActions, TradeBar } from "./trade-bar";
+import { useLiveSeries, type LiveSeriesOptions } from "./use-live-series";
 import { PROFILE_SURFACE, logProfileEvent } from "./use-profile-logging";
 
 /**
  * The hero: the Momentum Score, the change over the selected range beneath
  * it, the gravity target and spread in small type, and the score line with
  * its range toggle. One panel, because the number and the line are one
- * reading. On desktop the Buy / Sell entry sits beside the score.
+ * reading. On desktop the Buy / Sell entry sits beside the score; on mobile
+ * it is the bar fixed above the tab bar (rendered here so it shares the live
+ * quotes).
+ *
+ * Everything in it is kept current on the Engine's cadence by useLiveSeries:
+ * the score flashes, the change and the quotes update, and the chart reveals
+ * the new tick. With the Engine dormant nothing changes.
  */
 export interface ScorePanelProps {
   profile: PersonProfile;
   loggingEnabled: boolean;
   /** Server render time, so relative ages agree between server and client. */
   renderedAt: number;
+  /** platform_settings.shorting_enabled, read on the server. */
+  shortingEnabled: boolean;
+  /** Feed overrides for verification harnesses; production uses the defaults. */
+  live?: LiveSeriesOptions;
   className?: string;
 }
 
@@ -36,20 +47,27 @@ const changeTones = {
   neutral: "text-neutral",
 } as const;
 
-export function ScorePanel({ profile, loggingEnabled, renderedAt, className }: ScorePanelProps) {
-  const { person, series, latestTick } = profile;
+export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnabled, live, className }: ScorePanelProps) {
+  const { person, series: initialSeries, latestTick } = profile;
+  const state = useLiveSeries(person, initialSeries, live);
+  const series = state.series;
 
   const available = useMemo(
     () => Object.fromEntries(RANGES.map((range) => [range.key, rangeAvailable(series[range.key])])) as Record<RangeKey, boolean>,
     [series],
   );
-  const [range, setRange] = useState<RangeKey | null>(() => defaultRange(series));
+  const [chosen, setChosen] = useState<RangeKey | null>(() => defaultRange(initialSeries));
+  // The chosen range, or the shortest drawable one once ticks have started landing.
+  const range = chosen !== null && available[chosen] ? chosen : defaultRange(series);
   const points = useMemo(() => (range ? series[range] : []), [range, series]);
   const change = useMemo(() => periodChange(points), [points]);
   const rangeLabel = RANGES.find((definition) => definition.key === range)?.label ?? null;
 
+  const lastTickAt = state.lastTickAt ?? latestTick?.at ?? null;
+  const agesFrom = state.updatedAt ?? renderedAt;
+
   const onRange = (next: RangeKey) => {
-    setRange(next);
+    setChosen(next);
     logProfileEvent(loggingEnabled, { eventType: "change_range", personId: person.id, metadata: { range: next, surface: PROFILE_SURFACE } });
   };
 
@@ -58,11 +76,11 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, className }: S
       <SectionHeader
         title="Momentum score"
         meta={
-          latestTick ? (
+          lastTickAt ? (
             <>
               Updated{" "}
-              <time dateTime={latestTick.at} className="num">
-                {relativeTime(latestTick.at, renderedAt)}
+              <time dateTime={lastTickAt} className="num">
+                {relativeTime(lastTickAt, agesFrom)}
               </time>
             </>
           ) : (
@@ -79,7 +97,7 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, className }: S
       <Card className="flex flex-col gap-8 p-6 sm:p-8">
         <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between md:gap-10">
           <div className="flex min-w-0 flex-col gap-4">
-            <ScoreDisplay score={person.score} size="xl" />
+            <ScoreDisplay score={state.score} size="xl" flash />
 
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
               {change ? (
@@ -100,24 +118,24 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, className }: S
               </div>
               <div className="flex items-baseline gap-2">
                 <dt>Spread</dt>
-                <dd className="num text-fg-secondary">{person.spread.toFixed(1)}</dd>
+                <dd className="num text-fg-secondary">{state.spread.toFixed(1)}</dd>
               </div>
-              {person.buyPrice !== null ? (
+              {state.buyPrice !== null ? (
                 <div className="flex items-baseline gap-2">
                   <dt>Buy</dt>
-                  <dd className="num text-fg-secondary">{person.buyPrice.toFixed(1)}</dd>
+                  <dd className="num text-fg-secondary">{state.buyPrice.toFixed(1)}</dd>
                 </div>
               ) : null}
-              {person.sellPrice !== null ? (
+              {state.sellPrice !== null ? (
                 <div className="flex items-baseline gap-2">
                   <dt>Sell</dt>
-                  <dd className="num text-fg-secondary">{person.sellPrice.toFixed(1)}</dd>
+                  <dd className="num text-fg-secondary">{state.sellPrice.toFixed(1)}</dd>
                 </div>
               ) : null}
             </dl>
           </div>
 
-          <TradeActions person={person} className="hidden md:flex" />
+          <TradeActions person={person} shortingEnabled={shortingEnabled} buyPrice={state.buyPrice} sellPrice={state.sellPrice} className="hidden md:flex" />
         </div>
 
         <div className="flex flex-col gap-4">
@@ -125,9 +143,18 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, className }: S
             <p className="shrink-0 whitespace-nowrap text-label text-fg-muted">Score history</p>
             <RangeToggle value={range} available={available} onChange={onRange} />
           </div>
-          <ScoreChart points={points} range={range ?? "1h"} revertTarget={person.revertTarget} personName={person.displayName} />
+          <ScoreChart
+            points={points}
+            range={range ?? "1h"}
+            revertTarget={person.revertTarget}
+            personName={person.displayName}
+            version={state.version}
+            cadenceMs={live?.cadenceMs}
+          />
         </div>
       </Card>
+
+      <TradeBar person={person} shortingEnabled={shortingEnabled} buyPrice={state.buyPrice} sellPrice={state.sellPrice} />
     </section>
   );
 }

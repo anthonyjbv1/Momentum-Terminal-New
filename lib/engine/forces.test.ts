@@ -117,7 +117,7 @@ describe("Trading Activity", () => {
   it("yields 0 with no trades", () => {
     const force = tradingActivityForce({ ...base, events: [] });
     expect(force.impact).toBe(0);
-    expect(force.details.reason).toBe("no variance in history");
+    expect(force.details.reason).toBe("no variance in baseline");
   });
 
   it("is gated below the concentration threshold", () => {
@@ -138,13 +138,14 @@ describe("Trading Activity", () => {
     expect(flows.reduce((s, v) => s + v, 0)).toBe(75);
   });
 
-  it("fires only beyond ±1.5σ of the history, weighted 0.25 and dampened when unconfirmed", () => {
+  it("fires only beyond ±1.5σ of the baseline, weighted 0.25 and dampened when unconfirmed", () => {
     const burst: TradeEvent[] = [{ personId: "p", side: "BUY", amountCents: 900_000, createdAt: new Date(NOW.getTime() - 5_000) }];
     const confirmed = tradingActivityForce({ ...base, events: burst });
     expect(confirmed.details.fired).toBe(true);
-    expect(confirmed.impact).toBeCloseTo(0.1 * 0.25); // Cs = 900k / 9M = 0.1
+    // flowScore = 900k / 9M = 0.1; the baseline mean is that one window over 1440, so the deviation is a hair under 0.1.
+    expect(confirmed.impact).toBeCloseTo(0.1 * 0.25, 3);
     const unconfirmed = tradingActivityForce({ ...base, events: burst, confirmedBySignals: false });
-    expect(unconfirmed.impact).toBeCloseTo(0.1 * 0.25 * 0.4);
+    expect(unconfirmed.impact).toBeCloseTo(0.1 * 0.25 * 0.4, 3);
 
     // Steady identical flow in every window is never an anomaly.
     const steady: TradeEvent[] = Array.from({ length: 1440 }, (_, i) => ({
@@ -154,6 +155,48 @@ describe("Trading Activity", () => {
       createdAt: new Date(NOW.getTime() - i * 60_000 - 1_000),
     }));
     expect(tradingActivityForce({ ...base, events: steady }).impact).toBe(0);
+  });
+
+  it("measures against the rolling baseline, so long-only flow is not a permanent lift", () => {
+    // Long-only: every window sees +90k of Buys (1% of the cap), nothing is ever sold.
+    const inflow = (skipCurrent: boolean, currentCents = 90_000): TradeEvent[] =>
+      Array.from({ length: 1440 }, (_, i) => ({
+        personId: "p",
+        side: "BUY" as const,
+        amountCents: i === 0 ? currentCents : 90_000,
+        createdAt: new Date(NOW.getTime() - i * 60_000 - 1_000),
+      })).filter((event, i) => !(skipCurrent && i === 0));
+
+    // Identical inflow every window: the baseline absorbs it and the force is 0, not +0.0025 forever.
+    expect(tradingActivityForce({ ...base, events: inflow(false) }).impact).toBe(0);
+
+    // A burst above the baseline reads positive by the EXCESS over normal flow, not by the whole flow.
+    const burst = tradingActivityForce({ ...base, events: inflow(false, 900_000) });
+    expect(burst.details.fired).toBe(true);
+    expect(burst.impact).toBeGreaterThan(0);
+    expect(burst.impact).toBeLessThan(0.1 * 0.25);
+    expect(burst.details.deviation).toBeCloseTo(0.1 - Number(burst.details.baselineMean), 6);
+
+    // A lull (no Buys in the current window while every other window had them) reads NEGATIVE even though flow never went below zero.
+    const lull = tradingActivityForce({ ...base, events: inflow(true) });
+    expect(lull.details.fired).toBe(true);
+    expect(lull.impact).toBeLessThan(0);
+    expect(lull.details.netFlowCents).toBe(0);
+  });
+
+  it("is the same arithmetic when shorting is enabled and flow goes negative", () => {
+    // Two-sided: steady alternation of Buys and Sells, then a window of heavy selling.
+    const twoSided: TradeEvent[] = Array.from({ length: 1440 }, (_, i) => ({
+      personId: "p",
+      side: i % 2 === 0 ? ("BUY" as const) : ("SELL" as const),
+      amountCents: i === 0 ? 1_000_000 : 90_000,
+      createdAt: new Date(NOW.getTime() - i * 60_000 - 1_000),
+    }));
+    twoSided[0] = { ...twoSided[0], side: "SELL" };
+    const dump = tradingActivityForce({ ...base, events: twoSided });
+    expect(dump.details.fired).toBe(true);
+    expect(dump.impact).toBeLessThan(0);
+    expect(dump.details.baselineHours).toBe(CONFIG.tradingActivity.baselineHours);
   });
 });
 

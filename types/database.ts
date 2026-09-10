@@ -405,6 +405,24 @@ export type Database = {
           },
         ]
       }
+      platform_settings: {
+        Row: {
+          id: boolean
+          shorting_enabled: boolean
+          updated_at: string
+        }
+        Insert: {
+          id?: boolean
+          shorting_enabled?: boolean
+          updated_at?: string
+        }
+        Update: {
+          id?: boolean
+          shorting_enabled?: boolean
+          updated_at?: string
+        }
+        Relationships: []
+      }
       portfolio_history: {
         Row: {
           id: string
@@ -799,6 +817,17 @@ export type Database = {
     }
     Functions: {
       apply_engine_tick: { Args: { p_tick: Json }; Returns: Json }
+      assert_position_direction: {
+        Args: { p_amount_cents: number; p_person_id: string; p_side: string; p_user_id: string }
+        Returns: {
+          net_after: number
+          net_before: number
+          open_cents: number
+          open_direction: string
+          reduce_cents: number
+          shorting_enabled: boolean
+        }[]
+      }
       behavioral_co_engagement: {
         Args: {
           p_event_types?: string[]
@@ -845,6 +874,10 @@ export type Database = {
           sparkline: number[]
         }[]
       }
+      net_position_cents: {
+        Args: { p_person_id: string; p_user_id: string }
+        Returns: number
+      }
       person_score_series: {
         Args: { p_person_id: string; p_points?: number; p_since?: string }
         Returns: {
@@ -858,6 +891,16 @@ export type Database = {
         Args: { p_amount_cents: number }
         Returns: undefined
       }
+      resolve_position_order: {
+        Args: { p_amount_cents: number; p_net_before: number; p_shorting_enabled: boolean; p_side: string }
+        Returns: {
+          net_after: number
+          open_cents: number
+          open_direction: string
+          reduce_cents: number
+        }[]
+      }
+      shorting_enabled: { Args: Record<PropertyKey, never>; Returns: boolean }
       username_available: { Args: { p_username: string }; Returns: boolean }
     }
     Enums: {

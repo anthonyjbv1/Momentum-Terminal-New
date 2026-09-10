@@ -56,6 +56,15 @@
   --color-positive-fg: oklch(12% 0.03 148);
   --color-negative: oklch(66% 0.2 25);
   --color-negative-fg: oklch(98% 0.005 25);
+
+  /* The trade controls: Buy and Sell as restrained instruments, not calls to
+     action. A deep, desaturated fill carrying the direction colour as its
+     label. Label on fill measures 6.3:1 (Buy) and 4.7:1 (Sell), both past
+     WCAG AA for text; the fills sit a step above the surface grey. */
+  --color-buy: oklch(26% 0.06 148);
+  --color-buy-fg: var(--color-positive);
+  --color-sell: oklch(22% 0.06 25);
+  --color-sell-fg: var(--color-negative);
   --color-neutral: oklch(66% 0 0);
   --color-neutral-fg: oklch(10% 0 0);
   --color-accent: oklch(97% 0 0);
@@ -155,6 +164,13 @@
   --animate-rise-in: rise-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
   --animate-slide-up: slide-up 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
   --animate-tick-flash: tick-flash 900ms ease-out;
+  /* The chart's leading dot. breathe: one cycle per Engine tick, the dot dims
+     to the middle of the cycle and brightens back toward the next tick; the
+     component sets the real duration and a negative delay so the cycle is
+     phase-locked to the banner countdown. ripple: a one-shot ring that leaves
+     the dot the moment a new tick lands on the line. */
+  --animate-breathe: breathe 30s ease-in-out infinite;
+  --animate-ripple: ripple 1200ms ease-out;
 
   @keyframes pulse-soft {
     0%, 100% { opacity: 1; }
@@ -179,6 +195,14 @@
   @keyframes tick-flash {
     0% { color: var(--color-fg); }
     100% { color: inherit; }
+  }
+  @keyframes ripple {
+    0% { transform: scale(1); opacity: 0.55; }
+    100% { transform: scale(4); opacity: 0; }
+  }
+  @keyframes breathe {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
   }
 }
 
