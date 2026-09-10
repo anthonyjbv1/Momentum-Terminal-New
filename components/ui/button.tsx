@@ -6,23 +6,22 @@ import { cn } from "@/lib/cn";
 /**
  * Button. Pill-shaped, quiet by default. Variants are the platform's verbs:
  *   primary   the one main action on a screen (white on black)
- *   buy       HIGH — a deep desaturated green fill with a green label.
- *             One of only two coloured things in the interface.
- *   sell      LOW  — the same in red. The other one.
+ *   buy       HIGH — the light pill: near-white fill, black label.
+ *   sell      LOW  — the dark pill: near-black fill, white label.
  *   outline   secondary actions: a soft grey surface
  *   ghost     tertiary / icon actions
  *
- * Buy and Sell are trading controls, not calls to action: the colour lives
- * in the label and a hairline, the fill stays close to the surface greys.
- * Their tokens are --color-buy / --color-sell (+ -fg) in tokens.css.
+ * Buy and Sell are trading controls, not calls to action, and they are
+ * monochrome: direction colour belongs to the change figures, never to the
+ * buttons. Their tokens are --color-buy / --color-sell (+ -fg) in tokens.css.
  */
 export type ButtonVariant = "primary" | "buy" | "sell" | "outline" | "ghost";
 export type ButtonSize = "sm" | "md" | "lg" | "icon";
 
 export const buttonVariants: Record<ButtonVariant, string> = {
   primary: "bg-surface-inverse text-fg-inverse hover:bg-fg-secondary",
-  buy: "bg-buy text-buy-fg ring-1 ring-inset ring-buy-fg/20 hover:brightness-125",
-  sell: "bg-sell text-sell-fg ring-1 ring-inset ring-sell-fg/20 hover:brightness-125",
+  buy: "bg-buy text-buy-fg hover:brightness-90",
+  sell: "bg-sell text-sell-fg hover:brightness-150",
   outline: "bg-surface text-fg hover:bg-surface-raised",
   ghost: "bg-transparent text-fg-secondary hover:bg-surface hover:text-fg",
 };

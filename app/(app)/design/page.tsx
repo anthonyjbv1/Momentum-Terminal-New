@@ -35,10 +35,10 @@ const SWATCHES: Array<{ name: string; role: string; className: string }> = [
   { name: "fg-secondary", role: "secondary text", className: "bg-fg-secondary" },
   { name: "fg-muted", role: "captions", className: "bg-fg-muted" },
   { name: "fg-faint", role: "placeholders", className: "bg-fg-faint" },
-  { name: "positive", role: "heating · Buy label", className: "bg-positive" },
-  { name: "negative", role: "cooling · Sell label", className: "bg-negative" },
-  { name: "buy", role: "Buy control fill", className: "bg-buy" },
-  { name: "sell", role: "Sell control fill", className: "bg-sell" },
+  { name: "positive", role: "heating", className: "bg-positive" },
+  { name: "negative", role: "cooling", className: "bg-negative" },
+  { name: "buy", role: "Buy control (light pill)", className: "bg-buy" },
+  { name: "sell", role: "Sell control (dark pill)", className: "bg-sell" },
   { name: "neutral", role: "flat · standby (grey)", className: "bg-neutral" },
   { name: "accent", role: "focus · emphasis (white)", className: "bg-accent" },
 ];
@@ -160,7 +160,7 @@ export default function DesignPage() {
         </Card>
       </Section>
 
-      <Section title="Buttons" description="Pills. Buy and Sell are deep desaturated fills with the direction colour as their label; everything else is white, grey or bare.">
+      <Section title="Buttons" description="Pills. Buy is the light pill, Sell the dark one; everything else is white, grey or bare. No colour on any button.">
         <Card>
           <CardContent className="flex flex-col gap-6">
             <div className="flex flex-wrap items-center gap-3">

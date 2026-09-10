@@ -8,9 +8,9 @@ Every visual value lives in **`app/styles/tokens.css`**, inside one `@theme` blo
 
 | To change…                       | Edit                                                                                          |
 | -------------------------------- | --------------------------------------------------------------------------------------------- |
-| The green used for heating / the Buy label | `--color-positive` (and `--color-positive-fg` for text on it). Heating reads, positive badges and the Buy label follow. |
-| The red used for cooling / the Sell label  | `--color-negative`, `--color-negative-fg`                                                     |
-| The Buy / Sell control fills     | `--color-buy`, `--color-sell` (deep, desaturated); their labels are `--color-buy-fg` / `--color-sell-fg`, which point at `positive` / `negative` |
+| The green used for heating       | `--color-positive` (and `--color-positive-fg` for text on it). Heating reads and positive badges follow. |
+| The red used for cooling         | `--color-negative`, `--color-negative-fg`                                                     |
+| The Buy / Sell controls          | `--color-buy` (`#f4f5f4`, the light pill) and `--color-sell` (`#1a1b1a`, the dark pill); their labels are `--color-buy-fg` / `--color-sell-fg` (black / white) |
 | The ground / card greys          | `--color-canvas`, `--color-surface`, `--color-surface-raised`, `--color-surface-overlay`      |
 | Text colours                     | `--color-fg`, `--color-fg-secondary`, `--color-fg-muted`, `--color-fg-faint`                  |
 | The interface typeface           | point the `inter` `path` in `lib/fonts.ts` at a new file, keep the `--font-inter` variable (or point `--font-sans` at a new one) |
@@ -39,13 +39,13 @@ Monochrome with two exceptions. Every grey has zero chroma: there is no cast.
 | `surface-overlay`    | `oklch(20% 0 0)`     | sheets, menus                                 |
 | `line` / `line-strong` | `oklch(24% …)` / `oklch(34% …)` | hairline dividers / focus edges   |
 | `fg` … `fg-faint`    | 97% → 42% lightness  | four text levels                              |
-| `positive`           | `oklch(73% 0.17 148)` | **HIGH, heating, the Buy label.** One of two colours. |
-| `negative`           | `oklch(66% 0.2 25)`  | **LOW, cooling, the Sell label.** The other one. |
-| `buy` / `sell`       | `oklch(26% 0.06 148)` / `oklch(22% 0.06 25)` | the trade-control fills: deep, desaturated, a step above `surface`; label contrast 6.3:1 and 4.7:1 |
+| `positive`           | `oklch(73% 0.17 148)` | **HIGH, heating.** One of two colours.       |
+| `negative`           | `oklch(66% 0.2 25)`  | **LOW, cooling.** The other one.              |
+| `buy` / `sell`       | `#f4f5f4` / `#1a1b1a` | the trade controls: Buy the light pill with a black label, Sell the dark pill with a white label; monochrome, label contrast above 15:1 |
 | `neutral`            | `oklch(66% 0 0)`     | flat direction, standby: grey                 |
 | `accent`             | `oklch(97% 0 0)`     | focus rings, emphasis: white                  |
 
-The rule: green and red appear only on trading actions and directional score movement. Navigation, focus, status, links, the timer, the mark: all white or grey. Numbers themselves stay `fg`; only the change beside them carries colour.
+The rule: green and red appear only on directional score movement. Navigation, focus, status, links, the timer, the mark, and the Buy / Sell controls themselves: all white or grey. Numbers themselves stay `fg`; only the change beside them carries colour.
 
 ## Typography
 
@@ -58,7 +58,7 @@ Hierarchy carries the design: page titles are `text-4xl sm:text-5xl font-bold tr
 
 | Component            | Notes                                                                                             |
 | -------------------- | ------------------------------------------------------------------------------------------------- |
-| `Button`             | Pills. `primary` (white on black), `buy` (deep green fill, green label and hairline), `sell` (the same in red), `outline` (soft grey surface), `ghost`; sizes `sm md lg icon`; `loading`. `buttonClassName()` gives the same look to a `Link`. |
+| `Button`             | Pills. `primary` (white on black), `buy` (the light pill, black label), `sell` (the dark pill, white label), `outline` (soft grey surface), `ghost`; sizes `sm md lg icon`; `loading`. `buttonClassName()` gives the same look to a `Link`. |
 | `Card`               | `rounded-2xl`, no border, inner highlight only; `default`, `raised`, `ghost`; `interactive` brightens and lifts on hover. `CardHeader / Title / Description / Content / Footer` with 24px padding. |
 | `Badge`              | Small pill, 12px medium; tones `neutral positive negative warning accent outline`; optional status `dot`. Grey unless the meaning is direction or live status. |
 | `Avatar`             | Photo or initials on a raised surface; sizes `xs`–`2xl`; ring variants.                           |

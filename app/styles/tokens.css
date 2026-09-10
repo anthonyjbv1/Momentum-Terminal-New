@@ -14,8 +14,9 @@
 
    The look: editorial monochrome. Jet-black ground, neutral grey surfaces,
    white type, Inter carrying the interface, monospaced tabular numerals for
-   data only. Green and red exist for exactly two meanings — Buy / heating
-   and Sell / cooling — and appear nowhere else.
+   data only. Green and red exist for exactly two meanings — heating and
+   cooling, the direction of a score — and appear nowhere else. Even the
+   Buy and Sell controls are monochrome (a light pill and a dark pill).
    ============================================================================= */
 
 @theme {
@@ -57,14 +58,15 @@
   --color-negative: oklch(66% 0.2 25);
   --color-negative-fg: oklch(98% 0.005 25);
 
-  /* The trade controls: Buy and Sell as restrained instruments, not calls to
-     action. A deep, desaturated fill carrying the direction colour as its
-     label. Label on fill measures 6.3:1 (Buy) and 4.7:1 (Sell), both past
-     WCAG AA for text; the fills sit a step above the surface grey. */
-  --color-buy: oklch(26% 0.06 148);
-  --color-buy-fg: var(--color-positive);
-  --color-sell: oklch(22% 0.06 25);
-  --color-sell-fg: var(--color-negative);
+  /* The trade controls: Buy and Sell as monochrome instruments, not calls to
+     action. Buy is the light pill (near-white fill, black label), Sell the
+     dark one (near-black fill, white label). Exact values by design brief;
+     label contrast is above 15:1 on both. Direction colour stays on the
+     change figures, never on these. */
+  --color-buy: #f4f5f4;
+  --color-buy-fg: var(--color-fg-inverse);
+  --color-sell: #1a1b1a;
+  --color-sell-fg: var(--color-fg);
   --color-neutral: oklch(66% 0 0);
   --color-neutral-fg: oklch(10% 0 0);
   --color-accent: oklch(97% 0 0);

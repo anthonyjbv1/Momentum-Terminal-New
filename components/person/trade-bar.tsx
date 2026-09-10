@@ -8,9 +8,9 @@ import { Button } from "@/components/ui/button";
 
 /**
  * Buy / Sell entry points. The trading flow itself is Phase 6e; until then a
- * tap acknowledges quietly and opens nothing. Buy and Sell are the only
- * coloured controls on the page, and they wear their colour as a label on a
- * deep fill (see --color-buy / --color-sell), not as a shout.
+ * tap acknowledges quietly and opens nothing. Buy is the light pill and Sell
+ * the dark one (see --color-buy / --color-sell): monochrome, like the rest of
+ * the interface; direction colour stays on the change figures.
  *
  *   TradeActions  inline, beside the score, from the md breakpoint up
  *   TradeBar      fixed above the tab bar on mobile
