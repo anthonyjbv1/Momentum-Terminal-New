@@ -5,9 +5,10 @@
  *
  * The values mirror the proven formulas of the previous platform:
  *   theta decay λ = 0.35/h, tier-weighted confidence-scaled news impact,
- *   tidal propagation with a brake, the open-interest ramp, the 1.5σ
- *   net-order-flow pre-emption weighted 0.25 (0.4× when unconfirmed) and the
- *   LMSR spread with liquidity parameter b = 5000.
+ *   tidal propagation with a brake, the open-interest ramp, the baseline-
+ *   relative net-order-flow force (1.0σ deadband, weighted 0.25, 0.4× when
+ *   unconfirmed, with a minimum-sample guard and an sd floor) and the LMSR
+ *   spread with liquidity parameter b = 5000.
  */
 
 export interface EngineConfig {
@@ -89,8 +90,39 @@ export interface EngineConfig {
      * and slower to adopt a new normal; shorter adapts faster.
      */
     baselineHours: number;
-    /** Only act when the current flow score is further than this many baseline standard deviations from the baseline mean. */
+    /**
+     * MINIMUM SAMPLE GUARD. Windows in the baseline that saw at least one
+     * trade. Below this count the force returns 0 and reports "insufficient
+     * baseline": on day one, and for a newly added person, the variance of a
+     * mostly-empty baseline is near zero and every trade would otherwise land
+     * far outside the band.
+     */
+    minPopulatedWindows: number;
+    /**
+     * STANDARD-DEVIATION FLOOR, in flow-score units (net flow as a fraction of
+     * max_allocation_cents per window). The baseline sd is never taken below
+     * this, so a quiet but non-zero period cannot produce a many-sigma reading
+     * from a small deviation.
+     */
+    sdFloor: number;
+    /**
+     * DEADBAND THRESHOLD, in baseline standard deviations. Inside the band the
+     * force reports the small in-band value; outside it the full deviation.
+     * TUNABLE.
+     */
     thresholdStdDevs: number;
+    /**
+     * IN-BAND SCALING. Inside the band the adjustment is deviation × weight ×
+     * this, so normal trading nudges rather than moves. TUNABLE.
+     */
+    inBandScale: number;
+    /**
+     * IN-BAND FLOOR, in score points. The smallest magnitude the force reports
+     * once a baseline exists and flow is off it (signed by the deviation), so
+     * the force reads alive during normal trading. 0.01 is the smallest
+     * non-zero force at the score's two decimals. TUNABLE.
+     */
+    inBandMinImpact: number;
     /**
      * SCALING FACTOR. adjustment = (flowScore − baselineMean) · weight, where
      * flowScore is net flow as a fraction of max_allocation_cents.
@@ -192,7 +224,11 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   tradingActivity: {
     windowSeconds: 60,
     baselineHours: 24,
-    thresholdStdDevs: 1.5,
+    minPopulatedWindows: 30,
+    sdFloor: 0.01,
+    thresholdStdDevs: 1.0,
+    inBandScale: 0.25,
+    inBandMinImpact: 0.01,
     weight: 0.25,
     unconfirmedDampening: 0.4,
     minConcentration: 0.15,

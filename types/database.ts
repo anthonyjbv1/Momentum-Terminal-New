@@ -443,21 +443,113 @@ export type Database = {
       }
       platform_settings: {
         Row: {
+          close_cooldown_seconds: number
           id: boolean
+          max_daily_close_cents: number
+          max_open_interest_share: number
+          max_units_per_person: number
+          price_tolerance_cents: number
           shorting_enabled: boolean
           updated_at: string
         }
         Insert: {
+          close_cooldown_seconds?: number
           id?: boolean
+          max_daily_close_cents?: number
+          max_open_interest_share?: number
+          max_units_per_person?: number
+          price_tolerance_cents?: number
           shorting_enabled?: boolean
           updated_at?: string
         }
         Update: {
+          close_cooldown_seconds?: number
           id?: boolean
+          max_daily_close_cents?: number
+          max_open_interest_share?: number
+          max_units_per_person?: number
+          price_tolerance_cents?: number
           shorting_enabled?: boolean
           updated_at?: string
         }
         Relationships: []
+      }
+      position_closes: {
+        Row: {
+          closed_at: string
+          cost_cents: number
+          direction: string
+          entry_price_cents: number
+          exit_price_cents: number
+          id: string
+          order_id: string
+          person_id: string
+          pnl_cents: number
+          position_id: string
+          proceeds_cents: number
+          units: number
+          user_id: string
+        }
+        Insert: {
+          closed_at?: string
+          cost_cents: number
+          direction: string
+          entry_price_cents: number
+          exit_price_cents: number
+          id?: string
+          order_id: string
+          person_id: string
+          pnl_cents: number
+          position_id: string
+          proceeds_cents: number
+          units: number
+          user_id: string
+        }
+        Update: {
+          closed_at?: string
+          cost_cents?: number
+          direction?: string
+          entry_price_cents?: number
+          exit_price_cents?: number
+          id?: string
+          order_id?: string
+          person_id?: string
+          pnl_cents?: number
+          position_id?: string
+          proceeds_cents?: number
+          units?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "position_closes_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "trade_orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "position_closes_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "position_closes_position_id_fkey"
+            columns: ["position_id"]
+            isOneToOne: false
+            referencedRelation: "positions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "position_closes_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       portfolio_history: {
         Row: {
@@ -492,43 +584,56 @@ export type Database = {
         Row: {
           amount_cents: number
           closed_at: string | null
-          cost_basis_cents: number
           direction: string
+          entry_price_cents: number
           entry_score: number
           id: string
           is_open: boolean
+          open_units: number
           opened_at: string
+          order_id: string | null
           person_id: string
-          shares: number
+          units: number
           user_id: string
         }
         Insert: {
           amount_cents: number
           closed_at?: string | null
-          cost_basis_cents: number
           direction: string
+          entry_price_cents: number
           entry_score: number
           id?: string
           is_open?: boolean
+          open_units: number
           opened_at?: string
+          order_id?: string | null
           person_id: string
-          shares: number
+          units: number
           user_id: string
         }
         Update: {
           amount_cents?: number
           closed_at?: string | null
-          cost_basis_cents?: number
           direction?: string
+          entry_price_cents?: number
           entry_score?: number
           id?: string
           is_open?: boolean
+          open_units?: number
           opened_at?: string
+          order_id?: string | null
           person_id?: string
-          shares?: number
+          units?: number
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "positions_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "trade_orders"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "positions_person_id_fkey"
             columns: ["person_id"]
@@ -769,11 +874,78 @@ export type Database = {
           },
         ]
       }
+      trade_orders: {
+        Row: {
+          balance_after_cents: number | null
+          closed_units: number
+          created_at: string
+          fill_price_cents: number
+          gross_cents: number
+          id: string
+          opened_units: number
+          person_id: string
+          quoted_price_cents: number | null
+          realized_pnl_cents: number
+          side: string
+          surface: string | null
+          units: number
+          user_id: string
+        }
+        Insert: {
+          balance_after_cents?: number | null
+          closed_units?: number
+          created_at?: string
+          fill_price_cents: number
+          gross_cents: number
+          id?: string
+          opened_units?: number
+          person_id: string
+          quoted_price_cents?: number | null
+          realized_pnl_cents?: number
+          side: string
+          surface?: string | null
+          units: number
+          user_id: string
+        }
+        Update: {
+          balance_after_cents?: number | null
+          closed_units?: number
+          created_at?: string
+          fill_price_cents?: number
+          gross_cents?: number
+          id?: string
+          opened_units?: number
+          person_id?: string
+          quoted_price_cents?: number | null
+          realized_pnl_cents?: number
+          side?: string
+          surface?: string | null
+          units?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trade_orders_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trade_orders_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       transactions: {
         Row: {
           amount_cents: number
           created_at: string
           id: string
+          order_id: string | null
           person_id: string | null
           type: string
           user_id: string
@@ -782,6 +954,7 @@ export type Database = {
           amount_cents: number
           created_at?: string
           id?: string
+          order_id?: string | null
           person_id?: string | null
           type: string
           user_id: string
@@ -790,11 +963,19 @@ export type Database = {
           amount_cents?: number
           created_at?: string
           id?: string
+          order_id?: string | null
           person_id?: string | null
           type?: string
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "transactions_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "trade_orders"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "transactions_person_id_fkey"
             columns: ["person_id"]
@@ -933,6 +1114,46 @@ export type Database = {
       record_narratives: {
         Args: { p_narratives: Json }
         Returns: number
+      }
+      cents_to_dollars_text: {
+        Args: { p_cents: number }
+        Returns: string
+      }
+      my_position: {
+        Args: { p_person_id: string }
+        Returns: Json
+      }
+      net_position_units: {
+        Args: { p_person_id: string; p_user_id: string }
+        Returns: number
+      }
+      place_order: {
+        Args: { p_person_id: string; p_side: string; p_units: number; p_quoted_price_cents?: number | null; p_surface?: string | null }
+        Returns: Json
+      }
+      points_to_cents: {
+        Args: { p_points: number }
+        Returns: number
+      }
+      position_summary_for: {
+        Args: { p_person_id: string; p_user_id: string }
+        Returns: Json
+      }
+      reset_paper_balance: {
+        Args: { p_user_id: string }
+        Returns: Json
+      }
+      starting_balance_cents: {
+        Args: Record<PropertyKey, never>
+        Returns: number
+      }
+      trade_quote: {
+        Args: { p_person_id: string }
+        Returns: Json
+      }
+      trade_rejection: {
+        Args: { p_code: string; p_message: string; p_quote: Json; p_extra?: Json }
+        Returns: Json
       }
       net_position_cents: {
         Args: { p_person_id: string; p_user_id: string }

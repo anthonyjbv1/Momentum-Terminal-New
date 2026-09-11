@@ -31,7 +31,13 @@ export const BEHAVIORAL_EVENT_TYPES = [
   "view_entry",
   "scroll_depth",
   "filter_change",
+  "open_trade_sheet",
+  "abandon_trade_sheet",
+  "reject_trade",
 ] as const;
+
+export const TRADE_SHEET_STEPS = ["compose", "confirm", "result"] as const;
+export type TradeSheetStep = (typeof TRADE_SHEET_STEPS)[number];
 
 export type BehavioralEventType = (typeof BEHAVIORAL_EVENT_TYPES)[number];
 
@@ -117,6 +123,21 @@ export const BEHAVIORAL_EVENT_DEFINITIONS: Record<BehavioralEventType, Behaviora
     description: "Changed a filter on a surface (e.g. the category filter on the Feed).",
     requiresPerson: false,
     metadata: "{ surface: string (non-empty), filter: string (non-empty), value: string (non-empty) }",
+  },
+  open_trade_sheet: {
+    description: "Opened the Buy / Sell sheet on a person.",
+    requiresPerson: true,
+    metadata: "{ side: 'BUY' | 'SELL', surface?: string }",
+  },
+  abandon_trade_sheet: {
+    description: "Closed the Buy / Sell sheet without trading. High-signal: intent that did not convert.",
+    requiresPerson: true,
+    metadata: "{ side: 'BUY' | 'SELL', step: 'compose' | 'confirm' | 'result', units?: integer >= 0, surface?: string }",
+  },
+  reject_trade: {
+    description: "An order the server refused: the price moved, or a limit was hit.",
+    requiresPerson: true,
+    metadata: "{ side: 'BUY' | 'SELL', code: string (non-empty, e.g. price_moved | daily_limit), units?: integer >= 0, surface?: string }",
   },
 };
 
@@ -361,7 +382,39 @@ const TYPE_CHECKS: Partial<Record<BehavioralEventType, TypeCheck>> = {
     }
     return { ok: true, metadata: { ...metadata, surface, filter, value } };
   },
+  open_trade_sheet: (metadata) => {
+    const side = normalizeSide(metadata?.side);
+    if (!side) return { ok: false, reason: "open_trade_sheet requires metadata.side (BUY | SELL)" };
+    return { ok: true, metadata: { ...metadata, side } };
+  },
+  abandon_trade_sheet: (metadata) => {
+    const side = normalizeSide(metadata?.side);
+    if (!side) return { ok: false, reason: "abandon_trade_sheet requires metadata.side (BUY | SELL)" };
+    const step = typeof metadata?.step === "string" ? metadata.step.trim().toLowerCase() : "";
+    if (!(TRADE_SHEET_STEPS as readonly string[]).includes(step)) {
+      return { ok: false, reason: `abandon_trade_sheet requires metadata.step (${TRADE_SHEET_STEPS.join(" | ")})` };
+    }
+    if (metadata?.units !== undefined && !isNonNegativeInteger(metadata.units)) {
+      return { ok: false, reason: "metadata.units must be an integer >= 0" };
+    }
+    return { ok: true, metadata: { ...metadata, side, step } };
+  },
+  reject_trade: (metadata) => {
+    const side = normalizeSide(metadata?.side);
+    if (!side) return { ok: false, reason: "reject_trade requires metadata.side (BUY | SELL)" };
+    const code = typeof metadata?.code === "string" ? metadata.code.trim().toLowerCase() : "";
+    if (!code) return { ok: false, reason: "reject_trade requires metadata.code (non-empty string)" };
+    if (metadata?.units !== undefined && !isNonNegativeInteger(metadata.units)) {
+      return { ok: false, reason: "metadata.units must be an integer >= 0" };
+    }
+    return { ok: true, metadata: { ...metadata, side, code } };
+  },
 };
+
+function normalizeSide(value: unknown): "BUY" | "SELL" | null {
+  const side = typeof value === "string" ? value.trim().toUpperCase() : "";
+  return side === "BUY" || side === "SELL" ? side : null;
+}
 
 /**
  * Validates one event from ANY source (a screen, the API route body, a server

@@ -13,7 +13,7 @@ const PERSON = "11111111-1111-4111-8111-111111111111";
 const SESSION = "22222222-2222-4222-8222-222222222222";
 
 describe("canonical event types", () => {
-  it("lists the fourteen documented types, each with a definition", () => {
+  it("lists the seventeen documented types, each with a definition", () => {
     expect([...BEHAVIORAL_EVENT_TYPES]).toEqual([
       "view_person",
       "time_spent",
@@ -29,6 +29,9 @@ describe("canonical event types", () => {
       "view_entry",
       "scroll_depth",
       "filter_change",
+      "open_trade_sheet",
+      "abandon_trade_sheet",
+      "reject_trade",
     ]);
     for (const type of BEHAVIORAL_EVENT_TYPES) {
       expect(BEHAVIORAL_EVENT_DEFINITIONS[type].description.length).toBeGreaterThan(0);

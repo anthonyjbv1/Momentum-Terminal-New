@@ -114,10 +114,62 @@ describe("Conviction", () => {
 describe("Trading Activity", () => {
   const base = { now: NOW, maxAllocationCents: 9_000_000, concentration: 0.5, confirmedBySignals: true, config: CONFIG.tradingActivity };
 
-  it("yields 0 with no trades", () => {
+  /** One Buy in each of the last `windows` one-minute windows, `cents` each (the current window can differ). */
+  const steadyBuys = (windows: number, cents: number, currentCents = cents): TradeEvent[] =>
+    Array.from({ length: windows }, (_, i) => ({
+      personId: "p",
+      side: "BUY" as const,
+      amountCents: i === 0 ? currentCents : cents,
+      createdAt: new Date(NOW.getTime() - i * 60_000 - 1_000),
+    }));
+
+  it("yields 0 with no trades, reporting an insufficient baseline", () => {
     const force = tradingActivityForce({ ...base, events: [] });
     expect(force.impact).toBe(0);
-    expect(force.details.reason).toBe("no variance in baseline");
+    expect(force.details.reason).toBe("insufficient baseline");
+    expect(force.details.populatedWindows).toBe(0);
+  });
+
+  it("MINIMUM-SAMPLE GUARD: below minPopulatedWindows even a huge burst reads 0", () => {
+    expect(CONFIG.tradingActivity.minPopulatedWindows).toBe(30);
+    const thin = steadyBuys(29, 90_000, 900_000);
+    const force = tradingActivityForce({ ...base, events: thin });
+    expect(force.impact).toBe(0);
+    expect(force.details.reason).toBe("insufficient baseline");
+    expect(force.details.populatedWindows).toBe(29);
+
+    const enough = tradingActivityForce({ ...base, events: steadyBuys(30, 90_000, 900_000) });
+    expect(enough.details.reason).toBeUndefined();
+    expect(enough.impact).toBeGreaterThan(0);
+  });
+
+  it("SD FLOOR: a quiet baseline never turns a small deviation into a many-sigma event", () => {
+    expect(CONFIG.tradingActivity.sdFloor).toBe(0.01);
+    // Thirty tiny identical trades: the raw sd is ~0, so without the floor a $90 blip would be "outside".
+    const quiet = steadyBuys(30, 1, 9_000);
+    const force = tradingActivityForce({ ...base, events: quiet });
+    expect(Number(force.details.baselineSd)).toBeLessThan(0.0001);
+    expect(force.details.sdApplied).toBe(0.01);
+    expect(force.details.band).toBe("inside");
+    expect(force.details.fired).toBe(false);
+  });
+
+  it("DEADBAND at 1.0σ: inside the band the force reads a small signed value, never idle", () => {
+    expect(CONFIG.tradingActivity.thresholdStdDevs).toBe(1.0);
+    expect(CONFIG.tradingActivity.inBandScale).toBe(0.25);
+    expect(CONFIG.tradingActivity.inBandMinImpact).toBe(0.01);
+    // Normal trading: every window buys $900, this one buys $950.
+    const normal = tradingActivityForce({ ...base, events: steadyBuys(1440, 90_000, 95_000) });
+    expect(normal.details.band).toBe("inside");
+    expect(normal.impact).toBe(0.01);
+    // A quiet minute on an active day reads alive too, on the other side.
+    const lull = tradingActivityForce({ ...base, events: steadyBuys(1440, 90_000, 0).filter((e) => e.amountCents > 0) });
+    expect(lull.details.band).toBe("inside");
+    expect(lull.impact).toBe(-0.01);
+    // Flow exactly at the baseline has no direction to report.
+    const flat = tradingActivityForce({ ...base, events: steadyBuys(1440, 90_000) });
+    expect(flat.impact).toBe(0);
+    expect(flat.details.reason).toBe("flow at baseline");
   });
 
   it("is gated below the concentration threshold", () => {
@@ -138,23 +190,21 @@ describe("Trading Activity", () => {
     expect(flows.reduce((s, v) => s + v, 0)).toBe(75);
   });
 
-  it("fires only beyond ±1.5σ of the baseline, weighted 0.25 and dampened when unconfirmed", () => {
-    const burst: TradeEvent[] = [{ personId: "p", side: "BUY", amountCents: 900_000, createdAt: new Date(NOW.getTime() - 5_000) }];
+  it("fires beyond 1.0σ of the baseline, weighted 0.25 and dampened when unconfirmed", () => {
+    // A day of $900 Buys every minute, then a $9,000 minute: flowScore 0.1 against a mean of 0.01.
+    const burst = steadyBuys(1440, 90_000, 900_000);
     const confirmed = tradingActivityForce({ ...base, events: burst });
+    expect(confirmed.details.band).toBe("outside");
     expect(confirmed.details.fired).toBe(true);
-    // flowScore = 900k / 9M = 0.1; the baseline mean is that one window over 1440, so the deviation is a hair under 0.1.
-    expect(confirmed.impact).toBeCloseTo(0.1 * 0.25, 3);
+    const deviation = Number(confirmed.details.deviation);
+    expect(deviation).toBeCloseTo(0.1 - Number(confirmed.details.baselineMean), 9);
+    expect(confirmed.impact).toBeCloseTo(deviation * 0.25, 9);
+    // Unconfirmed: dampened to 0.4×, but never below the in-band floor, the smallest magnitude the force reports.
     const unconfirmed = tradingActivityForce({ ...base, events: burst, confirmedBySignals: false });
-    expect(unconfirmed.impact).toBeCloseTo(0.1 * 0.25 * 0.4, 3);
+    expect(unconfirmed.impact).toBeCloseTo(Math.max(deviation * 0.25 * 0.4, CONFIG.tradingActivity.inBandMinImpact), 9);
 
     // Steady identical flow in every window is never an anomaly.
-    const steady: TradeEvent[] = Array.from({ length: 1440 }, (_, i) => ({
-      personId: "p",
-      side: "BUY",
-      amountCents: 1000,
-      createdAt: new Date(NOW.getTime() - i * 60_000 - 1_000),
-    }));
-    expect(tradingActivityForce({ ...base, events: steady }).impact).toBe(0);
+    expect(tradingActivityForce({ ...base, events: steadyBuys(1440, 1000) }).impact).toBe(0);
   });
 
   it("measures against the rolling baseline, so long-only flow is not a permanent lift", () => {
@@ -177,10 +227,12 @@ describe("Trading Activity", () => {
     expect(burst.impact).toBeLessThan(0.1 * 0.25);
     expect(burst.details.deviation).toBeCloseTo(0.1 - Number(burst.details.baselineMean), 6);
 
-    // A lull (no Buys in the current window while every other window had them) reads NEGATIVE even though flow never went below zero.
+    // A lull (no Buys in the current window while every other window had them) reads NEGATIVE even
+    // though flow never went below zero. Under the sd floor a $900 lull sits inside the band, so it is
+    // the small in-band value, still on the right side.
     const lull = tradingActivityForce({ ...base, events: inflow(true) });
-    expect(lull.details.fired).toBe(true);
-    expect(lull.impact).toBeLessThan(0);
+    expect(lull.details.band).toBe("inside");
+    expect(lull.impact).toBe(-0.01);
     expect(lull.details.netFlowCents).toBe(0);
   });
 

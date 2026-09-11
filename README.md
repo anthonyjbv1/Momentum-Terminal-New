@@ -2,7 +2,7 @@
 
 A social data terminal where users take **HIGH** or **LOW** positions on individual people. Each person has a continuously updating Momentum Score driven by their observable real-world data. Users profit when a score moves in their predicted direction; the platform is the sole counterparty. The scoring system is called **the Engine**; its five forces are **Gravity**, **Signals**, **Market Mood**, **Conviction** and **Trading Activity**.
 
-> **Status: Phase 6d+ (the Feed, and its correctness pass) complete.** On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation, the editorial-monochrome shell, the live Home board and the person profile page, **`/feed` is built**: the Engine's narratives and the signals it has yet to explain, across all sixteen people, newest first, in one narrator's voice, with a pinned treatment for unusually large moves, the category filter, bounded infinite scroll, and the densest behavioural logging on the platform (impressions, dwell, scroll depth, filter changes, tap-throughs). Ordering is chronological, with a unique tiebreaker on every ordering in the app, and a documented swap point for a future personalised ranker. Every narrative records the signals that produced it (`narrative_signals`), written by the Engine as it writes the sentence; nothing about evidence is inferred. Portfolio is still a styled placeholder; `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0, every chart is honestly empty, every STATE reads Stable, every force reads idle and the Feed is quiet, and says so. The trading flow and the recommendation layer are later phases.
+> **Status: Phase 6e (the trading flow) complete.** On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation, the editorial-monochrome shell, the live Home board and the person profile page, **`/feed` is built**: the Engine's narratives and the signals it has yet to explain, across all sixteen people, newest first, in one narrator's voice, with a pinned treatment for unusually large moves, the category filter, bounded infinite scroll, and the densest behavioural logging on the platform (impressions, dwell, scroll depth, filter changes, tap-throughs). Ordering is chronological, with a unique tiebreaker on every ordering in the app, and a documented swap point for a future personalised ranker. Every narrative records the signals that produced it (`narrative_signals`), written by the Engine as it writes the sentence; nothing about evidence is inferred. Portfolio is still a styled placeholder; `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0, every chart is honestly empty, every STATE reads Stable, every force reads idle and the Feed is quiet, and says so. **Trading is live, on paper**: Buy opens a HIGH position at the server-read Buy quote, Sell closes it FIFO at the Sell quote, every amount is integer cents, and every order is one atomic RPC (`place_order()`) behind a tolerance band, the long-only gate and four inert risk levers. The portfolio page and the recommendation layer are later phases.
 
 ## Stack
 
@@ -145,6 +145,17 @@ lib/
     feed.ts                the Feed's server reads: a page of entries, the roster (service role)
     feed-model.ts          pure rules: the entry, the Engine's framing of a raw signal, HIGH_IMPACT_THRESHOLD and the pinned selection, filtering, paging
     ranking.ts             THE ORDERING SWAP POINT: chronological now, a personalised ranker plugs in here later
+  trading/
+    model.ts               Cents / Points branded types, POINT_CENTS, pointsToCents, the constants mirror, order / position / quote shapes, previews
+    direction.ts           the netting rule mirror of resolve_position_order() (6c+)
+    settings.ts            platform_settings: the gate, the tolerance band, the four risk levers (server)
+    server.ts              getMyPosition, getWalletBalanceCents, placeOrderAsUser: the RPCs as the signed-in user (server)
+    trading.db.test.ts     the trading SQL against PGlite: money types, tolerance, FIFO, basis, gate both ways, levers, atomicity, rounding
+    trading.concurrency.test.ts  concurrent orders on a real multi-connection server
+  __tests__/
+    migrations.ts          the migrations in order + the Supabase stubs every database harness shares
+    pglite.ts              Postgres in WebAssembly, one session, fast
+    postgres.ts            embedded-postgres: a real server on a free port, for concurrency
 proxy.ts                   Next.js proxy (formerly middleware)
 vercel.json                cron schedule: /api/engine/cron every minute
 supabase/migrations/       SQL migrations (applied in order)
@@ -173,6 +184,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260909010607_person_profile_reads.sql`  | `person_score_series()` (one person's history since a point in time, downsampled by time into bounded slices with open / close / tick count) for the profile chart |
 | `20260910172052_position_direction_gating.sql` | `platform_settings` (one row, `shorting_enabled` default false), `shorting_enabled()`, `net_position_cents()`, the pure `resolve_position_order()` netting rule, the service-role `assert_position_direction()` guard, and the `positions_enforce_direction` trigger |
 | `20260910181957_feed_reads.sql`            | `feed_entries()`: narratives and the signals no narrative explains, across all active people, newest first with keyset pagination on `(occurred_at, id)` (its tick-window evidence join was replaced in the next migration) |
+| `20260911200110_trading_flow.sql`          | `starting_balance_cents()` and the signup trigger on it; the tolerance band and four risk levers on `platform_settings`; `positions` become integer lots (`units`, `open_units`, `entry_price_cents`); `trade_orders`, `position_closes`, `transactions.order_id`; `net_position_units()`, `points_to_cents()`, `trade_quote()`, `position_summary_for()` / `my_position()`; **`place_order()`**; `reset_paper_balance()` |
 | `20260910191918_narrative_signals.sql`     | `narrative_signals` (narrative ↔ signal, many-to-many, `relation` direct / inverse_pair) with the `narrative_signals_enforce_person` integrity trigger, the service-role `record_narratives()` write path (sentence and links in one transaction), and `feed_entries()` rewritten to read evidence from the link only — no tick-window inference, no fallback |
 | `20260907153228_llm_memory_narratives.sql` | `person_memory` (+ 16 seeded profiles), `llm_usage`, `narratives`, with RLS                  |
 
@@ -187,20 +199,22 @@ All of these are applied to the `Momentum Terminal` Supabase project and recorde
 | `data_sources`        | Pluggable registry of external feeds (`is_active` switches a connector on)                    |
 | `person_data_sources` | Which sources feed which person, with the external identifier                                 |
 | `inverse_pairs`       | Unordered pairs whose scores move against each other (with `dampening`)                       |
-| `positions`           | A user's HIGH/LOW position on a person                                                        |
-| `transactions`        | Wallet ledger (`DEPOSIT`, `ALLOCATION`, `REDEMPTION`, `WITHDRAWAL`)                           |
+| `positions`           | A user's lots: `direction`, `units`, `open_units`, `entry_price_cents` (server snapshot), `amount_cents` = cost; FIFO closes reduce `open_units` |
+| `trade_orders`        | Every accepted order: side, units, the price it filled at, how it split into units opened / closed, realized P&L, balance after |
+| `position_closes`     | Realized P&L, one row per lot touched by a close (FIFO), with the arithmetic enforced by check   |
+| `transactions`        | Wallet ledger (`DEPOSIT`, `ALLOCATION`, `REDEMPTION`, `WITHDRAWAL`), each with its `order_id`   |
 | `signals`             | Raw data points from connectors; the Engine writes `impact_score`, sentiment and `processed`  |
 | `source_snapshots`    | Last known value per person / source / metric, for delta detection                            |
 | `score_history`       | One row per person per tick (`tick_number`, `score`)                                          |
 | `engine_ticks`        | One row per Engine tick: timing, counts, market mood, summary                                 |
 | `score_events`        | Per-force audit trail (`force`, `impact`, `details`); zero-impact entries are never written   |
-| `trade_events`        | Live Buy/Sell tape read by Trading Activity; written by the trading flow of a later phase     |
+| `trade_events`        | Live Buy/Sell tape read by Trading Activity; one row per filled order, notional in cents      |
 | `person_memory`       | Per-person profile, baseline patterns and rolling recent context used by the LLM scorer       |
 | `llm_usage`           | One row per LLM call: provider, model, task, input/output/cache tokens, latency, person, tick  |
 | `narratives`          | The Engine's one-sentence explanation of a meaningful move (`source` = llm or template)       |
 | `portfolio_history`   | Portfolio value time series per user                                                          |
 | `behavioral_events`   | Append-only interaction log with `session_id`; canonical `event_type` list lives in code       |
-| `platform_settings`   | One row of platform-wide switches: `shorting_enabled` (default false). Service-role write only |
+| `platform_settings`   | One row of platform-wide switches and tunables: `shorting_enabled` (default false), `price_tolerance_cents`, the four risk levers. Service-role write only |
 
 ### Row level security
 
@@ -209,7 +223,7 @@ RLS is enabled on every table. The `anon` role has no policies anywhere.
 | Tables                                                                                                                                              | Authenticated users                                                          | Service role       |
 | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------ |
 | `users`                                                                                                                                             | read own row; update own `username`, `display_name`, `avatar_url` only       | full               |
-| `positions`, `transactions`, `portfolio_history`                                                                                                    | read own rows only                                                           | full (only writer) |
+| `positions`, `transactions`, `portfolio_history`, `trade_orders`, `position_closes`                                                                | read own rows only                                                           | full (only writer) |
 | `trade_events`                                                                                                                                      | read own rows only                                                           | full (only writer) |
 | `behavioral_events`                                                                                                                                 | read own; insert own (`user_id, event_type, person_id, metadata, session_id` only); no update/delete | full               |
 | `people`, `data_sources`, `person_data_sources`, `inverse_pairs`, `score_history`, `signals`, `source_snapshots`, `engine_ticks`, `score_events`, `person_memory`, `narratives` | read all                                                | full (only writer) |
@@ -223,7 +237,7 @@ Clients never write money. Every write to `positions`, `transactions`, `portfoli
 1. **Trusted server code** using the service-role client (`lib/supabase-admin.ts`): the Engine tick, cron jobs, admin tooling.
 2. **A `SECURITY DEFINER` function (RPC)** that runs with an empty `search_path`, derives the actor from `auth.uid()`, validates every input, performs all related writes in one transaction, and is granted to `authenticated` explicitly.
 
-`placeholder_financial_mutation(p_amount_cents)` is the template for the trading RPCs of later phases. `apply_engine_tick(jsonb)` is the Engine's own atomic write path and is executable by the service role only.
+`place_order(...)` (Phase 6e) is the trading RPC built on that template: granted to `authenticated`, actor from `auth.uid()`, every check before any write, one transaction. `reset_paper_balance(user)` and `position_summary_for(user, person)` are service-role only. `placeholder_financial_mutation(p_amount_cents)` remains as the documented shape. `apply_engine_tick(jsonb)` is the Engine's own atomic write path and is executable by the service role only.
 
 ## Authentication
 
@@ -271,7 +285,7 @@ update public.data_sources set is_active = true where name = 'youtube';
 | **Signals**          | per signal: `baseImpact (1.5) · tier multiplier (T1 1.5, T2 1.0, T3 0.5, T4/5 0.3) · confidence · direction`; summed, capped at ±10 per tick | 0 |
 | **Market Mood**      | mood = platform-wide mean of this tick's Signals impacts; impact = `fraction (0.25) · sensitivity (1.0, per-slug overridable) · mood excluding the person's own signals`, mood clamped to ±2 and impact to ±0.5 (the brakes) | 0 |
 | **Conviction**       | concentration = open capital on the person / `max_allocation_cents`; 0–60 % → 0, 60–85 % → +0.05…+0.15, > 85 % → −0.05…−0.15, capped at −0.30 | 0 (no positions) |
-| **Trading Activity** | flow score = net Buy−Sell flow in the last 60 s / `max_allocation_cents` (clamped ±1); **baseline** = the same score for every 60 s window over the trailing **24 h** (`baselineHours`); deviation = flow score − baseline mean; fires only when \|deviation\| > 1.5 σ of the baseline; adjustment = deviation · 0.25 (`weight`), × 0.4 when no signal confirms the move, capped ±0.30, skipped below 15 % concentration. Baseline-relative so that long-only flow (which can only be ≥ 0) is not a permanent lift: steady inflow is the baseline, a burst above it lifts, a lull below it lowers. Unchanged when shorting is enabled. | 0 (no trades) |
+| **Trading Activity** | flow score = net Buy−Sell flow in the last 60 s / `max_allocation_cents` (clamped ±1); **baseline** = the same score for every 60 s window over the trailing **24 h** (`baselineHours`); deviation = flow score − baseline mean; a deadband at **1.0 σ** (`thresholdStdDevs`) of the baseline sd, which is floored at **0.01** (`sdFloor`); outside the band adjustment = deviation · 0.25 (`weight`), inside it deviation · 0.25 · 0.25 (`inBandScale`) but never smaller in magnitude than **0.01** (`inBandMinImpact`, signed by the deviation, so normal trading reads alive rather than idle); × 0.4 when no signal confirms the move, capped ±0.30, skipped below 15 % concentration, and **0 with "insufficient baseline" until 30 windows** (`minPopulatedWindows`) in the trailing day have seen a trade. Baseline-relative so that long-only flow (which can only be ≥ 0) is not a permanent lift: steady inflow is the baseline, a burst above it lifts, a lull below it lowers. Unchanged when shorting is enabled. | 0 (no trades) |
 
 `newScore = clamp(score + Σ forces, 35, 100)`.
 
@@ -444,8 +458,8 @@ The collection layer for a future recommendation algorithm ("For You"). It recor
 | `view_person`     | required   | `{ source?: string }` (feed, search, swipe, profile_link, …)            |
 | `time_spent`      | required   | `{ duration_ms: number, surface?: string }` (coalesced client-side)     |
 | `expand_signal`   | required   | `{ signal_id?: uuid, headline?: string }`                               |
-| `take_position`   | required   | `{ direction: "HIGH" \| "LOW", amount_cents: integer, position_id?: uuid }` |
-| `close_position`  | required   | `{ position_id?: uuid, direction?, amount_cents?, pnl_cents? }`         |
+| `take_position`   | required   | `{ direction: "HIGH" \| "LOW", amount_cents: integer, position_id?: uuid, units?, price_cents?, order_id?, surface? }` (server-side, on a fill that opened units) |
+| `close_position`  | required   | `{ position_id?: uuid, direction?, amount_cents?, pnl_cents?, units?, price_cents?, order_id?, surface? }` (server-side, on a fill that closed units) |
 | `follow_person`   | required   | `{}`                                                                    |
 | `unfollow_person` | required   | `{}`                                                                    |
 | `search`          | optional   | `{ query: string, result_count?: integer }`                             |
@@ -455,6 +469,9 @@ The collection layer for a future recommendation algorithm ("For You"). It recor
 | `view_entry`      | required   | `{ entry_id: string, kind: "narrative" \| "signal", feed?: string, position?: integer, pinned?: boolean }` (a feed entry came into view) |
 | `scroll_depth`    | optional   | `{ feed: string, depth_pct: integer 0..100, entries_seen?: integer }` (logged at 25 / 50 / 75 / 100 % and on leaving) |
 | `filter_change`   | optional   | `{ surface: string, filter: string, value: string }`                    |
+| `open_trade_sheet` | required  | `{ side: "BUY" \| "SELL", surface?: string }`                           |
+| `abandon_trade_sheet` | required | `{ side, step: "compose" \| "confirm" \| "result", units?: integer, surface? }` (closed without a fill) |
+| `reject_trade`    | required   | `{ side, code: string, units?: integer, surface? }` (the server refused: price moved, a limit hit, …) |
 
 `validateBehavioralEvent()` enforces all of this (and normalises: uppercase direction, trimmed query, lowercase swipe action, range and entry kind, rounded and clamped duration). All money is integer cents, as everywhere else. `time_spent` events are coalesced client-side per person, surface and `entry_id`, so two feed entries about the same person keep separate dwells.
 
@@ -626,7 +643,7 @@ Enforcement is server-side, twice over:
 - `assert_position_direction(user, person, side, cents)` is the service-role guard the trading flow's order RPC (Phase 6e) calls first, inside its transaction; it returns the exact split to apply (cents closed, cents opened, direction, net after).
 - `positions_enforce_direction` is an AFTER trigger on `positions`: any change that leaves a user net short on a person while the flag is false is rejected, whatever wrote the row.
 
-`net_position_cents(user, person)` (open HIGH cents minus open LOW cents) is the measure both use. The interface reflects the setting through `getPlatformSettings()`: under the gate the Sell control explains that it closes a position. No trading flow is built yet; this is the constraint and the guard, ready for it.
+`net_position_units()` and `net_position_cents()` (open HIGH minus open LOW, in units and at entry prices) are the measures. The interface reflects the setting through `getPlatformSettings()`: under the gate the Sell control reads *Nothing to close* when nothing is held. The trading flow (Phase 6e, below) runs the same netting in units inside `place_order()`, and its tests exercise both flag states.
 
 ## The Feed (Phase 6d)
 
@@ -668,6 +685,82 @@ Impressions and dwell come from one IntersectionObserver over the stream; everyt
 
 With the Engine dormant the Feed is empty, and that is the state it ships in: *Quiet across the board.*, a line on what will land here, and the roster of the sixteen people being tracked as small monograms, each a link to its profile. Nothing is synthesised.
 
+## The trading flow (Phase 6e)
+
+A user opens a position on a person (Buy), holds it while the Engine ticks, and closes it (Sell). Paper money only: no payment rail, no withdrawal path. This is the phase that can fail invisibly, so correctness outranks polish: everything financial lives in the database on the Phase 2 write path, and the client never supplies a price, a balance or a P&L.
+
+### Money and units
+
+Every monetary amount is an **integer number of cents** in a `bigint` column, and every arithmetic step is integer. `lib/trading/trading.db.test.ts` fails if any `*_cents` or units column is not `bigint`, or if any column in the schema is `real`, `double precision` or `money`. In TypeScript, `Cents` and `Points` are branded numbers (`lib/trading/model.ts`): a score cannot be added to a balance by accident.
+
+One score point is one dollar (`POINT_CENTS` = 100). A quote in points becomes a price in cents exactly once, when the server reads it, through `points_to_cents()`: round to the nearest cent, half away from zero. Scores and spreads are persisted at two decimals, so in practice that rounding is exact. From there on:
+
+| Quantity | Rule |
+| --- | --- |
+| cost | `units × entry_price_cents` |
+| realized P&L | `(exit_cents − entry_cents) × units` for HIGH, `(entry_cents − exit_cents) × units` for LOW |
+| proceeds | capital returned + P&L, never below zero (paper: a LOW loss is capped at its collateral) |
+| weighted-average entry | `round(cost / units)`, display only |
+
+No other rounding exists, so no cent is ever created or lost; `position_closes_pnl_is_fifo` enforces the P&L arithmetic on every close row. The schema and the RPCs say **`units`**; the interface says **shares**. The asymmetry is deliberate: it is the seam that lets the user-facing word change without a migration.
+
+### Quote and execution
+
+`place_order(person, side, units, quoted_price_cents, surface)` is the one order path (`POST /api/trade/order` calls it as the signed-in user). Inside its transaction it locks the caller's wallet row `FOR UPDATE` first, so one user's orders run one after another and can never double-spend, then the person row, so no tick can move the quote under the order; reads the Buy quote (score + spread) or the Sell quote (score − spread) in cents and snapshots it on the lot; and only then checks and writes.
+
+**The tolerance band.** The client may send the price it displayed. If the server's quote differs from it by more than `platform_settings.price_tolerance_cents` (**10¢ per share**, i.e. 0.10 points) the order is refused with code `price_moved` and the new quote, never filled at the stale price. Inside the band the order fills at the *server's* price.
+
+**The 30-second boundary.** A sheet open across a tick is the expected case. The sheet's price is the page's live quote: in the compose step the figures update and the price flashes once; in the confirm step the button always carries the price it will send, and if the quote moves off the one the user reviewed, a notice names both prices and the button re-arms as *Confirm at the new price*. Nothing is sent that the user has not just seen; the server's tolerance check is the backstop, and a `price_moved` refusal lands in the sheet as a re-confirm step.
+
+**Atomicity.** Every check (gate, levers, balance) runs before any write, and a refusal is a returned value with a `code`, a sentence and the current quote. Once writing starts, order, closes, lot, ledger rows, tape row and balance land together or not at all; `users_wallet_balance_nonneg` is the last line under any caller. `lib/trading/trading.concurrency.test.ts` proves it on a real multi-connection server: two simultaneous Buys that together exceed the balance produce exactly one fill; ten simultaneous Buys spend the balance exactly once; two simultaneous Sells of a whole position close it exactly once.
+
+### Closing, lots and P&L
+
+`positions` rows are **lots**: `units`, `open_units`, `entry_price_cents` (the snapshot), `direction`. A Sell closes lots **FIFO**, oldest first, partially where the order runs out, writing one `position_closes` row per lot touched with its realized P&L; a lot is closed when `open_units` reaches zero. The interface shows the **weighted-average entry** on a position (`position_summary_for()` / `my_position()`), a different number for a different job; both are computed server-side. Every order is a `trade_orders` row (what was asked, what it filled at, how it split into units opened and closed), every fill writes a `trade_events` row for the Trading Activity force, and every cash movement is a `transactions` row (`ALLOCATION` on open, `REDEMPTION` on close), so balance always equals the ledger.
+
+The spread is visible on both sides: the sheet shows the Buy and Sell quotes together and says that the gap between them is the platform's spread; the position card marks a HIGH position at the Sell quote.
+
+### The gate, in a real flow
+
+Buy opens or increases a HIGH position; Sell closes or reduces it; a Sell beyond the open position is refused with `exceeds_position` and the most it could close. When nothing is held, Sell sits back as a quiet outline reading *Nothing to close*, not as Buy's equal. The full two-sided path is underneath: with `shorting_enabled` true the same Sell closes the HIGH lots and opens LOW with the rest, and a Buy closes LOW first; the tests flip the flag both ways.
+
+### Risk levers (installed, not calibrated)
+
+Four tunables on `platform_settings`, each enforced in `place_order()` with its own refusal code and sentence, each shipped permissive so that none binds during beta. Calibration waits for real flow.
+
+| Lever | Column | Ships as | Refusal |
+| --- | --- | --- | --- |
+| Max units per user per person | `max_units_per_person` | 100,000 | `max_units` |
+| Max share of a person's open interest held by one user | `max_open_interest_share` | 1.0 (never binds) | `open_interest` |
+| Max close value per user per trailing day | `max_daily_close_cents` | $1,000,000 | `daily_limit` |
+| Cooldown before a lot may be closed (round-trip guard) | `close_cooldown_seconds` | 5 s | `cooldown` |
+
+`lib/trading/trading.db.test.ts` tightens each one and shows it refusing at the boundary.
+
+### Paper balance
+
+Every new user starts with **`starting_balance_cents()` = 100,000** ($1,000.00), granted by the signup trigger through the ledger. `reset_paper_balance(user)` returns a balance to that figure, service-role only, refusing while any lot is open; a user can never reset themselves, because a self-serve reset teaches that losses do not matter and destroys the behavioural signal. The balance sits in the banner as *Paper $1,000.00* and every monetary figure in the flow is labelled paper.
+
+### The sheet
+
+The Buy / Sell controls on the profile open a sheet (a bottom sheet on a phone): both quotes, a share input with presets and *Max* / *All*, cost or proceeds, estimated realized P&L on a Sell, the paper balance after, the position after; then a confirm step that states the exact price being accepted; then the result. Refusals are specific: `price_moved` offers the new quote to review, `insufficient_balance` and `exceeds_position` offer the most the order could be, the rest say what was hit. On a fill the balance, the position card and the banner chip update without a reload.
+
+### Behavioural logging
+
+| Event | When |
+| --- | --- |
+| `open_trade_sheet` | the sheet opens (`{ side, surface }`) |
+| `abandon_trade_sheet` | the sheet closes without a fill (`{ side, step, units, surface }`) — high-signal |
+| `take_position` | server-side, on units opened (`{ direction, amount_cents, units, price_cents, position_id, order_id, surface }`) |
+| `close_position` | server-side, on units closed (`{ direction, amount_cents, units, price_cents, pnl_cents, order_id, surface }`) |
+| `reject_trade` | server-side, on any refusal (`{ side, code, units, surface }`) |
+
+The three additions are format-only; no migration. Server events are written after the response, fire-and-forget: they never block or fail a financial write.
+
+### Testing against real Postgres
+
+Two harnesses under `lib/__tests__`: `pglite.ts` (Postgres in WebAssembly, one session, fast) runs the migrations verbatim for everything single-session; `postgres.ts` (embedded-postgres, a real server on a free port, many connections) runs them for the concurrent-order tests. Both share `migrations.ts`, which stubs only what Supabase itself provides (the `auth` schema, the platform roles).
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -683,4 +776,6 @@ With the Engine dormant the Feed is empty, and that is the state it ships in: *Q
 - **Phase 6d**: the Feed: `feed_entries()`, the entry in one Engine voice with the raw-signal framing, the pinned high-impact treatment behind `HIGH_IMPACT_THRESHOLD`, the category filter, bounded keyset infinite scroll, the chronological ranker with its swap point, the empty state, the board glance in the rail, and the `view_entry` / `scroll_depth` / `filter_change` events.
 - **Phase 6d+**: the Feed correctness pass: `narrative_signals`, written by the Engine at generation time through `record_narratives()` and read by `feed_entries()` with the tick-window inference removed outright; `HIGH_IMPACT_THRESHOLD` lowered to 1.25 as a starting value; the Feed's vocabulary settled; a unique tiebreaker on every ordering, app-wide; and the in-process Postgres test harness (`lib/__tests__/pglite.ts`) that runs the migrations verbatim so SQL is tested as SQL.
 
-Deliberately not built yet: the trading flow (which will write `positions`, `transactions` and `trade_events` through RPCs), the portfolio and profile screens, search results, and the recommendation algorithm (For You). The heartbeat is wired but switched off.
+- **Phase 6e**: the trading flow: integer-cent lots with a server-snapshotted entry price, `place_order()` (wallet lock, server-read quote, 10¢ tolerance band, unit netting through the gate, four risk levers, FIFO closes with per-lot realized P&L, one transaction), `trade_orders` and `position_closes`, `my_position()` with the weighted-average basis, `reset_paper_balance()` (service role only), the trade sheet with its tick-boundary re-arm, the position card, the paper balance in the banner, three trade events, the Trading Activity guards (minimum sample, sd floor, 1.0 σ deadband with an in-band value), and the real-server concurrency tests.
+
+Deliberately not built yet: the portfolio and profile screens, search results, and the recommendation algorithm (For You). Shorting stays switched off; the risk levers stay inert; the heartbeat is wired but switched off.

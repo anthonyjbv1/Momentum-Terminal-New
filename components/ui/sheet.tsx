@@ -67,8 +67,8 @@ export function Sheet({ open, onClose, title, description, children, size = "md"
         tabIndex={-1}
         className={cn(
           "absolute z-(--z-sheet) flex max-h-full flex-col bg-surface-overlay shadow-overlay focus-visible:outline-none",
-          // mobile: bottom sheet
-          "inset-x-0 bottom-0 rounded-t-3xl pb-safe animate-slide-up",
+          // mobile: bottom sheet, clearing the tab bar (which stays above it) and the home indicator
+          "inset-x-0 bottom-0 rounded-t-3xl pb-tabbar-safe md:pb-0 animate-slide-up",
           // desktop: centred dialog
           "sm:inset-auto sm:left-1/2 sm:top-20 sm:w-full sm:-translate-x-1/2 sm:rounded-3xl sm:animate-rise-in",
           size === "lg" ? "sm:max-w-2xl" : "sm:max-w-lg",

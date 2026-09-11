@@ -12,11 +12,29 @@ import type { ForceEntry, TradeEvent } from "@/lib/engine/types";
  *                      included): its mean is what "normal flow" means for
  *                      this person right now, its sd is how noisy that is
  *   deviation        = flowScore - baselineMean
- *   fires only when   |deviation| > thresholdStdDevs * baselineSd
- *   adjustment       = deviation * weight
+ *   band             = |deviation| <= thresholdStdDevs × sd  → inside, else outside
+ *   adjustment       outside: deviation × weight
+ *                    inside:  deviation × weight × inBandScale, but never
+ *                             smaller in magnitude than inBandMinImpact, so
+ *                             the force reads alive during normal trading
  *                      × unconfirmedDampening when no signal backed the move this tick
  *                      clamped to ±maxAbsImpact
  *   gate             = skipped entirely below minConcentration of open capital
+ *
+ * Three guards (Phase 6e, carried from 6c+):
+ *   MINIMUM SAMPLE   fewer than minPopulatedWindows windows with any trade in
+ *                    the baseline → the force returns 0 and reports
+ *                    "insufficient baseline". On day one, and for a newly
+ *                    added person, variance is near zero and every trade
+ *                    would otherwise land far outside the band.
+ *   SD FLOOR         the standard deviation is floored at sdFloor, so a quiet
+ *                    but non-zero baseline cannot turn a small deviation into
+ *                    a many-sigma event.
+ *   DEADBAND         at 1.0σ most trading is "inside"; the in-band value is
+ *                    small and signed by the deviation, so the profile row
+ *                    reads alive rather than idle. Over a baseline window the
+ *                    deviations sum to zero, so the in-band value carries no
+ *                    drift.
  *
  * Measuring against the rolling baseline rather than against zero is what
  * keeps the force honest under long-only trading, where flow can only be
@@ -24,8 +42,6 @@ import type { ForceEntry, TradeEvent } from "@/lib/engine/types";
  * burst above it lifts the score, a lull below it lowers the score. The same
  * arithmetic holds when shorting is enabled and flow can go negative, so
  * nothing here changes with the gate.
- *
- * With no trades the baseline is all zeros, sd = 0 and the force is 0.
  */
 
 function signedCents(event: TradeEvent): number {
@@ -34,9 +50,15 @@ function signedCents(event: TradeEvent): number {
 
 /** Net flow per fixed window over the baseline, oldest first, zeros included. The last window is the current one. */
 export function windowedNetFlows(events: TradeEvent[], now: Date, config: EngineConfig["tradingActivity"]): number[] {
+  return windowed(events, now, config).flows;
+}
+
+/** Both the net flow and the trade count per window. */
+export function windowed(events: TradeEvent[], now: Date, config: EngineConfig["tradingActivity"]): { flows: number[]; counts: number[] } {
   const windowMs = config.windowSeconds * 1000;
   const windows = Math.max(1, Math.round((config.baselineHours * 3600 * 1000) / windowMs));
   const flows = new Array<number>(windows).fill(0);
+  const counts = new Array<number>(windows).fill(0);
   const end = now.getTime();
   const start = end - windows * windowMs;
   for (const event of events) {
@@ -44,9 +66,13 @@ export function windowedNetFlows(events: TradeEvent[], now: Date, config: Engine
     if (t < start || t > end) continue;
     const index = Math.min(windows - 1, Math.floor((t - start) / windowMs));
     flows[index] += signedCents(event);
+    counts[index] += 1;
   }
-  return flows;
+  return { flows, counts };
 }
+
+/** Deviations this close to zero are "at baseline": no direction to report. */
+const AT_BASELINE_EPSILON = 1e-9;
 
 export function tradingActivityForce(input: {
   events: TradeEvent[];
@@ -72,32 +98,46 @@ export function tradingActivityForce(input: {
     .reduce((sum, e) => sum + signedCents(e), 0);
   const flowScore = toScore(netFlowCents);
 
-  const baseline = windowedNetFlows(events, now, config).map(toScore);
+  const { flows, counts } = windowed(events, now, config);
+  const baseline = flows.map(toScore);
+  const populatedWindows = counts.filter((count) => count > 0).length;
   const baselineMean = mean(baseline);
   const baselineSd = standardDeviation(baseline);
+  const sdApplied = Math.max(baselineSd, config.sdFloor);
   const deviation = flowScore - baselineMean;
 
   const details = {
     netFlowCents,
     flowScore,
     baselineHours: config.baselineHours,
+    populatedWindows,
+    minPopulatedWindows: config.minPopulatedWindows,
     baselineMean,
     baselineSd,
+    sdFloor: config.sdFloor,
+    sdApplied,
     deviation,
     threshold: config.thresholdStdDevs,
     weight: config.weight,
+    inBandScale: config.inBandScale,
+    inBandMinImpact: config.inBandMinImpact,
     confirmedBySignals,
   };
 
-  if (baselineSd === 0) {
-    return { ...base, impact: 0, details: { ...details, reason: "no variance in baseline" } };
+  // MINIMUM SAMPLE: without enough trading history there is no baseline to deviate from.
+  if (populatedWindows < config.minPopulatedWindows) {
+    return { ...base, impact: 0, details: { ...details, reason: "insufficient baseline" } };
   }
 
-  if (Math.abs(deviation) <= config.thresholdStdDevs * baselineSd) {
-    return { ...base, impact: 0, details: { ...details, reason: "within threshold" } };
+  if (Math.abs(deviation) < AT_BASELINE_EPSILON) {
+    return { ...base, impact: 0, details: { ...details, band: "inside", reason: "flow at baseline" } };
   }
 
   const dampening = confirmedBySignals ? 1 : config.unconfirmedDampening;
-  const impact = clamp(deviation * config.weight * dampening, -config.maxAbsImpact, config.maxAbsImpact);
-  return { ...base, impact, details: { ...details, dampening, fired: true } };
+  const inside = Math.abs(deviation) <= config.thresholdStdDevs * sdApplied;
+  const sign = deviation > 0 ? 1 : -1;
+  const magnitude = Math.abs(deviation) * config.weight * dampening * (inside ? config.inBandScale : 1);
+  const impact = sign * clamp(Math.max(magnitude, config.inBandMinImpact), 0, config.maxAbsImpact);
+
+  return { ...base, impact, details: { ...details, dampening, band: inside ? "inside" : "outside", fired: !inside } };
 }

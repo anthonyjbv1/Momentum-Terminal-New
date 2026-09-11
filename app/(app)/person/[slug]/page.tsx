@@ -4,6 +4,7 @@ import { Suspense } from "react";
 
 import { getCurrentUser } from "@/lib/auth";
 import { getPersonBySlug, getPersonProfile, getPersonSignals, getRenderedAt } from "@/lib/person/profile";
+import { getViewerTradingState } from "@/lib/trading/server";
 import { getPlatformSettings } from "@/lib/trading/settings";
 import { BackLink } from "@/components/person/back-link";
 import { Dossier } from "@/components/person/dossier";
@@ -61,11 +62,12 @@ export default async function PersonPage({ params }: { params: Params }) {
 
 /** Everything below the back link: the readings, streamed in once they are loaded. */
 async function ProfileBody({ slug, personId }: { slug: string; personId: string }) {
-  const [profile, signals, user, settings] = await Promise.all([
+  const [profile, signals, user, settings, viewer] = await Promise.all([
     getPersonProfile(slug),
     getPersonSignals(personId),
     getCurrentUser(),
     getPlatformSettings(),
+    getViewerTradingState(personId),
   ]);
   // The person was found a moment ago; only a deactivation in between lands here.
   if (!profile) notFound();
@@ -79,8 +81,15 @@ async function ProfileBody({ slug, personId }: { slug: string; personId: string 
 
       <Dossier person={profile.person} state={profile.state} conviction={profile.conviction} />
 
-      {/* Score, history, the live feed and both Buy / Sell placements (the mobile bar is fixed, so it lives here too). */}
-      <ScorePanel profile={profile} loggingEnabled={loggingEnabled} renderedAt={renderedAt} shortingEnabled={settings.shortingEnabled} />
+      {/* Score, history, the viewer's position, the trade sheet and both Buy / Sell placements (the mobile bar is fixed, so it lives here too). */}
+      <ScorePanel
+        profile={profile}
+        loggingEnabled={loggingEnabled}
+        renderedAt={renderedAt}
+        shortingEnabled={settings.shortingEnabled}
+        viewer={viewer}
+        toleranceCents={settings.priceToleranceCents}
+      />
 
       <ForcesPanel forces={profile.forces} latestTick={profile.latestTick} />
 
