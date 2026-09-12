@@ -60,36 +60,50 @@ export function gridValues(lo: number, hi: number): number[] {
   return values;
 }
 
-export interface ScoreDomain {
+export interface ValueDomain {
   lo: number;
   hi: number;
+  /** Whether the reference line (the gravity target, the paper credit) falls inside the domain. */
+  referenceInRange: boolean;
+}
+
+export interface ScoreDomain extends ValueDomain {
   gravityInRange: boolean;
 }
 
 /**
- * The vertical domain: the data's span, never narrower than Y_RANGE_FLOOR,
- * centred on the data, padded by Y_PADDING each side, and widened to take in
- * the gravity target when it lies within one span of the data.
+ * The vertical domain of any plotted value: the data's span, never narrower
+ * than `floor`, centred on the data, padded by Y_PADDING each side, and
+ * widened to take in the reference value when it lies within one span of
+ * the data. With no data the fallback domain is used.
  */
-export function scoreDomain(points: TimedScore[], revertTarget: number): ScoreDomain {
+export function valueDomain(points: TimedScore[], floor: number, reference: number | null, fallback: { lo: number; hi: number } = { lo: 0, hi: 100 }): ValueDomain {
   let dataMin = Infinity;
   let dataMax = -Infinity;
   for (const point of points) {
     if (point.score < dataMin) dataMin = point.score;
     if (point.score > dataMax) dataMax = point.score;
   }
-  if (!Number.isFinite(dataMin)) return { lo: 0, hi: 100, gravityInRange: revertTarget >= 0 && revertTarget <= 100 };
+  if (!Number.isFinite(dataMin)) {
+    return { ...fallback, referenceInRange: reference !== null && reference >= fallback.lo && reference <= fallback.hi };
+  }
 
-  const span = Math.max(dataMax - dataMin, Y_RANGE_FLOOR);
+  const span = Math.max(dataMax - dataMin, floor);
   const mid = (dataMax + dataMin) / 2;
   const pad = span * Y_PADDING;
   let lo = mid - span / 2 - pad;
   let hi = mid + span / 2 + pad;
-  if (revertTarget >= lo - span && revertTarget <= hi + span) {
-    lo = Math.min(lo, revertTarget - pad);
-    hi = Math.max(hi, revertTarget + pad);
+  if (reference !== null && reference >= lo - span && reference <= hi + span) {
+    lo = Math.min(lo, reference - pad);
+    hi = Math.max(hi, reference + pad);
   }
-  return { lo, hi, gravityInRange: revertTarget >= lo && revertTarget <= hi };
+  return { lo, hi, referenceInRange: reference !== null && reference >= lo && reference <= hi };
+}
+
+/** The score chart's domain: valueDomain with the Y_RANGE_FLOOR and the gravity target as the reference. */
+export function scoreDomain(points: TimedScore[], revertTarget: number): ScoreDomain {
+  const domain = valueDomain(points, Y_RANGE_FLOOR, revertTarget);
+  return { ...domain, gravityInRange: domain.referenceInRange };
 }
 
 export interface TimeDomain {

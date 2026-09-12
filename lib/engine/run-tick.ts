@@ -1,4 +1,4 @@
-import { DEFAULT_ENGINE_CONFIG } from "@/lib/engine/config";
+import { describeEngineOverrides, engineConfigFromEnv } from "@/lib/engine/config";
 import { createSupabaseMemoryStore } from "@/lib/engine/memory/store";
 import { createSupabaseNarrativeStore } from "@/lib/engine/narratives";
 import { runPostTick, type PostTickSummary } from "@/lib/engine/post-tick";
@@ -6,6 +6,7 @@ import { getSentimentScorer } from "@/lib/engine/sentiment";
 import { createSupabaseEngineStore } from "@/lib/engine/store";
 import { runEngineTick } from "@/lib/engine/tick";
 import type { TickSummary, TickTrigger } from "@/lib/engine/types";
+import { getEngineEnvOverrides } from "@/lib/env";
 import { routedComplete } from "@/lib/llm/routing";
 import { createSupabaseUsageLogger } from "@/lib/llm/usage";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
@@ -32,7 +33,12 @@ export async function runFullTick(options: FullTickOptions = {}): Promise<FullTi
   const admin = createSupabaseAdminClient();
   const scorer = getSentimentScorer();
 
-  const summary = await runEngineTick({ store: createSupabaseEngineStore(admin), scorer, dryRun, trigger });
+  // The defaults, with any deliberate override from the environment (the
+  // controlled test may lower the Trading Activity minimum-sample guard).
+  const config = engineConfigFromEnv(getEngineEnvOverrides());
+  for (const override of describeEngineOverrides(config)) console.info(`[engine] override: ${override}`);
+
+  const summary = await runEngineTick({ store: createSupabaseEngineStore(admin), scorer, dryRun, trigger, config });
 
   const postTick = dryRun
     ? null
@@ -41,7 +47,7 @@ export async function runFullTick(options: FullTickOptions = {}): Promise<FullTi
         memoryStore: createSupabaseMemoryStore(admin),
         usageLogger: createSupabaseUsageLogger(admin),
         complete: (request) => routedComplete(request),
-        config: DEFAULT_ENGINE_CONFIG,
+        config,
       });
 
   return { ...summary, scorer: scorer.name, postTick };

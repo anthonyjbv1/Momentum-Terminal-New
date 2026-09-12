@@ -1,3 +1,5 @@
+import { LIVE_TICK_MS } from "@/lib/person/live-series";
+
 import type { OrderSide, PositionDirection } from "./direction";
 
 /**
@@ -52,8 +54,26 @@ export function centsToPoints(value: Cents | number): Points {
 // Constants (mirrors of the migration's defaults; the database is the authority)
 // ---------------------------------------------------------------------------
 
-/** The paper balance every new user starts with: starting_balance_cents(). */
-export const STARTING_BALANCE_CENTS = cents(100_000);
+/**
+ * THE PAPER BALANCE every new user starts with: starting_balance_cents().
+ * $10,000. At POINT_CENTS = 100 one share at score 50 costs $50, so this is
+ * room for real positions in a dozen people rather than three or four (the
+ * 6e figure of $1,000 bought roughly nineteen shares in total, too coarse
+ * for a beta whose purpose is finding out whether a portfolio feels like
+ * anything). Raised in 6f; existing beta accounts were topped up through
+ * the ledger with credit_paper_balance(), not rewritten.
+ */
+export const STARTING_BALANCE_CENTS = cents(1_000_000);
+
+/**
+ * THE CLOSE COOLDOWN FLOOR, in seconds: one full Engine tick. The platform's
+ * regulatory positioning describes the close cooldown as preventing
+ * round-trip score influence (buy, let your own flow feed Trading Activity,
+ * sell into the move you helped create), so whatever value policy settles
+ * on, it must span at least one tick. Tests pin the shipped default above
+ * this.
+ */
+export const CLOSE_COOLDOWN_MIN_SECONDS = LIVE_TICK_MS / 1000;
 
 /**
  * The tolerance band, in cents per unit: a displayed price further than
@@ -74,8 +94,16 @@ export const RISK_LEVER_DEFAULTS = {
   maxOpenInterestShare: 1.0,
   /** Most close value one user may realise in a trailing 24 hours. */
   maxDailyCloseCents: cents(100_000_000),
-  /** A lot may not be closed until this long after it opened. */
-  closeCooldownSeconds: 5,
+  /**
+   * A lot may not be closed until this long after it opened. TUNABLE, with
+   * a floor: 60 s spans two ticks, so a buy cannot feed Trading Activity and
+   * be sold into the tick it helped move (5 s only blocked the within-tick
+   * round trip, which already loses the spread). The final value is a
+   * POLICY DECISION PENDING; it must never go below CLOSE_COOLDOWN_MIN_SECONDS
+   * (one full tick), which is what the platform's regulatory positioning
+   * relies on.
+   */
+  closeCooldownSeconds: 60,
 } as const;
 
 /** Most units one order may ask for from the interface (the server's own bound is the balance and the levers). */

@@ -34,6 +34,7 @@ export const BEHAVIORAL_EVENT_TYPES = [
   "open_trade_sheet",
   "abandon_trade_sheet",
   "reject_trade",
+  "view_portfolio",
 ] as const;
 
 export const TRADE_SHEET_STEPS = ["compose", "confirm", "result"] as const;
@@ -60,9 +61,9 @@ export const BEHAVIORAL_EVENT_DEFINITIONS: Record<BehavioralEventType, Behaviora
     metadata: "{ source?: string }  where the view came from: feed | search | swipe | profile_link | ...",
   },
   time_spent: {
-    description: "Dwell time on a person. Coalesced client-side before sending.",
-    requiresPerson: true,
-    metadata: "{ duration_ms: number (>= 0, integer), surface?: string }",
+    description: "Dwell time on a person, or on a surface with no single person (the portfolio). Coalesced client-side before sending.",
+    requiresPerson: false,
+    metadata: "{ duration_ms: number (>= 0, integer), surface?: string }  — personId or a non-empty surface is required",
   },
   expand_signal: {
     description: "Expanded a headline / signal on a person.",
@@ -138,6 +139,11 @@ export const BEHAVIORAL_EVENT_DEFINITIONS: Record<BehavioralEventType, Behaviora
     description: "An order the server refused: the price moved, or a limit was hit.",
     requiresPerson: true,
     metadata: "{ side: 'BUY' | 'SELL', code: string (non-empty, e.g. price_moved | daily_limit), units?: integer >= 0, surface?: string }",
+  },
+  view_portfolio: {
+    description: "Opened the portfolio.",
+    requiresPerson: false,
+    metadata: "{ positions?: integer >= 0, orders?: integer >= 0 }  what it showed on arrival",
   },
 };
 
@@ -409,6 +415,14 @@ const TYPE_CHECKS: Partial<Record<BehavioralEventType, TypeCheck>> = {
     }
     return { ok: true, metadata: { ...metadata, side, code } };
   },
+  view_portfolio: (metadata) => {
+    for (const key of ["positions", "orders"] as const) {
+      if (metadata?.[key] !== undefined && !isNonNegativeInteger(metadata[key])) {
+        return { ok: false, reason: `metadata.${key} must be an integer >= 0` };
+      }
+    }
+    return { ok: true, metadata };
+  },
 };
 
 function normalizeSide(value: unknown): "BUY" | "SELL" | null {
@@ -448,6 +462,14 @@ export function validateBehavioralEvent(input: unknown, defaults: { sessionId?: 
 
   const sanitized = sanitizeMetadata(input.metadata);
   if (!sanitized.ok) return sanitized;
+
+  // Dwell is about a person or about a surface; it has to name at least one.
+  if (eventType === "time_spent" && !personId) {
+    const surface = sanitized.metadata?.surface;
+    if (typeof surface !== "string" || surface.trim().length === 0) {
+      return { ok: false, reason: "time_spent requires personId or a non-empty metadata.surface" };
+    }
+  }
 
   const check = TYPE_CHECKS[eventType];
   const checked = check ? check(sanitized.metadata) : { ok: true as const, metadata: sanitized.metadata };

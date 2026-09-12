@@ -2,7 +2,7 @@
 
 A social data terminal where users take **HIGH** or **LOW** positions on individual people. Each person has a continuously updating Momentum Score driven by their observable real-world data. Users profit when a score moves in their predicted direction; the platform is the sole counterparty. The scoring system is called **the Engine**; its five forces are **Gravity**, **Signals**, **Market Mood**, **Conviction** and **Trading Activity**.
 
-> **Status: Phase 6e (the trading flow) complete.** On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation, the editorial-monochrome shell, the live Home board and the person profile page, **`/feed` is built**: the Engine's narratives and the signals it has yet to explain, across all sixteen people, newest first, in one narrator's voice, with a pinned treatment for unusually large moves, the category filter, bounded infinite scroll, and the densest behavioural logging on the platform (impressions, dwell, scroll depth, filter changes, tap-throughs). Ordering is chronological, with a unique tiebreaker on every ordering in the app, and a documented swap point for a future personalised ranker. Every narrative records the signals that produced it (`narrative_signals`), written by the Engine as it writes the sentence; nothing about evidence is inferred. Portfolio is still a styled placeholder; `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0, every chart is honestly empty, every STATE reads Stable, every force reads idle and the Feed is quiet, and says so. **Trading is live, on paper**: Buy opens a HIGH position at the server-read Buy quote, Sell closes it FIFO at the Sell quote, every amount is integer cents, and every order is one atomic RPC (`place_order()`) behind a tolerance band, the long-only gate and four inert risk levers. The portfolio page and the recommendation layer are later phases.
+> **Status: Phase 6f (the portfolio) complete.** On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation, the editorial-monochrome shell, the live Home board, the person profile page and the Feed, **trading is live, on paper**: Buy opens a HIGH position at the server-read Buy quote, Sell closes it FIFO at the Sell quote, every amount is integer cents, and every order is one atomic RPC (`place_order()`) behind a tolerance band, the long-only gate and four inert risk levers. **`/portfolio` closes the loop**: total value, cash, unrealized and realized P&L, every open position marked at the Sell quote with its weighted-average entry, a value line recorded at every tick and every trade, and the full trade history with a keyset cursor — all computed by the database in integer cents, never by the browser; a close on the portfolio routes into the same 6e trade sheet. The paper balance starts at $10,000 and the close cooldown is 60 s (one full tick and more; policy pending). `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0, every chart is honestly empty, every STATE reads Stable, every force reads idle, the Feed is quiet and the value line has only the points that orders record, and each surface says so. The profile screen, search results and the recommendation layer are later phases.
 
 ## Stack
 
@@ -50,6 +50,7 @@ All variables are listed in `.env.local.example`. `lib/env.ts` is the only place
 | `ENGINE_SECRET`                        | server only (Engine)         | Random string that authorises `/api/engine/tick` (and manual calls to `/api/engine/cron`). |
 | `SCORER`                               | server only (Engine)         | `llm` (default) or `rules` — the instant fallback to the Phase 3 keyword scorer.        |
 | `ENGINE_CRON_ENABLED`                  | server only (heartbeat)      | **The switch.** Only the exact string `true` lets `/api/engine/cron` tick; anything else (including unset) logs `skipped (disabled)` and returns. Default `false`. |
+| `ENGINE_TRADING_MIN_POPULATED_WINDOWS` | server only (Engine), optional | Controlled-test override of the Trading Activity minimum-sample guard (`minPopulatedWindows`, code default **30**, unchanged). A positive integer lowers it deliberately for a small beta; anything else is ignored. The tick logs an active override. |
 | `CRON_SECRET`                          | server only (heartbeat)      | Vercel's cron secret. Once set in the Vercel project, Vercel sends it as `Authorization: Bearer` on every scheduled call and the handler rejects anything else. |
 | `LLM_PROVIDER`                         | server only (LLM)            | `anthropic` (default), `openai`, `gemini` or `openai-compatible`. One variable swaps vendors. |
 | `LLM_MODEL`                            | server only (LLM)            | Model string for the active provider; empty = provider default (`claude-opus-5`).       |
@@ -70,9 +71,10 @@ app/
     (home)/                Home: the live board, with its route-level loading skeleton
     person/[slug]/         the person page (slug resolved in the shell for a real 404; sections stream behind a skeleton) + not-found
     feed/                  the Feed (page, loading skeleton); its rail is a glance at the board
-    portfolio/ profile/    placeholder pages
+    portfolio/             the portfolio (page, loading skeleton; signed in only); its rail is the board glance
+    profile/               placeholder page
     design/                living design-system reference
-    @rail/                 per-route desktop rail content (Home and person pages have one; the rest return null)
+    @rail/                 per-route desktop rail content (Home, person, Feed and portfolio pages have one; the rest return null)
     error.tsx              error boundary for every page in the shell
   (auth)/                  login + signup pages (inside a minimal banner layout) and their Server Actions
   auth/callback/route.ts   email confirmation / magic-link landing
@@ -83,14 +85,21 @@ app/
   api/engine/tick/route.ts Engine tick endpoint (ENGINE_SECRET, ?dryRun=1)
   api/engine/cron/route.ts the heartbeat: Vercel Cron target, gated by ENGINE_CRON_ENABLED
   api/behavioral/log/route.ts client-side behavioral logging (cookie auth, batched, RLS-scoped insert)
+  api/trade/order/route.ts the one way an order reaches place_order() (cookie auth)
+  api/portfolio/live/route.ts the portfolio's tick poll: the summary as computed now + new value points (cookie auth)
+  api/portfolio/history/route.ts the next page of the trade history, keyset cursor (cookie auth)
 components/
   ui/                      the primitives: Button, Card, Badge, Avatar, ScoreDisplay, DirectionIndicator,
-                           CountdownTimer, Skeleton*, Input/Field, Sheet, PageHeader, PhaseNotice
-  shell/                   AppShell, TopBanner, DesktopNav, BottomNav, RightRail, PulseIndicator, SearchButton, ProfileButton
+                           CountdownTimer, Skeleton*, Input/Field, Sheet, PageHeader, PhaseNotice, LocalTime
+  shell/                   AppShell, TopBanner (+ BalanceChip), DesktopNav, BottomNav, RightRail, PulseIndicator, SearchButton, ProfileButton
   home/                    PersonCard + PersonRow, Sparkline, CategoryFilter, PeopleBoard, FeedPreview, impression logging
   person/                  Dossier, ScorePanel (+ ScoreChart, RangeToggle), ForcesPanel, SignalsList, TradeBar / TradeActions, BackLink, profile logging
   feed/                    FeedStream, FeedEntry, FeedEmpty, BoardGlance (the rail), feed logging (impressions, dwell, scroll depth)
+  trade/                   TradeSheet (compose → confirm → result), PositionCard, Money
+  portfolio/               PortfolioView, SummaryStrip, ValueChart, PositionsList, TradeHistory, PortfolioEmpty, live poll + logging hooks
+  charts/live-line-chart.tsx THE live line: cadence-locked breath, tick reveal, reduced motion; ScoreChart and ValueChart are it with different rules
   engine/engine-clock.ts   shared 30-second Engine clock (useEngineClock)
+  engine/use-tick-polling.ts polling on the Engine's cadence, shared by the profile and the portfolio
   brand/momentum-mark.tsx  renders public/brand/momentum-mark.png (the brand asset, unmodified) + wordmark
   auth/                    LoginForm, SignupForm, SignOutButton, FormError
 docs/design-system.md      how to change the look; token, component and shell reference
@@ -152,6 +161,10 @@ lib/
     server.ts              getMyPosition, getWalletBalanceCents, placeOrderAsUser: the RPCs as the signed-in user (server)
     trading.db.test.ts     the trading SQL against PGlite: money types, tolerance, FIFO, basis, gate both ways, levers, atomicity, rounding
     trading.concurrency.test.ts  concurrent orders on a real multi-connection server
+  portfolio/
+    model.ts               the summary, position, history and value-series shapes; parsing only, no arithmetic; the chart floor; the page's three states
+    server.ts              getMyPortfolio, getMyValueSeries, getMyTradeHistory, getMyValuePointsAfter: the RPCs as the signed-in user (server)
+    portfolio.db.test.ts   the portfolio SQL against PGlite: reconciliation to the cent, realized from close records, the basis and rounding, recorded value history, keyset history across identical timestamps
   __tests__/
     migrations.ts          the migrations in order + the Supabase stubs every database harness shares
     pglite.ts              Postgres in WebAssembly, one session, fast
@@ -186,6 +199,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260910181957_feed_reads.sql`            | `feed_entries()`: narratives and the signals no narrative explains, across all active people, newest first with keyset pagination on `(occurred_at, id)` (its tick-window evidence join was replaced in the next migration) |
 | `20260911200110_trading_flow.sql`          | `starting_balance_cents()` and the signup trigger on it; the tolerance band and four risk levers on `platform_settings`; `positions` become integer lots (`units`, `open_units`, `entry_price_cents`); `trade_orders`, `position_closes`, `transactions.order_id`; `net_position_units()`, `points_to_cents()`, `trade_quote()`, `position_summary_for()` / `my_position()`; **`place_order()`**; `reset_paper_balance()` |
 | `20260910191918_narrative_signals.sql`     | `narrative_signals` (narrative ↔ signal, many-to-many, `relation` direct / inverse_pair) with the `narrative_signals_enforce_person` integrity trigger, the service-role `record_narratives()` write path (sentence and links in one transaction), and `feed_entries()` rewritten to read evidence from the link only — no tick-window inference, no fallback |
+| `20260912153309_portfolio.sql`             | Part 0: `close_cooldown_seconds` → 60 (policy floor: one full tick), `starting_balance_cents()` → 1,000,000, service-role `credit_paper_balance()`; `portfolio_history` gains `tick_number` / `order_id` and is written by `record_portfolio_snapshot()` (a trigger after every order) and `snapshot_portfolios()` (inside `apply_engine_tick()` at every tick); `portfolio_value_cents()`; **`portfolio_summary_for()` / `my_portfolio()`**, `portfolio_value_series_for()` / `my_portfolio_value_series()`, `trade_history_for()` / `my_trade_history()` (keyset on `(created_at, id)`) |
 | `20260907153228_llm_memory_narratives.sql` | `person_memory` (+ 16 seeded profiles), `llm_usage`, `narratives`, with RLS                  |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
@@ -212,7 +226,7 @@ All of these are applied to the `Momentum Terminal` Supabase project and recorde
 | `person_memory`       | Per-person profile, baseline patterns and rolling recent context used by the LLM scorer       |
 | `llm_usage`           | One row per LLM call: provider, model, task, input/output/cache tokens, latency, person, tick  |
 | `narratives`          | The Engine's one-sentence explanation of a meaningful move (`source` = llm or template)       |
-| `portfolio_history`   | Portfolio value time series per user                                                          |
+| `portfolio_history`   | Recorded total portfolio value per user (cash + open positions at their closing quotes), one row per tick for each user holding a position and one after each order, with the `tick_number` or `order_id` it came from. Never interpolated |
 | `behavioral_events`   | Append-only interaction log with `session_id`; canonical `event_type` list lives in code       |
 | `platform_settings`   | One row of platform-wide switches and tunables: `shorting_enabled` (default false), `price_tolerance_cents`, the four risk levers. Service-role write only |
 
@@ -237,11 +251,11 @@ Clients never write money. Every write to `positions`, `transactions`, `portfoli
 1. **Trusted server code** using the service-role client (`lib/supabase-admin.ts`): the Engine tick, cron jobs, admin tooling.
 2. **A `SECURITY DEFINER` function (RPC)** that runs with an empty `search_path`, derives the actor from `auth.uid()`, validates every input, performs all related writes in one transaction, and is granted to `authenticated` explicitly.
 
-`place_order(...)` (Phase 6e) is the trading RPC built on that template: granted to `authenticated`, actor from `auth.uid()`, every check before any write, one transaction. `reset_paper_balance(user)` and `position_summary_for(user, person)` are service-role only. `placeholder_financial_mutation(p_amount_cents)` remains as the documented shape. `apply_engine_tick(jsonb)` is the Engine's own atomic write path and is executable by the service role only.
+`place_order(...)` (Phase 6e) is the trading RPC built on that template: granted to `authenticated`, actor from `auth.uid()`, every check before any write, one transaction. `reset_paper_balance(user)`, `credit_paper_balance(user, cents)` (the 6f top-up path, through the ledger), `position_summary_for(user, person)`, `portfolio_summary_for(user)`, `portfolio_value_series_for(user, …)` and `trade_history_for(user, …)` are service-role only; their `my_*` wrappers bind them to `auth.uid()` for `authenticated`. `portfolio_history` is written only by `record_portfolio_snapshot()` (the `trade_orders_snapshot_portfolio` trigger) and `snapshot_portfolios()` (inside the tick). `placeholder_financial_mutation(p_amount_cents)` remains as the documented shape. `apply_engine_tick(jsonb)` is the Engine's own atomic write path and is executable by the service role only.
 
 ## Authentication
 
-- **Signup** (`/signup`): the Server Action validates the input, pre-checks the username through the `username_available()` RPC, then calls `supabase.auth.signUp` with `username` and `display_name` in the user metadata. The `on_auth_user_created` trigger inserts the `public.users` row with a $1,000 demo balance and a matching `DEPOSIT` transaction.
+- **Signup** (`/signup`): the Server Action validates the input, pre-checks the username through the `username_available()` RPC, then calls `supabase.auth.signUp` with `username` and `display_name` in the user metadata. The `on_auth_user_created` trigger inserts the `public.users` row with the $10,000 paper balance (`starting_balance_cents()`) and a matching `DEPOSIT` transaction.
 - **Login** (`/login`): `signInWithPassword`, then redirect to `next` (defaults to `/account`). Email confirmation links land on `/auth/callback`.
 - `proxy.ts` refreshes expired sessions on every request and guards `/account`, `/login` and `/signup`.
 - Use `getCurrentUser()` / `requireUser()` from `lib/auth.ts` in server code for anything that depends on identity.
@@ -456,7 +470,7 @@ The collection layer for a future recommendation algorithm ("For You"). It recor
 | `eventType`       | `personId` | `metadata`                                                              |
 | ----------------- | ---------- | ----------------------------------------------------------------------- |
 | `view_person`     | required   | `{ source?: string }` (feed, search, swipe, profile_link, …)            |
-| `time_spent`      | required   | `{ duration_ms: number, surface?: string }` (coalesced client-side)     |
+| `time_spent`      | optional   | `{ duration_ms: number, surface?: string }` (coalesced client-side; without a `personId` a non-empty `surface` is required — the portfolio's dwell) |
 | `expand_signal`   | required   | `{ signal_id?: uuid, headline?: string }`                               |
 | `take_position`   | required   | `{ direction: "HIGH" \| "LOW", amount_cents: integer, position_id?: uuid, units?, price_cents?, order_id?, surface? }` (server-side, on a fill that opened units) |
 | `close_position`  | required   | `{ position_id?: uuid, direction?, amount_cents?, pnl_cents?, units?, price_cents?, order_id?, surface? }` (server-side, on a fill that closed units) |
@@ -472,6 +486,7 @@ The collection layer for a future recommendation algorithm ("For You"). It recor
 | `open_trade_sheet` | required  | `{ side: "BUY" \| "SELL", surface?: string }`                           |
 | `abandon_trade_sheet` | required | `{ side, step: "compose" \| "confirm" \| "result", units?: integer, surface? }` (closed without a fill) |
 | `reject_trade`    | required   | `{ side, code: string, units?: integer, surface? }` (the server refused: price moved, a limit hit, …) |
+| `view_portfolio`  | optional   | `{ positions?: integer, orders?: integer }` (what the portfolio showed on arrival) |
 
 `validateBehavioralEvent()` enforces all of this (and normalises: uppercase direction, trimmed query, lowercase swipe action, range and entry kind, rounded and clamped duration). All money is integer cents, as everywhere else. `time_spent` events are coalesced client-side per person, surface and `entry_id`, so two feed entries about the same person keep separate dwells.
 
@@ -733,13 +748,15 @@ Four tunables on `platform_settings`, each enforced in `place_order()` with its 
 | Max units per user per person | `max_units_per_person` | 100,000 | `max_units` |
 | Max share of a person's open interest held by one user | `max_open_interest_share` | 1.0 (never binds) | `open_interest` |
 | Max close value per user per trailing day | `max_daily_close_cents` | $1,000,000 | `daily_limit` |
-| Cooldown before a lot may be closed (round-trip guard) | `close_cooldown_seconds` | 5 s | `cooldown` |
+| Cooldown before a lot may be closed (round-trip guard) | `close_cooldown_seconds` | **60 s** (since 6f; 5 s before) | `cooldown` |
 
 `lib/trading/trading.db.test.ts` tightens each one and shows it refusing at the boundary.
 
+**The cooldown's floor.** 5 s only blocked the within-tick round trip, which already loses the spread; the real exploit is reflexive — buy, let your own flow feed Trading Activity, the tick fires partly on that flow, sell into the move you helped create. 60 s spans two ticks. The final value is a **policy decision pending**, with one constraint that is not tunable: the platform's regulatory positioning describes this cooldown as preventing round-trip score influence, so it must remain at least one full tick (30 s). `CLOSE_COOLDOWN_MIN_SECONDS` in `lib/trading/model.ts` is that floor and `lib/portfolio/portfolio.db.test.ts` pins the shipped default above it.
+
 ### Paper balance
 
-Every new user starts with **`starting_balance_cents()` = 100,000** ($1,000.00), granted by the signup trigger through the ledger. `reset_paper_balance(user)` returns a balance to that figure, service-role only, refusing while any lot is open; a user can never reset themselves, because a self-serve reset teaches that losses do not matter and destroys the behavioural signal. The balance sits in the banner as *Paper $1,000.00* and every monetary figure in the flow is labelled paper.
+Every new user starts with **`starting_balance_cents()` = 1,000,000** ($10,000.00), granted by the signup trigger through the ledger. It was $1,000 in 6e: at one dollar per point a share at score 50 costs $50, so $1,000 bought roughly nineteen shares in total, too coarse for a beta whose purpose is finding out whether a portfolio feels like anything. Existing accounts are topped up with `credit_paper_balance(user, cents)`, a service-role action that writes a `DEPOSIT` and the balance together; no migration rewrites a balance (at the time of the change there were no accounts to top up). `reset_paper_balance(user)` returns a balance to the starting figure, service-role only, refusing while any lot is open; a user can never reset themselves, because a self-serve reset teaches that losses do not matter and destroys the behavioural signal. The balance sits in the banner as *Paper $10,000.00* and every monetary figure in the flow is labelled paper.
 
 ### The sheet
 
@@ -761,6 +778,59 @@ The three additions are format-only; no migration. Server events are written aft
 
 Two harnesses under `lib/__tests__`: `pglite.ts` (Postgres in WebAssembly, one session, fast) runs the migrations verbatim for everything single-session; `postgres.ts` (embedded-postgres, a real server on a free port, many connections) runs them for the concurrent-order tests. Both share `migrations.ts`, which stubs only what Supabase itself provides (the `auth` schema, the platform roles).
 
+## The portfolio (Phase 6f)
+
+`/portfolio` closes the loop: discovery (Home) → depth (the profile) → narrative (the Feed) → commitment (the trade sheet) → tracking. Signed in only. Every figure on it is computed by the database in integer cents and read as a value; the browser renders and never calculates.
+
+### What it shows
+
+- **Total value** = cash + every open position marked at the quote it would close at, with the return against the paper credit granted so far; **cash**; **unrealized** (open) and **realized** (lifetime) P&L. Colour appears only on the P&L figures and the return, by direction; the total flashes when it changes.
+- **Open positions**, one row per person, largest value first (then name, then id): shares held, the weighted-average entry, the value *at Sell x.x* with the per-share mark, unrealized P&L with its percentage, realized so far on that person, and a **Sell** control that opens the 6e trade sheet for that person with `surface: "portfolio"`. There is no second trading path.
+- **Value over time**: the 6c+ live line (`components/charts/live-line-chart.tsx`, now shared) with money's rules — whole dollars on the axis where the grid allows, the paper credit as the dashed reference so above the line is profit, and a vertical floor of `VALUE_RANGE_FLOOR_RATIO` (0.5 %: $50 on a $10,000 account) of the latest value, never under a dollar. Same breath, same 700 ms tick reveal, same reduced-motion handling.
+- **Trade history**, newest first: who, Buy or Sell, shares, the executed price as recorded on the order (never recomputed), cost or proceeds, the local time, and on a close the realized P&L (the one coloured figure). Older pages on request through `/api/portfolio/history`.
+
+### Marking and arithmetic
+
+A HIGH position is marked at the **Sell quote** (a LOW one at the Buy quote): what the user would actually receive, so it sits below the raw score by the spread, and the page says so beside every value. The 6e rounding rule carries forward unchanged — points become cents exactly once, in `points_to_cents()`, and everything after that is integer:
+
+```
+value       = open_units × mark_cents
+cost        = Σ open_units × entry_price_cents          (per lot, exact)
+unrealized  = value − cost                               (HIGH)
+realized    = Σ position_closes.pnl_cents                (read from the 6e close records, never recomputed from lots)
+total value = cash + Σ value
+```
+
+"Unrealized = (Sell quote − weighted-average entry) × units" is the same number evaluated with the *exact* average (cost ÷ units before any rounding). The average the page shows is `round(cost ÷ units)`, half up, for reading only; a P&L never carries the rounding of a displayed figure (with 7 units at a cost of 35,550 the shown average is 5,079 and the P&L at 5,150 is 500, not the 497 the rounded average would give). Identity, under the long-only gate: **total value = paper credit + realized + unrealized**. `lib/portfolio/portfolio.db.test.ts` asserts every one of these to the cent against an independent computation, across three people, a partial close and a full close, on real Postgres.
+
+### Value history
+
+The value over time cannot be rebuilt from `score_history` alone: the Sell quote is score − spread, and the spread of past ticks is not recorded. So the value is **recorded when it changes**, as the server computes it then, into `portfolio_history`: at every Engine tick for every user holding a position, at that tick's freshly written quotes (`apply_engine_tick()` → `snapshot_portfolios()`), and after every order at the order's own instant (a trigger on `trade_orders` → `record_portfolio_snapshot()`). Between ticks nothing moves, so the recorded points *are* the history; nothing is interpolated or synthesised. `portfolio_value_series_for()` downsamples them by time exactly as `person_score_series()` does, and the page folds new points in on the Engine's cadence through `/api/portfolio/live`. With the Engine dormant the only points are the order-time marks; before the first order there are none, and the chart says which.
+
+### Empty and edge states
+
+- **Never traded** (the state most beta users see first): the summary shows the credit as cash, the chart says the line begins with the first trade, and an invitation replaces the lists — the credit is ready, Home and the Feed are where a position starts, the board's people are one tap away.
+- **Holding, no ticks yet**: values show (marked at the Sell quote, so the spread is an honest immediate loss), the chart holds only the order-time points.
+- **Closed everything**: the positions section says nothing is open and points at Home and the Feed; realized P&L and the history stay.
+- Missing avatars fall back to initials; a single-lot position simply shows no lot count; a person who has left the board keeps their row and loses the Sell control.
+- The route-level skeleton has the page's shape; the chart container has a fixed height; older history rows take shape inside the same card.
+
+### Behavioural logging
+
+| Event | When |
+| --- | --- |
+| `view_portfolio` | the page mounts (`{ positions, orders }`) |
+| `time_spent` | the dwell, paused while the tab is hidden (`{ surface: "portfolio" }`, no person) |
+| `view_person` | a tap through from a position (`{ source: "portfolio_position" }`) or a history row (`{ source: "portfolio_history", order_id }`) |
+| `filter_change` | the value chart's range (`{ surface: "portfolio", filter: "range", value }`) |
+| `open_trade_sheet` / `abandon_trade_sheet` / `close_position` / `reject_trade` | the close started here carries `surface: "portfolio"`, so it is told apart from one started on the profile |
+
+`view_portfolio` is the one new type; `time_spent` now accepts a surface in place of a person. Format-only; no migration.
+
+### Part 0, carried from 6e
+
+The close cooldown rose from 5 s to 60 s (see the levers), the starting balance from $1,000 to $10,000 (see the paper balance), the Trading Activity minimum-sample guard became overridable by `ENGINE_TRADING_MIN_POPULATED_WINDOWS` with its default of 30 unchanged (`engineConfigFromEnv()` in `lib/engine/config.ts`, wired into `runFullTick()`), and the local clone's `origin` remote gained its fetch refspec so `origin/main` exists.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -778,4 +848,6 @@ Two harnesses under `lib/__tests__`: `pglite.ts` (Postgres in WebAssembly, one s
 
 - **Phase 6e**: the trading flow: integer-cent lots with a server-snapshotted entry price, `place_order()` (wallet lock, server-read quote, 10¢ tolerance band, unit netting through the gate, four risk levers, FIFO closes with per-lot realized P&L, one transaction), `trade_orders` and `position_closes`, `my_position()` with the weighted-average basis, `reset_paper_balance()` (service role only), the trade sheet with its tick-boundary re-arm, the position card, the paper balance in the banner, three trade events, the Trading Activity guards (minimum sample, sd floor, 1.0 σ deadband with an in-band value), and the real-server concurrency tests.
 
-Deliberately not built yet: the portfolio and profile screens, search results, and the recommendation algorithm (For You). Shorting stays switched off; the risk levers stay inert; the heartbeat is wired but switched off.
+- **Phase 6f**: the portfolio: `portfolio_summary_for()` / `my_portfolio()` (cash, every position marked at its closing quote, unrealized and realized P&L, the paper credit and the return, all integer cents), value history recorded at every tick and every order into `portfolio_history` and read back through `portfolio_value_series_for()`, `trade_history_for()` with its keyset cursor, the page itself (summary, the shared live line as a value chart, positions with Sell into the 6e sheet, history with older pages, the three empty states), the `view_portfolio` event and the portfolio surface on every trade event; and the carried fixes: the 60 s cooldown, the $10,000 starting balance with `credit_paper_balance()`, the min-sample override, the git refspec.
+
+Deliberately not built yet: the profile screen, search results, and the recommendation algorithm (For You). Shorting stays switched off; the risk levers stay inert (the cooldown's rise to 60 s is a policy floor, not a calibration); the heartbeat is wired but switched off.

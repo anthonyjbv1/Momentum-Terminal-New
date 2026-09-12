@@ -554,23 +554,43 @@ export type Database = {
       portfolio_history: {
         Row: {
           id: string
+          order_id: string | null
           recorded_at: string
+          tick_number: number | null
           total_value_cents: number
           user_id: string
         }
         Insert: {
           id?: string
+          order_id?: string | null
           recorded_at?: string
+          tick_number?: number | null
           total_value_cents: number
           user_id: string
         }
         Update: {
           id?: string
+          order_id?: string | null
           recorded_at?: string
+          tick_number?: number | null
           total_value_cents?: number
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "portfolio_history_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "trade_orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portfolio_history_tick_number_fkey"
+            columns: ["tick_number"]
+            isOneToOne: false
+            referencedRelation: "engine_ticks"
+            referencedColumns: ["tick_number"]
+          },
           {
             foreignKeyName: "portfolio_history_user_id_fkey"
             columns: ["user_id"]
@@ -1118,6 +1138,94 @@ export type Database = {
       cents_to_dollars_text: {
         Args: { p_cents: number }
         Returns: string
+      }
+      credit_paper_balance: {
+        Args: { p_user_id: string; p_amount_cents: number }
+        Returns: Json
+      }
+      my_portfolio: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
+      my_portfolio_value_series: {
+        Args: { p_since?: string | null; p_points?: number }
+        Returns: {
+          bucket_at: string
+          value_cents: number
+          open_cents: number
+          samples: number
+        }[]
+      }
+      my_trade_history: {
+        Args: { p_before?: string | null; p_before_id?: string | null; p_limit?: number }
+        Returns: {
+          id: string
+          created_at: string
+          side: string
+          units: number
+          fill_price_cents: number
+          gross_cents: number
+          opened_units: number
+          closed_units: number
+          cost_cents: number
+          proceeds_cents: number
+          realized_pnl_cents: number
+          balance_after_cents: number | null
+          surface: string | null
+          person_id: string
+          person_slug: string
+          person_name: string
+          person_category: string
+          person_avatar: string | null
+        }[]
+      }
+      portfolio_summary_for: {
+        Args: { p_user_id: string }
+        Returns: Json
+      }
+      portfolio_value_cents: {
+        Args: { p_user_id: string }
+        Returns: number
+      }
+      portfolio_value_series_for: {
+        Args: { p_user_id: string; p_since?: string | null; p_points?: number }
+        Returns: {
+          bucket_at: string
+          value_cents: number
+          open_cents: number
+          samples: number
+        }[]
+      }
+      record_portfolio_snapshot: {
+        Args: { p_user_id: string; p_at?: string; p_order_id?: string | null; p_tick_number?: number | null }
+        Returns: number
+      }
+      snapshot_portfolios: {
+        Args: { p_at: string; p_tick_number?: number | null }
+        Returns: number
+      }
+      trade_history_for: {
+        Args: { p_user_id: string; p_before?: string | null; p_before_id?: string | null; p_limit?: number }
+        Returns: {
+          id: string
+          created_at: string
+          side: string
+          units: number
+          fill_price_cents: number
+          gross_cents: number
+          opened_units: number
+          closed_units: number
+          cost_cents: number
+          proceeds_cents: number
+          realized_pnl_cents: number
+          balance_after_cents: number | null
+          surface: string | null
+          person_id: string
+          person_slug: string
+          person_name: string
+          person_category: string
+          person_avatar: string | null
+        }[]
       }
       my_position: {
         Args: { p_person_id: string }

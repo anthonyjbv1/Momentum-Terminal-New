@@ -13,7 +13,7 @@ const PERSON = "11111111-1111-4111-8111-111111111111";
 const SESSION = "22222222-2222-4222-8222-222222222222";
 
 describe("canonical event types", () => {
-  it("lists the seventeen documented types, each with a definition", () => {
+  it("lists the eighteen documented types, each with a definition", () => {
     expect([...BEHAVIORAL_EVENT_TYPES]).toEqual([
       "view_person",
       "time_spent",
@@ -32,6 +32,7 @@ describe("canonical event types", () => {
       "open_trade_sheet",
       "abandon_trade_sheet",
       "reject_trade",
+      "view_portfolio",
     ]);
     for (const type of BEHAVIORAL_EVENT_TYPES) {
       expect(BEHAVIORAL_EVENT_DEFINITIONS[type].description.length).toBeGreaterThan(0);
@@ -95,6 +96,23 @@ describe("validateBehavioralEvent", () => {
       expect(ok.ok && ok.event.metadata).toEqual({ duration_ms: 1235 });
       const clamped = validateBehavioralEvent({ eventType: "time_spent", personId: PERSON, metadata: { duration_ms: 1e12 } });
       expect(clamped.ok && clamped.event.metadata?.duration_ms).toBe(BEHAVIORAL_LIMITS.maxDurationMs);
+    });
+
+    it("time_spent without a person needs a surface (the portfolio is about no single person)", () => {
+      expect(validateBehavioralEvent({ eventType: "time_spent", metadata: { duration_ms: 4000 } })).toEqual({
+        ok: false,
+        reason: "time_spent requires personId or a non-empty metadata.surface",
+      });
+      expect(validateBehavioralEvent({ eventType: "time_spent", metadata: { duration_ms: 4000, surface: "  " } }).ok).toBe(false);
+      const portfolio = validateBehavioralEvent({ eventType: "time_spent", metadata: { duration_ms: 4000, surface: "portfolio" } });
+      expect(portfolio.ok && portfolio.event).toEqual({ eventType: "time_spent", personId: null, metadata: { duration_ms: 4000, surface: "portfolio" }, sessionId: null });
+    });
+
+    it("view_portfolio takes optional counts and nothing else is required", () => {
+      expect(validateBehavioralEvent({ eventType: "view_portfolio" }).ok).toBe(true);
+      expect(validateBehavioralEvent({ eventType: "view_portfolio", metadata: { positions: 2, orders: 7 } }).ok).toBe(true);
+      expect(validateBehavioralEvent({ eventType: "view_portfolio", metadata: { positions: -1 } })).toMatchObject({ ok: false, reason: expect.stringContaining("positions") });
+      expect(validateBehavioralEvent({ eventType: "view_portfolio", metadata: { orders: 1.5 } }).ok).toBe(false);
     });
 
     it("take_position needs direction and integer amount_cents", () => {

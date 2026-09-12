@@ -258,7 +258,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   },
 };
 
-type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
+export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
 
 /** DEFAULT_ENGINE_CONFIG with nested overrides applied (one level deep per section). */
 export function withEngineConfig(overrides: DeepPartial<EngineConfig>, base: EngineConfig = DEFAULT_ENGINE_CONFIG): EngineConfig {
@@ -272,4 +272,54 @@ export function withEngineConfig(overrides: DeepPartial<EngineConfig>, base: Eng
         : value;
   }
   return merged as unknown as EngineConfig;
+}
+
+// ---------------------------------------------------------------------------
+// Environment overrides (the controlled test)
+// ---------------------------------------------------------------------------
+
+/**
+ * The raw strings of the environment variables that may move a tunable from
+ * outside the code. lib/env.ts reads them; this module only parses them, so
+ * the parsing is unit-tested without touching process.env.
+ *
+ * Every override is opt-in and strict: unset, empty or malformed leaves the
+ * code default exactly as it is. Nothing here lowers a default.
+ */
+export interface EngineEnvOverrides {
+  /**
+   * ENGINE_TRADING_MIN_POPULATED_WINDOWS. The Trading Activity minimum-sample
+   * guard (tradingActivity.minPopulatedWindows, default 30). A small beta
+   * group trading occasionally may never populate thirty windows in a day,
+   * which would leave the force permanently silent and untested; during the
+   * controlled test it can be lowered DELIBERATELY here. The default is not
+   * changed. A positive integer; anything else is ignored.
+   */
+  tradingMinPopulatedWindows?: string | undefined;
+}
+
+/** A strictly positive integer from a raw environment string, or null. */
+export function parsePositiveInteger(raw: string | undefined): number | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+/** DEFAULT_ENGINE_CONFIG with any environment overrides applied. */
+export function engineConfigFromEnv(env: EngineEnvOverrides, base: EngineConfig = DEFAULT_ENGINE_CONFIG): EngineConfig {
+  const overrides: DeepPartial<EngineConfig> = {};
+  const minPopulatedWindows = parsePositiveInteger(env.tradingMinPopulatedWindows);
+  if (minPopulatedWindows !== null) overrides.tradingActivity = { minPopulatedWindows };
+  return withEngineConfig(overrides, base);
+}
+
+/** The overrides that differ from the defaults, for the tick log. */
+export function describeEngineOverrides(config: EngineConfig, base: EngineConfig = DEFAULT_ENGINE_CONFIG): string[] {
+  const out: string[] = [];
+  if (config.tradingActivity.minPopulatedWindows !== base.tradingActivity.minPopulatedWindows) {
+    out.push(`tradingActivity.minPopulatedWindows = ${config.tradingActivity.minPopulatedWindows} (default ${base.tradingActivity.minPopulatedWindows})`);
+  }
+  return out;
 }

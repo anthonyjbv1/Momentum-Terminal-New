@@ -30,6 +30,12 @@ beforeAll(async () => {
   const admin = await server.pool.connect();
   try {
     ({ id: userId } = (await admin.query<{ id: string }>("insert into auth.users (email) values ('race@example.com') returning id")).rows[0]);
+    // The race is the point, not the size of the wallet: bring it to $1,000 through the ledger so the arithmetic below stays small.
+    await admin.query(
+      "insert into public.transactions (user_id, type, amount_cents) select $1, 'WITHDRAWAL', wallet_balance_cents - 100000 from public.users where id = $1 and wallet_balance_cents > 100000",
+      [userId],
+    );
+    await admin.query("update public.users set wallet_balance_cents = 100000, buying_power_cents = 100000 where id = $1", [userId]);
     ({ id: drake } = (await admin.query<{ id: string }>("select id from public.people where slug = 'drake'")).rows[0]);
     await admin.query("update public.people set current_score = 50, spread = 0.5 where id = $1", [drake]); // Buy 5050¢
     await admin.query("update public.platform_settings set close_cooldown_seconds = 0 where id");

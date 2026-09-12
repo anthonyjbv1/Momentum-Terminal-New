@@ -1,30 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
-import { msUntilNextTick } from "@/components/engine/engine-clock";
+import { useTickPolling } from "@/components/engine/use-tick-polling";
 import { LIVE_TICK_MS, foldTicksIntoRanges, latestTickAt, type LiveTick } from "@/lib/person/live-series";
 import type { ProfilePerson, SeriesByRange } from "@/lib/person/profile-model";
 
 /**
  * Keeps a person's score and series current on the Engine's cadence.
  *
- * The clock is the same wall-aligned 30-second clock the banner counts down
- * on. A little after each boundary (the Engine needs a moment to persist)
- * the hook asks the live endpoint for ticks newer than the last one it
- * holds; if nothing has landed yet it asks once more a few seconds later,
- * then waits for the next boundary. A tab coming back from the background
- * catches up immediately. Every answer that carries new ticks bumps
- * `version`, which is what the chart animates on.
- *
- * With the Engine dormant every poll comes back empty and nothing here
+ * The polling schedule (a little after each 30-second boundary, one retry,
+ * catch-up on return from the background) is useTickPolling's. Every answer
+ * that carries new ticks bumps `version`, which is what the chart animates
+ * on. With the Engine dormant every poll comes back empty and nothing here
  * changes: the page stays exactly as the server rendered it.
  */
 
-/** How long after the tick boundary to ask, so the Engine has written the tick. */
-export const LIVE_POLL_DELAY_MS = 2_500;
-/** One follow-up when the boundary poll came back empty. */
-export const LIVE_RETRY_DELAY_MS = 7_500;
+export { LIVE_POLL_DELAY_MS, LIVE_RETRY_DELAY_MS } from "@/components/engine/use-tick-polling";
 
 export interface LiveState {
   series: SeriesByRange;
@@ -111,39 +103,7 @@ export function useLiveSeries(person: ProfilePerson, initial: SeriesByRange, opt
     }
   }, [endpoint]);
 
-  useEffect(() => {
-    if (!enabled) return;
-    let stopped = false;
-    const timers = new Set<ReturnType<typeof setTimeout>>();
-    const later = (fn: () => void, ms: number) => {
-      const handle = setTimeout(() => {
-        timers.delete(handle);
-        if (!stopped) fn();
-      }, ms);
-      timers.add(handle);
-    };
-
-    const schedule = () => {
-      const wait = msUntilNextTick(Date.now(), cadenceMs / 1000) + LIVE_POLL_DELAY_MS;
-      later(async () => {
-        const landed = await poll();
-        if (!landed) later(() => void poll(), LIVE_RETRY_DELAY_MS);
-        schedule();
-      }, wait);
-    };
-    schedule();
-
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") void poll();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-
-    return () => {
-      stopped = true;
-      for (const handle of timers) clearTimeout(handle);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [enabled, cadenceMs, poll]);
+  useTickPolling(poll, { cadenceMs, enabled });
 
   return state;
 }

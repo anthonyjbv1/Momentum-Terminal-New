@@ -78,6 +78,18 @@ export function getEngineSecretOrNull(): string | null {
   return value ? value : null;
 }
 
+/**
+ * The Engine tunables that may be overridden from the environment during the
+ * controlled test, as raw strings; lib/engine/config.ts parses them strictly
+ * and ignores anything malformed. SERVER ONLY.
+ *
+ *   ENGINE_TRADING_MIN_POPULATED_WINDOWS  the Trading Activity minimum-sample
+ *                                         guard (code default 30, unchanged)
+ */
+export function getEngineEnvOverrides(): { tradingMinPopulatedWindows: string | undefined } {
+  return { tradingMinPopulatedWindows: process.env.ENGINE_TRADING_MIN_POPULATED_WINDOWS };
+}
+
 // ---------------------------------------------------------------------------
 // LLM reasoning layer (Phase 4) — all SERVER ONLY
 // ---------------------------------------------------------------------------

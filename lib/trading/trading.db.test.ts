@@ -43,6 +43,14 @@ async function balance(userId: string): Promise<number> {
   return Number(row.b);
 }
 
+/** Brings a wallet to an exact figure through the ledger, so the small-number arithmetic below stays readable at any starting balance. */
+async function setBalance(userId: string, target: number): Promise<void> {
+  const current = await balance(userId);
+  if (current === target) return;
+  await database.rows("insert into public.transactions (user_id, type, amount_cents) values ($1, $2, $3)", [userId, current > target ? "WITHDRAWAL" : "DEPOSIT", Math.abs(current - target)]);
+  await database.rows("update public.users set wallet_balance_cents = $2, buying_power_cents = $2 where id = $1", [userId, target]);
+}
+
 async function setQuote(slug: string, score: number, spread = 0.5): Promise<void> {
   await database.rows("update public.people set current_score = $1, spread = $2 where slug = $3", [score, spread, slug]);
 }
@@ -151,6 +159,7 @@ describe("place_order: opening", () => {
 
   beforeAll(async () => {
     alice = await createUser("alice@example.com");
+    await setBalance(alice, 100000); // $1,000: the figures below are about the arithmetic, not the wallet's size
     await setQuote("drake", 50, 0.5); // Buy 50.50 → 5050¢, Sell 49.50 → 4950¢
   });
 
@@ -214,6 +223,7 @@ describe("place_order: closing, FIFO and P&L to the cent", () => {
 
   beforeAll(async () => {
     bob = await createUser("bob@example.com");
+    await setBalance(bob, 100000);
     await setQuote("mrbeast", 40, 0.5);
     fill(await order(bob, "mrbeast", "BUY", 10)); // lot A: 10 @ 4050 = 40,500
     await setQuote("mrbeast", 42, 0.5);

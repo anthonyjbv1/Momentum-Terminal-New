@@ -238,7 +238,8 @@ export function flushBehavioralEvents(): Promise<void> {
  *   useEffect(() => startDwell({ personId, surface: "profile" }), [personId]);
  */
 export function startDwell(options: {
-  personId: string;
+  /** The person the dwell is about; omit on a surface about no single person (the portfolio), which then needs a `surface`. */
+  personId?: string | null;
   surface?: string;
   /** Extra metadata carried on the time_spent event (e.g. the feed entry the dwell belongs to). */
   metadata?: Record<string, unknown>;
@@ -254,7 +255,7 @@ export function startDwell(options: {
     if (duration < BEHAVIORAL_LIMITS.minDwellMs) return;
     trackEvent({
       eventType: "time_spent",
-      personId: options.personId,
+      personId: options.personId ?? null,
       metadata: {
         ...(options.metadata ?? {}),
         ...(options.surface ? { surface: options.surface } : {}),
