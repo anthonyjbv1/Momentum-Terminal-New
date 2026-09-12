@@ -21,7 +21,11 @@ export type Signal = Tables<"signals">;
 export type ScoreHistoryEntry = Tables<"score_history">;
 export type PortfolioHistoryEntry = Tables<"portfolio_history">;
 export type BehavioralEvent = Tables<"behavioral_events">;
-export type SourceSnapshot = Tables<"source_snapshots">;
+/** RAW metric levels. Service role only; never read by a user-facing surface (Phase 7). */
+export type RawSourceSnapshot = Tables<"raw_source_snapshots">;
+export type RawMetricObservation = Tables<"raw_metric_observations">;
+export type IngestRun = Tables<"ingest_runs">;
+export type SourcePoll = Tables<"source_polls">;
 
 // ---------------------------------------------------------------------------
 // Closed vocabularies. These mirror CHECK constraints in the schema; keep them

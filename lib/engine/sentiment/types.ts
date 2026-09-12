@@ -11,6 +11,8 @@ export interface SentimentInput {
   rawPayload: Json | null;
   sourceName: string;
   sourceTier: number;
+  /** The tick this signal is being scored for, so LLM usage can be attributed to it. Absent outside a tick. */
+  tickNumber?: number;
 }
 
 export interface SentimentResult {

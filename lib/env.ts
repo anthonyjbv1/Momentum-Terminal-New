@@ -57,6 +57,23 @@ export function getYouTubeApiKey(): string {
 }
 
 /**
+ * The same key, or null when unset. Connectors report availability with this
+ * so a missing credential makes the source inactive for the run instead of
+ * failing it.
+ */
+export function getYouTubeApiKeyOrNull(): string | null {
+  const value = process.env.YOUTUBE_API_KEY?.trim();
+  return value ? value : null;
+}
+
+/** Spotify Web API client credentials (SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET), or null when either is unset. SERVER ONLY. */
+export function getSpotifyCredentialsOrNull(): { clientId: string; clientSecret: string } | null {
+  const clientId = process.env.SPOTIFY_CLIENT_ID?.trim();
+  const clientSecret = process.env.SPOTIFY_CLIENT_SECRET?.trim();
+  return clientId && clientSecret ? { clientId, clientSecret } : null;
+}
+
+/**
  * Shared secret that authorises calls to /api/ingest. SERVER ONLY.
  * Returns null when unset so the route can fail closed with a clear message.
  */

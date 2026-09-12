@@ -7,6 +7,7 @@ import { computeMood, marketMoodForce } from "./forces/market-mood";
 import { scoreSignals, signalImpact, signalsForce, tierMultiplier } from "./forces/signals";
 import { tradingActivityForce, windowedNetFlows } from "./forces/trading-activity";
 import { inversePairAdjustments } from "./inverse-pairs";
+import type { SentimentResult } from "./sentiment/types";
 import type { EngineSignal, TradeEvent } from "./types";
 
 const NOW = new Date("2026-09-07T12:00:00.000Z");
@@ -52,21 +53,65 @@ describe("Signals", () => {
     expect(signalImpact(signal(), { label: "neutral", confidence: 0, direction: 0 }, CONFIG.signals)).toBe(0);
   });
 
-  it("sums a person's signals and caps the total", () => {
+  it("combines a person's signals sub-linearly and caps the total", () => {
+    expect(CONFIG.signals.volumeExponent).toBe(0.5);
     const sentiments = new Map([
       ["a", { label: "positive" as const, confidence: 1, direction: 1 as const }],
       ["b", { label: "negative" as const, confidence: 0.5, direction: -1 as const }],
     ]);
-    const scored = scoreSignals([signal({ id: "a" }), signal({ id: "b" })], sentiments, CONFIG.signals);
+    const scored = scoreSignals([signal({ id: "a" }), signal({ id: "b", sourceName: "rss" })], sentiments, CONFIG.signals);
     const force = signalsForce(scored, CONFIG.signals);
-    expect(force.impact).toBeCloseTo(1.5 - 0.75);
+    expect(force.details.rawImpact).toBeCloseTo(1.5 - 0.75);
+    expect(force.details.volumeDivisor).toBeCloseTo(Math.SQRT2);
+    expect(force.impact).toBeCloseTo((1.5 - 0.75) / Math.SQRT2);
     expect(force.details.signalCount).toBe(2);
+    expect(force.details.countedSignals).toBe(2);
 
-    const many = Array.from({ length: 20 }, (_, i) => signal({ id: `m${i}` }));
+    // Twenty tier-1 sources all positive at full confidence: 45 / sqrt(20) = 10.06, capped at 10.
+    const many = Array.from({ length: 20 }, (_, i) => signal({ id: `m${i}`, sourceName: `source-${i}`, sourceTier: 1 }));
     const loud = new Map(many.map((s) => [s.id, { label: "positive" as const, confidence: 1, direction: 1 as const }]));
     const capped = signalsForce(scoreSignals(many, loud, CONFIG.signals), CONFIG.signals);
+    expect(capped.details.normalizedImpact).toBeCloseTo(45 / Math.sqrt(20));
     expect(capped.impact).toBe(CONFIG.signals.maxAbsImpactPerTick);
     expect(capped.details.capped).toBe(true);
+  });
+
+  it("PER-PERSON VOLUME NORMALISATION: a flood from one source cannot outvote one strong signal", () => {
+    expect(CONFIG.signals.maxPerSourcePerTick).toBe(3);
+    const positive = { label: "positive" as const, confidence: 1, direction: 1 as const };
+    // Twelve comments (tier 4: 0.45 each) in one tick.
+    const comments = Array.from({ length: 12 }, (_, i) => signal({ id: `c${i}`, sourceName: "youtube_comments", sourceTier: 4 }));
+    const flood = signalsForce(scoreSignals(comments, new Map(comments.map((s) => [s.id, positive])), CONFIG.signals), CONFIG.signals);
+    expect(flood.details.countedSignals).toBe(3);
+    expect(flood.details.droppedBySourceCap).toBe(9);
+    expect(flood.impact).toBeCloseTo((3 * 0.45) / Math.sqrt(3));
+    // One tier-1 metric signal at full confidence: 2.25.
+    const one = signalsForce(scoreSignals([signal({ id: "m", sourceName: "spotify", sourceTier: 1 })], new Map([["m", positive]]), CONFIG.signals), CONFIG.signals);
+    expect(one.impact).toBeCloseTo(2.25);
+    expect(flood.impact).toBeLessThan(one.impact);
+    // The strongest are the ones kept, and the details say which counted.
+    const mixed = [signal({ id: "w1", sourceName: "rss" }), signal({ id: "w2", sourceName: "rss" }), signal({ id: "w3", sourceName: "rss" }), signal({ id: "strong", sourceName: "rss" })];
+    const mixedSentiments = new Map<string, { label: "positive"; confidence: number; direction: 1 }>([
+      ["w1", { label: "positive", confidence: 0.2, direction: 1 }],
+      ["w2", { label: "positive", confidence: 0.3, direction: 1 }],
+      ["w3", { label: "positive", confidence: 0.4, direction: 1 }],
+      ["strong", { label: "positive", confidence: 1, direction: 1 }],
+    ]);
+    const kept = signalsForce(scoreSignals(mixed, mixedSentiments, CONFIG.signals), CONFIG.signals);
+    const counted = (kept.details.signals as Array<{ id: string; counted: boolean }>).filter((s) => s.counted).map((s) => s.id);
+    expect(counted.sort()).toEqual(["strong", "w2", "w3"]);
+    // Neutral signals never dilute the sum.
+    const neutral = { label: "neutral" as const, confidence: 0, direction: 0 as const };
+    const withNeutral = signalsForce(
+      scoreSignals(
+        [signal({ id: "m", sourceName: "spotify", sourceTier: 1 }), signal({ id: "n1" }), signal({ id: "n2" })],
+        new Map<string, SentimentResult>([["m", positive], ["n1", neutral], ["n2", neutral]]),
+        CONFIG.signals,
+      ),
+      CONFIG.signals,
+    );
+    expect(withNeutral.impact).toBeCloseTo(2.25);
+    expect(withNeutral.details.countedSignals).toBe(1);
   });
 });
 

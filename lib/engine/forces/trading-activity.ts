@@ -1,5 +1,6 @@
+import { baselineDeviation } from "@/lib/engine/baseline";
 import type { EngineConfig } from "@/lib/engine/config";
-import { clamp, mean, standardDeviation } from "@/lib/engine/math";
+import { clamp } from "@/lib/engine/math";
 import type { ForceEntry, TradeEvent } from "@/lib/engine/types";
 
 /**
@@ -21,7 +22,9 @@ import type { ForceEntry, TradeEvent } from "@/lib/engine/types";
  *                      clamped to ±maxAbsImpact
  *   gate             = skipped entirely below minConcentration of open capital
  *
- * Three guards (Phase 6e, carried from 6c+):
+ * The baseline arithmetic (mean, sd, sd floor, minimum sample, deadband) is
+ * lib/engine/baseline.ts, shared with the metric connectors since Phase 7.
+ * The three guards it carries were introduced here (Phase 6e, from 6c+):
  *   MINIMUM SAMPLE   fewer than minPopulatedWindows windows with any trade in
  *                    the baseline → the force returns 0 and reports
  *                    "insufficient baseline". On day one, and for a newly
@@ -71,9 +74,6 @@ export function windowed(events: TradeEvent[], now: Date, config: EngineConfig["
   return { flows, counts };
 }
 
-/** Deviations this close to zero are "at baseline": no direction to report. */
-const AT_BASELINE_EPSILON = 1e-9;
-
 export function tradingActivityForce(input: {
   events: TradeEvent[];
   now: Date;
@@ -99,25 +99,24 @@ export function tradingActivityForce(input: {
   const flowScore = toScore(netFlowCents);
 
   const { flows, counts } = windowed(events, now, config);
-  const baseline = flows.map(toScore);
-  const populatedWindows = counts.filter((count) => count > 0).length;
-  const baselineMean = mean(baseline);
-  const baselineSd = standardDeviation(baseline);
-  const sdApplied = Math.max(baselineSd, config.sdFloor);
-  const deviation = flowScore - baselineMean;
+  const reading = baselineDeviation(
+    { current: flowScore, baseline: flows.map(toScore), samples: counts.filter((count) => count > 0).length },
+    { minSamples: config.minPopulatedWindows, sdFloor: config.sdFloor, thresholdStdDevs: config.thresholdStdDevs },
+  );
 
   const details = {
     netFlowCents,
     flowScore,
     baselineHours: config.baselineHours,
-    populatedWindows,
-    minPopulatedWindows: config.minPopulatedWindows,
-    baselineMean,
-    baselineSd,
-    sdFloor: config.sdFloor,
-    sdApplied,
-    deviation,
-    threshold: config.thresholdStdDevs,
+    populatedWindows: reading.samples,
+    minPopulatedWindows: reading.minSamples,
+    baselineMean: reading.mean,
+    baselineSd: reading.sd,
+    sdFloor: reading.sdFloor,
+    sdApplied: reading.sdApplied,
+    deviation: reading.deviation,
+    sigma: reading.sigma,
+    threshold: reading.threshold,
     weight: config.weight,
     inBandScale: config.inBandScale,
     inBandMinImpact: config.inBandMinImpact,
@@ -125,18 +124,18 @@ export function tradingActivityForce(input: {
   };
 
   // MINIMUM SAMPLE: without enough trading history there is no baseline to deviate from.
-  if (populatedWindows < config.minPopulatedWindows) {
+  if (!reading.sufficient) {
     return { ...base, impact: 0, details: { ...details, reason: "insufficient baseline" } };
   }
 
-  if (Math.abs(deviation) < AT_BASELINE_EPSILON) {
+  if (reading.atBaseline) {
     return { ...base, impact: 0, details: { ...details, band: "inside", reason: "flow at baseline" } };
   }
 
   const dampening = confirmedBySignals ? 1 : config.unconfirmedDampening;
-  const inside = Math.abs(deviation) <= config.thresholdStdDevs * sdApplied;
-  const sign = deviation > 0 ? 1 : -1;
-  const magnitude = Math.abs(deviation) * config.weight * dampening * (inside ? config.inBandScale : 1);
+  const inside = reading.band === "inside";
+  const sign = reading.deviation > 0 ? 1 : -1;
+  const magnitude = Math.abs(reading.deviation) * config.weight * dampening * (inside ? config.inBandScale : 1);
   const impact = sign * clamp(Math.max(magnitude, config.inBandMinImpact), 0, config.maxAbsImpact);
 
   return { ...base, impact, details: { ...details, dampening, band: inside ? "inside" : "outside", fired: !inside } };

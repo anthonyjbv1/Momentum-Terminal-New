@@ -59,8 +59,9 @@ export async function placeOrderAsUser(input: PlaceOrderInput): Promise<OrderRes
     p_person_id: input.personId,
     p_side: input.side,
     p_units: input.units,
-    p_quoted_price_cents: input.quotedPriceCents,
-    p_surface: input.surface,
+    // Both default to null in SQL; an omitted argument is the same as null.
+    p_quoted_price_cents: input.quotedPriceCents ?? undefined,
+    p_surface: input.surface ?? undefined,
   });
   if (error) throw new Error(error.message);
   return toOrderResult(data, input.personId);

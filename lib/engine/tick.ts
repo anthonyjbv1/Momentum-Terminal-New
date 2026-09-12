@@ -7,6 +7,7 @@ import { tradingActivityForce } from "@/lib/engine/forces/trading-activity";
 import { inversePairAdjustments } from "@/lib/engine/inverse-pairs";
 import { clamp, round } from "@/lib/engine/math";
 import { getSentimentScorer } from "@/lib/engine/sentiment";
+import { isMetricSignal, metricScorer as defaultMetricScorer } from "@/lib/engine/sentiment/metric";
 import type { SentimentResult, SentimentScorer } from "@/lib/engine/sentiment/types";
 import { buySellPrices, computeSpreads } from "@/lib/engine/spread";
 import type { EngineStore } from "@/lib/engine/store";
@@ -30,7 +31,10 @@ import type { Person } from "@/types";
 
 export interface EngineTickOptions {
   store: EngineStore;
+  /** Scores event signals (news, comments). */
   scorer?: SentimentScorer;
+  /** Scores metric signals (payload kind "metric") from their explicit polarity and sigma. Defaults to the MetricScorer. */
+  metricScorer?: SentimentScorer;
   config?: EngineConfig;
   now?: Date;
   /** Compute everything and return the summary without persisting. */
@@ -58,23 +62,30 @@ function roundForce(entry: ForceEntry): ForceEntry {
 export async function runEngineTick(options: EngineTickOptions): Promise<TickSummary> {
   const { store, config = DEFAULT_ENGINE_CONFIG, dryRun = false, trigger = "manual" } = options;
   const scorer = options.scorer ?? getSentimentScorer();
+  const metricScorer = options.metricScorer ?? defaultMetricScorer;
   const startedAt = options.now ?? new Date();
   const wallClockStart = Date.now();
 
   const context: TickContext = await store.loadTickContext(startedAt, config);
   const { floor, ceiling, decimals } = config.score;
+  const expectedTickNumber = context.lastTickNumber + 1;
 
   // 2. Sentiment -------------------------------------------------------------
+  // Routed by what the signal IS, not where it came from: a metric signal
+  // (payload kind "metric") goes to the metric scorer, everything else to
+  // the sentiment scorer. No source is named here.
   const sentiments = new Map<string, SentimentResult>();
   await Promise.all(
     context.signals.map(async (signal) => {
-      const result = await scorer.scoreSignal({
+      const chosen = isMetricSignal(signal.rawPayload) ? metricScorer : scorer;
+      const result = await chosen.scoreSignal({
         id: signal.id,
         personId: signal.personId,
         headline: signal.headline,
         rawPayload: signal.rawPayload,
         sourceName: signal.sourceName,
         sourceTier: signal.sourceTier,
+        tickNumber: expectedTickNumber,
       });
       sentiments.set(signal.id, result);
     }),
@@ -201,7 +212,6 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
   const slugById = new Map(results.map((r) => [r.person.id, r.person.slug]));
   const scoredAll = results.flatMap((r) => r.scoredSignals);
 
-  const expectedTickNumber = context.lastTickNumber + 1;
   const summary: TickSummary = {
     tickNumber: expectedTickNumber,
     dryRun,

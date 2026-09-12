@@ -2,7 +2,7 @@
 
 A social data terminal where users take **HIGH** or **LOW** positions on individual people. Each person has a continuously updating Momentum Score driven by their observable real-world data. Users profit when a score moves in their predicted direction; the platform is the sole counterparty. The scoring system is called **the Engine**; its five forces are **Gravity**, **Signals**, **Market Mood**, **Conviction** and **Trading Activity**.
 
-> **Status: Phase 6f (the portfolio) complete.** On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation, the editorial-monochrome shell, the live Home board, the person profile page and the Feed, **trading is live, on paper**: Buy opens a HIGH position at the server-read Buy quote, Sell closes it FIFO at the Sell quote, every amount is integer cents, and every order is one atomic RPC (`place_order()`) behind a tolerance band, the long-only gate and four inert risk levers. **`/portfolio` closes the loop**: total value, cash, unrealized and realized P&L, every open position marked at the Sell quote with its weighted-average entry, a value line recorded at every tick and every trade, and the full trade history with a keyset cursor — all computed by the database in integer cents, never by the browser; a close on the portfolio routes into the same 6e trade sheet. The paper balance starts at $10,000 and the close cooldown is 60 s (one full tick and more; policy pending). `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0, every chart is honestly empty, every STATE reads Stable, every force reads idle, the Feed is quiet and the value line has only the points that orders record, and each surface says so. The profile screen, search results and the recommendation layer are later phases.
+> **Status: Phase 7 (metric connectors + auth gate) complete.** The whole app now sits behind a signed-in session while the test is closed (`lib/auth-gate.ts`, one file, removable in one step; robots disallowed, every response `noindex`). Four data sources are registered as data, not code — `youtube` (channel metrics and commentary volume), `youtube_comments`, `rss`, `spotify` — with MrBeast and Drake mapped; every metric a connector reads is snapshotted into a service-role-only raw table, differenced, normalised against the person's own trailing baseline (the same `lib/engine/baseline.ts` Trading Activity uses) and turned into a signal that carries **direction and sigma only**, never a level; a trigger on `signals` refuses anything more, and the metric scorer feeds the Signals force in the same units as a headline with an explicit per-metric polarity. Every poll and observation is logged; `/api/admin/health` reads per-source health and LLM cost per tick. On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation, the editorial-monochrome shell, the live Home board, the person profile page and the Feed, **trading is live, on paper**: Buy opens a HIGH position at the server-read Buy quote, Sell closes it FIFO at the Sell quote, every amount is integer cents, and every order is one atomic RPC (`place_order()`) behind a tolerance band, the long-only gate and four inert risk levers. **`/portfolio` closes the loop**: total value, cash, unrealized and realized P&L, every open position marked at the Sell quote with its weighted-average entry, a value line recorded at every tick and every trade, and the full trade history with a keyset cursor — all computed by the database in integer cents, never by the browser; a close on the portfolio routes into the same 6e trade sheet. The paper balance starts at $10,000 and the close cooldown is 60 s (one full tick and more; policy pending). `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0, every chart is honestly empty, every STATE reads Stable, every force reads idle, the Feed is quiet and the value line has only the points that orders record, and each surface says so. The profile screen, search results and the recommendation layer are later phases.
 
 ## Stack
 
@@ -45,8 +45,9 @@ All variables are listed in `.env.local.example`. `lib/env.ts` is the only place
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | browser + server             | Publishable key (`sb_publishable_…`). The legacy anon JWT also works. Subject to RLS.    |
 | `SUPABASE_SERVICE_ROLE_KEY`            | server only                  | Secret key (`sb_secret_…`) or legacy `service_role` JWT. **Bypasses RLS.** Never public. |
 | `NEXT_PUBLIC_SITE_URL`                 | server (auth redirect links) | `http://localhost:3000` locally, your Vercel URL in production.                          |
-| `YOUTUBE_API_KEY`                      | server only (ingestion)      | YouTube Data API v3 key. Read inside the YouTube connector, never sent to a browser.      |
-| `INGEST_SECRET`                        | server only (ingestion)      | Random string that authorises `/api/ingest`. Generate with `openssl rand -hex 32`.       |
+| `YOUTUBE_API_KEY`                      | server only (ingestion)      | YouTube Data API v3 key for the `youtube` and `youtube_comments` connectors. Unset → both sources are inactive for the run, logged as skipped. |
+| `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` | server only (ingestion) | Spotify Web API client credentials (public artist data). Unset → the `spotify` source is inactive for the run. |
+| `INGEST_SECRET`                        | server only (ingestion)      | Random string that authorises `/api/ingest` and `/api/admin/health`. Generate with `openssl rand -hex 32`. |
 | `ENGINE_SECRET`                        | server only (Engine)         | Random string that authorises `/api/engine/tick` (and manual calls to `/api/engine/cron`). |
 | `SCORER`                               | server only (Engine)         | `llm` (default) or `rules` — the instant fallback to the Phase 3 keyword scorer.        |
 | `ENGINE_CRON_ENABLED`                  | server only (heartbeat)      | **The switch.** Only the exact string `true` lets `/api/engine/cron` tick; anything else (including unset) logs `skipped (disabled)` and returns. Default `false`. |
@@ -57,7 +58,9 @@ All variables are listed in `.env.local.example`. `lib/env.ts` is the only place
 | `ANTHROPIC_API_KEY`                    | server only (LLM)            | Anthropic Messages API key.                                                              |
 | `LLM_MODEL_<TASK>`, `LLM_PROVIDER_<TASK>`, `LLM_EFFORT_<TASK>` | server only, optional | Per-task routing for `SENTIMENT`, `ANOMALY`, `NARRATIVE`, `MEMORY` (e.g. a cheap model for scoring). |
 
-Reserved for later phases (listed as comments in the example file): `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_API_KEY`, `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `FINNHUB_API_KEY`, `NEWSDATA_KEY`, `RAPIDAPI_KEY`, `APISPORTS_KEY`.
+Reserved for later phases (listed as comments in the example file): `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_API_KEY`, `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `FINNHUB_API_KEY`, `NEWSDATA_KEY`, `RAPIDAPI_KEY`, `APISPORTS_KEY`.
+
+Credentials come from the environment only: never from the repo, never from the bundle. A connector whose credentials are missing reports itself unavailable and its source is skipped for the run; nothing else is affected.
 
 ## Project structure
 
@@ -81,7 +84,8 @@ app/
   account/page.tsx         redirects to /profile
   not-found.tsx            404, with the banner
   icon.png                 favicon (512px downscale of the brand mark)
-  api/ingest/route.ts      ingestion runner endpoint (INGEST_SECRET)
+  api/ingest/route.ts      ingestion runner endpoint (INGEST_SECRET; ?source=, ?force=1)
+  api/admin/health/route.ts per-source health, recent runs, LLM cost per tick (INGEST_SECRET or ENGINE_SECRET)
   api/engine/tick/route.ts Engine tick endpoint (ENGINE_SECRET, ?dryRun=1)
   api/engine/cron/route.ts the heartbeat: Vercel Cron target, gated by ENGINE_CRON_ENABLED
   api/behavioral/log/route.ts client-side behavioral logging (cookie auth, batched, RLS-scoped insert)
@@ -111,11 +115,12 @@ lib/
   supabase.ts              typed browser client
   supabase-server.ts       typed cookie-based server client
   supabase-admin.ts        typed service-role client (server only, bypasses RLS)
-  supabase-proxy.ts        session refresh + route guards used by proxy.ts
+  supabase-proxy.ts        session refresh (resolveSession) + route rules (applyRouteRules) used by proxy.ts
+  auth-gate.ts             THE AUTH GATE: the whole app behind a session while the test is closed; one file, one call, removable in one step
   auth.ts                  getCurrentUser, getCurrentSession, getCurrentProfile, requireUser
   money.ts, format.ts      integer-cents and headline number formatting
-  connectors/              DataConnector interface, registry, YouTube connector, 8 stubs
-  ingest/                  runIngestion(), IngestStore (Supabase + in-memory)
+  connectors/              DataConnector interface (events + metrics + availability), registry; youtube, youtube-comments, rss, spotify implemented; 6 stubs
+  ingest/                  runIngestion(), the metric pipeline (metrics.ts: config, observation, derivation, the signal), IngestStore (Supabase + in-memory)
   llm/
     types.ts               LLMProvider / LLMRequest / LLMResponse / LLMError — the only LLM surface the app sees
     providers/             anthropic.ts (live), openai.ts, gemini.ts, openai-compatible.ts (stubs)
@@ -189,7 +194,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260905205313_auth_triggers.sql`         | `handle_new_user` trigger, email-sync trigger, `username_available()` RPC                    |
 | `20260905205726_seed_phase1.sql`           | 16 people, the Drake ↔ Kendrick Lamar inverse pair, 8 inactive data sources                  |
 | `20260907002020_lock_financial_writes.sql` | Removes client write access to financial tables, event_type allow-list, RPC template         |
-| `20260907002303_source_snapshots.sql`      | `source_snapshots` table + RLS, `signals.occurred_at`, `signals.dedupe_key`                  |
+| `20260907002303_source_snapshots.sql`      | `source_snapshots` table + RLS (renamed `raw_source_snapshots` and closed to users in Phase 7), `signals.occurred_at`, `signals.dedupe_key` |
 | `20260907002801_seed_rss_data_source.sql`  | Registers the inactive `rss` data source                                                     |
 | `20260907143920_engine_tables.sql`         | `people.last_tick_at` + generated `buy_price`/`sell_price`, `engine_ticks`, `score_events`, `trade_events`, `apply_engine_tick()` |
 | `20260907195432_behavioral_logging_foundation.sql` | `behavioral_events.session_id`, format-only `event_type` check, metadata check, recommender indexes, column-level insert grant, three service-role-only aggregate functions |
@@ -201,6 +206,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260910191918_narrative_signals.sql`     | `narrative_signals` (narrative ↔ signal, many-to-many, `relation` direct / inverse_pair) with the `narrative_signals_enforce_person` integrity trigger, the service-role `record_narratives()` write path (sentence and links in one transaction), and `feed_entries()` rewritten to read evidence from the link only — no tick-window inference, no fallback |
 | `20260912153309_portfolio.sql`             | Part 0: `close_cooldown_seconds` → 60 (policy floor: one full tick), `starting_balance_cents()` → 1,000,000, service-role `credit_paper_balance()`; `portfolio_history` gains `tick_number` / `order_id` and is written by `record_portfolio_snapshot()` (a trigger after every order) and `snapshot_portfolios()` (inside `apply_engine_tick()` at every tick); `portfolio_value_cents()`; **`portfolio_summary_for()` / `my_portfolio()`**, `portfolio_value_series_for()` / `my_portfolio_value_series()`, `trade_history_for()` / `my_trade_history()` (keyset on `(created_at, id)`) |
 | `20260907153228_llm_memory_narratives.sql` | `person_memory` (+ 16 seeded profiles), `llm_usage`, `narratives`, with RLS                  |
+| `20260912211216_phase7_metric_connectors.sql` | `source_snapshots` → **`raw_source_snapshots`** (read policy dropped, service role only); `raw_metric_observations`, `ingest_runs`, `source_polls` (all service role only); the `source_health` and `llm_cost_per_tick` views; `llm_model_prices`; the `signals_enforce_metric_privacy` trigger; the registry rows for `youtube`, `youtube_comments`, `rss`, `spotify` with their metric declarations, and the MrBeast / Drake mappings |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
 
@@ -218,7 +224,10 @@ All of these are applied to the `Momentum Terminal` Supabase project and recorde
 | `position_closes`     | Realized P&L, one row per lot touched by a close (FIFO), with the arithmetic enforced by check   |
 | `transactions`        | Wallet ledger (`DEPOSIT`, `ALLOCATION`, `REDEMPTION`, `WITHDRAWAL`), each with its `order_id`   |
 | `signals`             | Raw data points from connectors; the Engine writes `impact_score`, sentiment and `processed`  |
-| `source_snapshots`    | Last known value per person / source / metric, for delta detection                            |
+| `raw_source_snapshots` | **RAW** metric levels as connectors read them (a subscriber count, a follower total, a popularity index), one row per poll. Service role only; no user-facing surface reads it |
+| `raw_metric_observations` | **RAW**: every metric reading judged against the person's own baseline: level, previous, delta, mean, sd, sigma, outcome, the signal it produced. Service role only |
+| `ingest_runs`, `source_polls` | Every ingestion run, and every poll of a source for a person (ok / error / skipped with the reason, latency, what it produced). Service role only |
+| `llm_model_prices`    | USD per million tokens by model, for the `llm_cost_per_tick` view. Service role only            |
 | `score_history`       | One row per person per tick (`tick_number`, `score`)                                          |
 | `engine_ticks`        | One row per Engine tick: timing, counts, market mood, summary                                 |
 | `score_events`        | Per-force audit trail (`force`, `impact`, `details`); zero-impact entries are never written   |
@@ -240,8 +249,8 @@ RLS is enabled on every table. The `anon` role has no policies anywhere.
 | `positions`, `transactions`, `portfolio_history`, `trade_orders`, `position_closes`                                                                | read own rows only                                                           | full (only writer) |
 | `trade_events`                                                                                                                                      | read own rows only                                                           | full (only writer) |
 | `behavioral_events`                                                                                                                                 | read own; insert own (`user_id, event_type, person_id, metadata, session_id` only); no update/delete | full               |
-| `people`, `data_sources`, `person_data_sources`, `inverse_pairs`, `score_history`, `signals`, `source_snapshots`, `engine_ticks`, `score_events`, `person_memory`, `narratives` | read all                                                | full (only writer) |
-| `llm_usage`                                                                                                                                         | no access                                                                    | full (only writer) |
+| `people`, `data_sources`, `person_data_sources`, `inverse_pairs`, `score_history`, `signals`, `engine_ticks`, `score_events`, `person_memory`, `narratives` | read all                                                | full (only writer) |
+| `llm_usage`, `llm_model_prices`, **`raw_source_snapshots`**, **`raw_metric_observations`**, `ingest_runs`, `source_polls`, and the `source_health` / `llm_cost_per_tick` views | no access (no grant, no policy; a test asserts no function or view they can reach references the raw tables) | full (only writer) |
 | `platform_settings`                                                                                                                                 | read                                                                         | full (only writer) |
 
 ### Financial writes
@@ -257,28 +266,25 @@ Clients never write money. Every write to `positions`, `transactions`, `portfoli
 
 - **Signup** (`/signup`): the Server Action validates the input, pre-checks the username through the `username_available()` RPC, then calls `supabase.auth.signUp` with `username` and `display_name` in the user metadata. The `on_auth_user_created` trigger inserts the `public.users` row with the $10,000 paper balance (`starting_balance_cents()`) and a matching `DEPOSIT` transaction.
 - **Login** (`/login`): `signInWithPassword`, then redirect to `next` (defaults to `/account`). Email confirmation links land on `/auth/callback`.
-- `proxy.ts` refreshes expired sessions on every request and guards `/account`, `/login` and `/signup`.
+- `proxy.ts` refreshes expired sessions on every request (`resolveSession`), then applies **the auth gate** (`lib/auth-gate.ts`, Phase 7): while the test is closed, a signed-out request to any page is redirected to `/login?next=…`, a signed-out call to any API route gets `401` JSON (never a redirect), `/login`, `/signup`, `/auth/*` and static assets stay reachable, the shared-secret routes (`/api/ingest`, `/api/engine/*`, `/api/admin/*`) are left to their own check, `/robots.txt` is `Disallow: /`, and every response carries `X-Robots-Tag: noindex, nofollow, noarchive`. The gate is one file with one call site; a test asserts nothing else imports it, so reopening the app is deleting the file and restoring one line, after which the per-route rules in `lib/supabase-proxy.ts` (`/account`, `/portfolio`, `/profile` need a session; `/login`, `/signup` need none) keep working.
 - Use `getCurrentUser()` / `requireUser()` from `lib/auth.ts` in server code for anything that depends on identity.
 
 Set the Supabase Auth **Site URL** and **Redirect URLs** (Authentication → URL Configuration) to include your local and Vercel origins plus `/auth/callback`.
 
 ## Data ingestion
 
-Connectors under `lib/connectors/` implement `DataConnector` (`fetchForPerson(person, externalIdentifier, context) → RawSignal[]`) and are registered by `data_sources.name`. `youtube` is implemented (channel statistics with snapshot-based delta detection); `twitch`, `spotify`, `forbes`, `finnhub`, `newsdata`, `billboard`, `apisports` and `rss` are interface-compliant stubs with TODOs. The runner (`lib/ingest/runner.ts`) reads active sources and `person_data_sources` mappings, calls the connectors, upserts signals with `processed = false` (dedupe keys prevent duplicates) and records `source_snapshots`.
+Connectors under `lib/connectors/` implement `DataConnector` and are registered by `data_sources.name`. A connector produces **events** (`fetchForPerson → RawSignal[]`: news items, comments, real text the sentiment scorer reads), **metrics** (`fetchMetrics → MetricReading[]`: raw levels the runner normalises before anything sees them), or both, and may report `available()` (credentials present or not). `youtube` (channel metrics and commentary volume), `youtube_comments` (viewer comments), `rss` (a person-scoped feed: articles and news volume) and `spotify` (popularity and followers) are implemented; `twitch`, `forbes`, `finnhub`, `newsdata`, `billboard` and `apisports` are interface-compliant stubs.
+
+A **source** is a `data_sources` row (tier, poll interval, and the metric declarations in `config`) plus its credentials in the environment; a connector is only the code that can talk to that kind of upstream. Adding a source is inserting the row and mapping people in `person_data_sources`; removing one is flipping `is_active`. No code names a source. The runner (`lib/ingest/runner.ts`) reads the active sources, skips the ones whose connector is unavailable (missing credentials) or was polled within `poll_interval_minutes`, calls each connector per mapped person, stores events with `processed = false` (dedupe keys prevent duplicates), and runs every metric reading through the pipeline in [Metric connectors and the privacy rule](#metric-connectors-and-the-privacy-rule-phase-7). Every run, poll and observation is recorded.
 
 ```bash
-curl -X POST -H "x-ingest-secret: $INGEST_SECRET" "http://localhost:3000/api/ingest?source=youtube"
+# every active source that is due; add ?force=1 to poll regardless of the interval, ?source=youtube to narrow
+curl -X POST -H "x-ingest-secret: $INGEST_SECRET" "https://<host>/api/ingest?force=1"
+# per-source health, recent runs, LLM cost per tick
+curl -H "x-ingest-secret: $INGEST_SECRET" "https://<host>/api/admin/health"
 ```
 
-To test the YouTube connector against the live API, set `YOUTUBE_API_KEY`, map a person to a channel (MrBeast is `UCX6OQ3DkcsbYNE6H8uQQuVA`), activate the source and call the endpoint:
-
-```sql
-insert into public.person_data_sources (person_id, data_source_id, external_identifier)
-select p.id, d.id, 'UCX6OQ3DkcsbYNE6H8uQQuVA' from public.people p, public.data_sources d
- where p.slug = 'mrbeast' and d.name = 'youtube'
-on conflict (person_id, data_source_id) do update set external_identifier = excluded.external_identifier, is_active = true;
-update public.data_sources set is_active = true where name = 'youtube';
-```
+The registry as shipped: MrBeast ↔ `youtube`, `youtube_comments` (`UCX6OQ3DkcsbYNE6H8uQQuVA`) and `rss` (a Google News query for his name); Drake ↔ `rss` and `spotify` (`3TVXtAsR1Inumwj472S9r4`). All four sources are active; the credentialed ones run once their keys are set.
 
 ## The Engine
 
@@ -831,10 +837,46 @@ The value over time cannot be rebuilt from `score_history` alone: the Sell quote
 
 The close cooldown rose from 5 s to 60 s (see the levers), the starting balance from $1,000 to $10,000 (see the paper balance), the Trading Activity minimum-sample guard became overridable by `ENGINE_TRADING_MIN_POPULATED_WINDOWS` with its default of 30 unchanged (`engineConfigFromEnv()` in `lib/engine/config.ts`, wired into `runFullTick()`), and the local clone's `origin` remote gained its fetch refspec so `origin/main` exists.
 
+## Metric connectors and the privacy rule (Phase 7)
+
+The Signals force now has two kinds of evidence: **events** (a headline, a comment: text the sentiment scorer reads) and **metrics** (a level a connector reads: subscribers, followers, a popularity index, a news count). A metric is never a signal by itself. The pipeline in `lib/ingest/metrics.ts` is:
+
+```
+poll → snapshot (raw_source_snapshots) → delta vs the previous snapshot → normalise against the
+person's own trailing baseline → a signal only when the baseline is sufficient and the reading is
+outside the band
+```
+
+The normalisation is the point. What each metric means is declared on its `data_sources.config`, per metric, and never in Engine code:
+
+| Field | Meaning |
+| --- | --- |
+| `polarity` | `1` when up is good for the person, `-1` when up is bad. **Explicit; a metric without one is snapshot-only** and never scores. Never inferred from the sign of a delta. |
+| `delta` | how consecutive snapshots become an observation: `level` (the value itself: a bounded index, a windowed count), `absolute_rate` (change per hour), `relative_rate` (change per hour as a fraction of the previous level) |
+| `baseline_window_hours` | how far back the person's own series reaches |
+| `min_samples` | observations required before a deviation counts. **Below it the metric emits nothing**, whatever the move |
+| `sd_floor` | floor for the baseline sd, in the observation's units, so a flat history cannot make a small move many sigma |
+| `scale` | how strongly a sigma of this metric reads (the metric scorer multiplies by it) |
+| `threshold_std_devs` | the deadband, default 1.0σ |
+
+`config.derived` declares metrics computed from another metric's snapshot history with no connector of their own: `upload_rate` (`kind: rate`: the change in `video_count` over the trailing week, per day, once the history spans the window) and `viral_moment_rate` (`kind: spike_count`: how many `news_volume_24h` readings in the trailing week sat two sd above the week's own mean). A derived level is snapshotted and normalised like any other.
+
+**One baseline.** `lib/engine/baseline.ts` (`baselineDeviation`) is the single implementation of mean, population sd, sd floor, minimum sample and deadband. Trading Activity consumes it for net order flow; every metric consumes it for its observations; a test fails if either grows its own mean and sd.
+
+**The metric scorer.** `lib/engine/sentiment/metric.ts` sits beside the sentiment scorers behind the same `SentimentScorer` interface: `confidence = clamp(|σ| / 3 × scale, 0, 1)`, `direction = polarity × sign(σ)`, and the Signals force computes `baseImpact × tier × confidence × direction` exactly as for a headline, so metric and news signals flow into one force with the source tier as the relative weight (official APIs tier 2, a curated feed tier 3, viewer comments tier 4). The Engine routes by what a signal *is* (payload `kind: "metric"`), never by where it came from; the LLM scorer's prefilter sends a metric signal to the metric scorer too, and the keyword scorer refuses to give one a direction.
+
+**The privacy rule, schema-enforced.** A metric signal stores direction and normalised magnitude only: the headline reads "MrBeast's YouTube subscriber growth is running +1.4σ above their own trailing week", the payload is limited to an allow-list (`kind, metric, label, sigma, direction, polarity, samples, min_samples, window_hours, delta_kind, threshold_std_devs, scale, source`), and the `signals_enforce_metric_privacy` trigger refuses any other key, a missing polarity, a non-numeric sigma, or a headline carrying a run of four digits, a thousands grouping or a compact count. Raw levels live in `raw_source_snapshots` and `raw_metric_observations`: no grant, no policy, service role only; `lib/ingest/privacy.db.test.ts` asserts on real Postgres that no function or view the user roles can reach references them, and that no page, component or user-facing read in the app does either. The narrative layer only ever sees normalised values: the sentiment prompt's payload allow-list (`PAYLOAD_KEYS`) carries no level, previous level or delta, and a test feeds it a payload full of raw counts and asserts none reach the prompt; memory and narratives are built from headline, label and impact alone.
+
+**Per-person signal volume.** Once several sources feed one person, the number of signals in a tick says more about the sources than the person, so the Signals force (a) keeps at most `maxPerSourcePerTick` (3) non-zero signals per source, the strongest, and (b) divides the sum of the kept signals by `count^volumeExponent` (0.5): four signals of one strength read twice one of them, not four times. The assumption is that a tick's signals about one person are partially redundant evidence of the same day and combine like noise, in quadrature. Where it is weak: it still grows with the number of sources, so adding sources to a person raises their ceiling; it cannot tell a genuinely busy day from four outlets covering one story; it dilutes a lone strong signal beside weak ones; and the source cap may drop a real second story on a three-story day. The honest fix is to normalise each person's signal volume against their own trailing volume, the same baseline the metrics use, once there is history to build it from.
+
+**Observability.** Every run (`ingest_runs`), every poll (`source_polls`: source, person, ok / error / skipped with the reason, latency, what it produced) and every observation (`raw_metric_observations`: level, previous, delta, baseline mean and sd, sigma, samples, outcome, the signal it produced) is recorded and logged as a structured `[ingest]` line, so a score move can be walked back from `score_events.details.signals[].impact` to the signal to the observation to the poll. `source_health` (a view) gives last poll, last success, last error and its reason, the trailing-day poll count, error rate and latency per source; `llm_cost_per_tick` prices `llm_usage` by tick (the sentiment scorer now stamps the tick number on its usage rows) against `llm_model_prices`, and says how many calls had no price row. `GET /api/admin/health` returns all three.
+
+**Running it dry.** The cron stays off. `POST /api/ingest?force=1` with `INGEST_SECRET` runs every active source once: the first run produces snapshots, first-contact observations and no metric signals; later runs produce `insufficient_baseline` observations until `min_samples` is reached, then `inside_band` or, on a real move, `emitted` with a σ signal. Nothing here advances a score; a signal waits for a tick.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
-- **Phase 2**: financial-write lockdown + RPC pattern, connector interface and registry, YouTube connector, stubs, `source_snapshots`, ingestion runner and endpoint.
+- **Phase 2**: financial-write lockdown + RPC pattern, connector interface and registry, YouTube connector, stubs, `source_snapshots` (now `raw_source_snapshots`), ingestion runner and endpoint.
 - **Phase 3**: swappable sentiment scoring (rules-based), the five forces, inverse pairs, LMSR spread with Buy/Sell prices, the atomic tick with history and per-force audit trail, the tick endpoint.
 - **Phase 4**: provider-agnostic LLM abstraction with an Anthropic adapter and three stubs, model routing, per-entity memory with seeded baselines and cheap evolution, the `LLMScorer` with anomaly awareness and rules fallback, usage logging with a per-tick call cap, narratives for meaningful moves.
 - **Engine cron**: the 30-second heartbeat via Vercel Cron (two ticks per one-minute invocation with a time budget), one shared `runFullTick()` path, gated by `ENGINE_CRON_ENABLED`, which ships as `false`.
@@ -850,4 +892,6 @@ The close cooldown rose from 5 s to 60 s (see the levers), the starting balance 
 
 - **Phase 6f**: the portfolio: `portfolio_summary_for()` / `my_portfolio()` (cash, every position marked at its closing quote, unrealized and realized P&L, the paper credit and the return, all integer cents), value history recorded at every tick and every order into `portfolio_history` and read back through `portfolio_value_series_for()`, `trade_history_for()` with its keyset cursor, the page itself (summary, the shared live line as a value chart, positions with Sell into the 6e sheet, history with older pages, the three empty states), the `view_portfolio` event and the portfolio surface on every trade event; and the carried fixes: the 60 s cooldown, the $10,000 starting balance with `credit_paper_balance()`, the min-sample override, the git refspec.
 
-Deliberately not built yet: the profile screen, search results, and the recommendation algorithm (For You). Shorting stays switched off; the risk levers stay inert (the cooldown's rise to 60 s is a policy floor, not a calibration); the heartbeat is wired but switched off.
+- **Phase 7**: the auth gate (one removable file), the metric connector kind with the shared baseline, the metric scorer with explicit per-metric polarity feeding the Signals force, the schema-enforced privacy rule (raw levels service-role only, signals carry direction and sigma), the registry rows and mappings for `youtube`, `youtube_comments`, `rss` and `spotify` with derived metrics (upload cadence, viral-moment frequency, commentary volume), per-person signal-volume normalisation, and the run / poll / observation ledger with `source_health`, `llm_cost_per_tick` and `/api/admin/health`.
+
+Deliberately not built yet: the profile screen, search results, the Forecast force, and the recommendation algorithm (For You). Shorting stays switched off; the risk levers stay inert (the cooldown's rise to 60 s is a policy floor, not a calibration); the heartbeat is wired but switched off, and ingestion is manual.

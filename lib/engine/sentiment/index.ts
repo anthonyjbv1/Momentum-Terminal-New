@@ -7,6 +7,7 @@ import type { SentimentScorer } from "./types";
 export type { SentimentAnomaly, SentimentInput, SentimentResult, SentimentScorer } from "./types";
 export { RulesBasedScorer, rulesBasedScorer } from "./rules";
 export { LLMScorer, createDefaultLLMScorer } from "./llm";
+export { MetricScorer, metricScorer, isMetricSignal, readMetricPayload } from "./metric";
 
 /**
  * Scorer registry. The Engine asks for a scorer by name (SCORER env var,

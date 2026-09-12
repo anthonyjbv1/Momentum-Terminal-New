@@ -43,6 +43,31 @@ export interface EngineConfig {
     defaultTierMultiplier: number;
     /** Brake: |sum of signal impacts| per person per tick is capped here. */
     maxAbsImpactPerTick: number;
+    /**
+     * PER-PERSON VOLUME NORMALISATION (Phase 7). Signals from one source
+     * beyond this count in a tick are dropped, strongest kept, so a source
+     * that produces many items per poll (comments, a busy feed) cannot
+     * outvote a source that produces one.
+     */
+    maxPerSourcePerTick: number;
+    /**
+     * The kept signals are summed and divided by count^volumeExponent, so the
+     * force grows with the number of signals but not linearly: at 0.5, four
+     * signals of one strength read twice one of them, not four times.
+     * Assumption: signals in one tick are partially redundant evidence of the
+     * same day, so they add like independent noise (in quadrature) rather
+     * than like independent events. 0 sums, 1 averages.
+     */
+    volumeExponent: number;
+  };
+  /** The metric scorer (Phase 7): how a normalised deviation becomes confidence. */
+  metrics: {
+    /** |sigma| at which a metric with scale 1 reaches confidence 1. */
+    fullConfidenceSigma: number;
+    /** |sigma| from which a metric reading is remembered as notable. */
+    notableSigma: number;
+    /** |sigma| from which a metric reading is remembered as anomalous. */
+    anomalousSigma: number;
   };
   /** FORCE 3 — Market Mood (global sentiment tide). */
   marketMood: {
@@ -204,7 +229,10 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     tierMultipliers: { 1: 1.5, 2: 1.0, 3: 0.5, 4: 0.3, 5: 0.3 },
     defaultTierMultiplier: 0.3,
     maxAbsImpactPerTick: 10,
+    maxPerSourcePerTick: 3,
+    volumeExponent: 0.5,
   },
+  metrics: { fullConfidenceSigma: 3, notableSigma: 2, anomalousSigma: 3 },
   marketMood: {
     fraction: 0.25,
     defaultSensitivity: 1.0,

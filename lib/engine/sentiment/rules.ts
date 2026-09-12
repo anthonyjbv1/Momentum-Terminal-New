@@ -133,6 +133,12 @@ export function applyPayloadHints(result: SentimentResult, payload: Json | null)
     return { label: "neutral", confidence: 0, direction: 0, rationale: "baseline signal: zero impact by design" };
   }
 
+  // A metric signal carries an explicit polarity and is scored by the metric
+  // scorer. Keywords must never assign it a direction.
+  if (kind === "metric") {
+    return { label: "neutral", confidence: 0, direction: 0, rationale: "metric signal: scored by the metric scorer, never by keywords" };
+  }
+
   if (kind === "milestone" && result.direction >= 0) {
     return { label: "positive", direction: 1, confidence: Math.max(result.confidence, 0.75), rationale: `${result.rationale ?? ""}; milestone hint`.trim() };
   }

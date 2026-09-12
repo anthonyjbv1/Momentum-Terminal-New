@@ -128,6 +128,54 @@ export type Database = {
         }
         Relationships: []
       }
+      ingest_runs: {
+        Row: {
+          created_at: string
+          errors: number
+          finished_at: string | null
+          forced: boolean
+          id: string
+          observations: number
+          requested_sources: string[] | null
+          signals_created: number
+          snapshots_recorded: number
+          sources_run: number
+          started_at: string
+          summary: Json | null
+          trigger: string
+        }
+        Insert: {
+          created_at?: string
+          errors?: number
+          finished_at?: string | null
+          forced?: boolean
+          id?: string
+          observations?: number
+          requested_sources?: string[] | null
+          signals_created?: number
+          snapshots_recorded?: number
+          sources_run?: number
+          started_at: string
+          summary?: Json | null
+          trigger: string
+        }
+        Update: {
+          created_at?: string
+          errors?: number
+          finished_at?: string | null
+          forced?: boolean
+          id?: string
+          observations?: number
+          requested_sources?: string[] | null
+          signals_created?: number
+          snapshots_recorded?: number
+          sources_run?: number
+          started_at?: string
+          summary?: Json | null
+          trigger?: string
+        }
+        Relationships: []
+      }
       inverse_pairs: {
         Row: {
           dampening: number
@@ -163,6 +211,36 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      llm_model_prices: {
+        Row: {
+          cache_read_per_mtok: number
+          cache_write_per_mtok: number
+          input_per_mtok: number
+          model: string
+          note: string | null
+          output_per_mtok: number
+          updated_at: string
+        }
+        Insert: {
+          cache_read_per_mtok: number
+          cache_write_per_mtok: number
+          input_per_mtok: number
+          model: string
+          note?: string | null
+          output_per_mtok: number
+          updated_at?: string
+        }
+        Update: {
+          cache_read_per_mtok?: number
+          cache_write_per_mtok?: number
+          input_per_mtok?: number
+          model?: string
+          note?: string | null
+          output_per_mtok?: number
+          updated_at?: string
+        }
+        Relationships: []
       }
       llm_usage: {
         Row: {
@@ -398,6 +476,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "person_data_sources_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "source_health"
+            referencedColumns: ["data_source_id"]
+          },
+          {
             foreignKeyName: "person_data_sources_person_id_fkey"
             columns: ["person_id"]
             isOneToOne: false
@@ -473,6 +558,55 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      portfolio_history: {
+        Row: {
+          id: string
+          order_id: string | null
+          recorded_at: string
+          tick_number: number | null
+          total_value_cents: number
+          user_id: string
+        }
+        Insert: {
+          id?: string
+          order_id?: string | null
+          recorded_at?: string
+          tick_number?: number | null
+          total_value_cents: number
+          user_id: string
+        }
+        Update: {
+          id?: string
+          order_id?: string | null
+          recorded_at?: string
+          tick_number?: number | null
+          total_value_cents?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portfolio_history_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "trade_orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portfolio_history_tick_number_fkey"
+            columns: ["tick_number"]
+            isOneToOne: false
+            referencedRelation: "engine_ticks"
+            referencedColumns: ["tick_number"]
+          },
+          {
+            foreignKeyName: "portfolio_history_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       position_closes: {
         Row: {
@@ -551,55 +685,6 @@ export type Database = {
           },
         ]
       }
-      portfolio_history: {
-        Row: {
-          id: string
-          order_id: string | null
-          recorded_at: string
-          tick_number: number | null
-          total_value_cents: number
-          user_id: string
-        }
-        Insert: {
-          id?: string
-          order_id?: string | null
-          recorded_at?: string
-          tick_number?: number | null
-          total_value_cents: number
-          user_id: string
-        }
-        Update: {
-          id?: string
-          order_id?: string | null
-          recorded_at?: string
-          tick_number?: number | null
-          total_value_cents?: number
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "portfolio_history_order_id_fkey"
-            columns: ["order_id"]
-            isOneToOne: false
-            referencedRelation: "trade_orders"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "portfolio_history_tick_number_fkey"
-            columns: ["tick_number"]
-            isOneToOne: false
-            referencedRelation: "engine_ticks"
-            referencedColumns: ["tick_number"]
-          },
-          {
-            foreignKeyName: "portfolio_history_user_id_fkey"
-            columns: ["user_id"]
-            isOneToOne: false
-            referencedRelation: "users"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       positions: {
         Row: {
           amount_cents: number
@@ -666,6 +751,163 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      raw_metric_observations: {
+        Row: {
+          created_at: string
+          data_source_id: string
+          delta: number | null
+          delta_kind: string | null
+          id: string
+          mean: number | null
+          metric_key: string
+          min_samples: number | null
+          observed: number | null
+          outcome: string
+          person_id: string
+          previous: number | null
+          recorded_at: string
+          run_id: string
+          samples: number | null
+          sd: number | null
+          sd_applied: number | null
+          sigma: number | null
+          signal_id: string | null
+          value: number
+          window_hours: number | null
+        }
+        Insert: {
+          created_at?: string
+          data_source_id: string
+          delta?: number | null
+          delta_kind?: string | null
+          id?: string
+          mean?: number | null
+          metric_key: string
+          min_samples?: number | null
+          observed?: number | null
+          outcome: string
+          person_id: string
+          previous?: number | null
+          recorded_at: string
+          run_id: string
+          samples?: number | null
+          sd?: number | null
+          sd_applied?: number | null
+          sigma?: number | null
+          signal_id?: string | null
+          value: number
+          window_hours?: number | null
+        }
+        Update: {
+          created_at?: string
+          data_source_id?: string
+          delta?: number | null
+          delta_kind?: string | null
+          id?: string
+          mean?: number | null
+          metric_key?: string
+          min_samples?: number | null
+          observed?: number | null
+          outcome?: string
+          person_id?: string
+          previous?: number | null
+          recorded_at?: string
+          run_id?: string
+          samples?: number | null
+          sd?: number | null
+          sd_applied?: number | null
+          sigma?: number | null
+          signal_id?: string | null
+          value?: number
+          window_hours?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "raw_metric_observations_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "data_sources"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "raw_metric_observations_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "source_health"
+            referencedColumns: ["data_source_id"]
+          },
+          {
+            foreignKeyName: "raw_metric_observations_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "raw_metric_observations_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "ingest_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "raw_metric_observations_signal_id_fkey"
+            columns: ["signal_id"]
+            isOneToOne: false
+            referencedRelation: "signals"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      raw_source_snapshots: {
+        Row: {
+          data_source_id: string
+          id: string
+          metric_key: string
+          person_id: string
+          recorded_at: string
+          value: number
+        }
+        Insert: {
+          data_source_id: string
+          id?: string
+          metric_key: string
+          person_id: string
+          recorded_at?: string
+          value: number
+        }
+        Update: {
+          data_source_id?: string
+          id?: string
+          metric_key?: string
+          person_id?: string
+          recorded_at?: string
+          value?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "raw_source_snapshots_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "data_sources"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "raw_source_snapshots_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "source_health"
+            referencedColumns: ["data_source_id"]
+          },
+          {
+            foreignKeyName: "raw_source_snapshots_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
             referencedColumns: ["id"]
           },
         ]
@@ -802,6 +1044,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "signals_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "source_health"
+            referencedColumns: ["data_source_id"]
+          },
+          {
             foreignKeyName: "signals_person_id_fkey"
             columns: ["person_id"]
             isOneToOne: false
@@ -810,44 +1059,79 @@ export type Database = {
           },
         ]
       }
-      source_snapshots: {
+      source_polls: {
         Row: {
+          created_at: string
           data_source_id: string
+          finished_at: string
           id: string
-          metric_key: string
-          person_id: string
-          recorded_at: string
-          value: number
+          latency_ms: number | null
+          observations: number
+          person_id: string | null
+          reason: string | null
+          run_id: string
+          signals_created: number
+          snapshots_recorded: number
+          started_at: string
+          status: string
         }
         Insert: {
+          created_at?: string
           data_source_id: string
+          finished_at: string
           id?: string
-          metric_key: string
-          person_id: string
-          recorded_at?: string
-          value: number
+          latency_ms?: number | null
+          observations?: number
+          person_id?: string | null
+          reason?: string | null
+          run_id: string
+          signals_created?: number
+          snapshots_recorded?: number
+          started_at: string
+          status: string
         }
         Update: {
+          created_at?: string
           data_source_id?: string
+          finished_at?: string
           id?: string
-          metric_key?: string
-          person_id?: string
-          recorded_at?: string
-          value?: number
+          latency_ms?: number | null
+          observations?: number
+          person_id?: string | null
+          reason?: string | null
+          run_id?: string
+          signals_created?: number
+          snapshots_recorded?: number
+          started_at?: string
+          status?: string
         }
         Relationships: [
           {
-            foreignKeyName: "source_snapshots_data_source_id_fkey"
+            foreignKeyName: "source_polls_data_source_id_fkey"
             columns: ["data_source_id"]
             isOneToOne: false
             referencedRelation: "data_sources"
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "source_snapshots_person_id_fkey"
+            foreignKeyName: "source_polls_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "source_health"
+            referencedColumns: ["data_source_id"]
+          },
+          {
+            foreignKeyName: "source_polls_person_id_fkey"
             columns: ["person_id"]
             isOneToOne: false
             referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "source_polls_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "ingest_runs"
             referencedColumns: ["id"]
           },
         ]
@@ -1050,12 +1334,58 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      llm_cost_per_tick: {
+        Row: {
+          anomaly_calls: number | null
+          avg_latency_ms: number | null
+          cache_creation_input_tokens: number | null
+          cache_read_input_tokens: number | null
+          calls: number | null
+          cost_usd: number | null
+          first_call_at: string | null
+          input_tokens: number | null
+          last_call_at: string | null
+          memory_calls: number | null
+          narrative_calls: number | null
+          output_tokens: number | null
+          sentiment_calls: number | null
+          tick_number: number | null
+          unpriced_calls: number | null
+        }
+        Relationships: []
+      }
+      source_health: {
+        Row: {
+          avg_latency_ms_24h: number | null
+          data_source_id: string | null
+          display_name: string | null
+          error_rate_24h: number | null
+          errors_24h: number | null
+          is_active: boolean | null
+          last_error: string | null
+          last_error_at: string | null
+          last_poll_at: string | null
+          last_skip_reason: string | null
+          last_success_at: string | null
+          name: string | null
+          people_mapped: number | null
+          poll_interval_minutes: number | null
+          polls_24h: number | null
+          signals_24h: number | null
+          tier: number | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       apply_engine_tick: { Args: { p_tick: Json }; Returns: Json }
       assert_position_direction: {
-        Args: { p_amount_cents: number; p_person_id: string; p_side: string; p_user_id: string }
+        Args: {
+          p_amount_cents: number
+          p_person_id: string
+          p_side: string
+          p_user_id: string
+        }
         Returns: {
           net_after: number
           net_before: number
@@ -1102,6 +1432,11 @@ export type Database = {
           total_duration_ms: number
         }[]
       }
+      cents_to_dollars_text: { Args: { p_cents: number }; Returns: string }
+      credit_paper_balance: {
+        Args: { p_amount_cents: number; p_user_id: string }
+        Returns: Json
+      }
       feed_entries: {
         Args: { p_before?: string; p_before_id?: string; p_limit?: number }
         Returns: {
@@ -1131,139 +1466,45 @@ export type Database = {
           sparkline: number[]
         }[]
       }
-      record_narratives: {
-        Args: { p_narratives: Json }
-        Returns: number
-      }
-      cents_to_dollars_text: {
-        Args: { p_cents: number }
-        Returns: string
-      }
-      credit_paper_balance: {
-        Args: { p_user_id: string; p_amount_cents: number }
-        Returns: Json
-      }
-      my_portfolio: {
-        Args: Record<PropertyKey, never>
-        Returns: Json
-      }
+      my_portfolio: { Args: never; Returns: Json }
       my_portfolio_value_series: {
-        Args: { p_since?: string | null; p_points?: number }
+        Args: { p_points?: number; p_since?: string }
         Returns: {
           bucket_at: string
-          value_cents: number
           open_cents: number
           samples: number
+          value_cents: number
         }[]
       }
+      my_position: { Args: { p_person_id: string }; Returns: Json }
       my_trade_history: {
-        Args: { p_before?: string | null; p_before_id?: string | null; p_limit?: number }
+        Args: { p_before?: string; p_before_id?: string; p_limit?: number }
         Returns: {
-          id: string
-          created_at: string
-          side: string
-          units: number
-          fill_price_cents: number
-          gross_cents: number
-          opened_units: number
+          balance_after_cents: number
           closed_units: number
           cost_cents: number
-          proceeds_cents: number
-          realized_pnl_cents: number
-          balance_after_cents: number | null
-          surface: string | null
-          person_id: string
-          person_slug: string
-          person_name: string
-          person_category: string
-          person_avatar: string | null
-        }[]
-      }
-      portfolio_summary_for: {
-        Args: { p_user_id: string }
-        Returns: Json
-      }
-      portfolio_value_cents: {
-        Args: { p_user_id: string }
-        Returns: number
-      }
-      portfolio_value_series_for: {
-        Args: { p_user_id: string; p_since?: string | null; p_points?: number }
-        Returns: {
-          bucket_at: string
-          value_cents: number
-          open_cents: number
-          samples: number
-        }[]
-      }
-      record_portfolio_snapshot: {
-        Args: { p_user_id: string; p_at?: string; p_order_id?: string | null; p_tick_number?: number | null }
-        Returns: number
-      }
-      snapshot_portfolios: {
-        Args: { p_at: string; p_tick_number?: number | null }
-        Returns: number
-      }
-      trade_history_for: {
-        Args: { p_user_id: string; p_before?: string | null; p_before_id?: string | null; p_limit?: number }
-        Returns: {
-          id: string
           created_at: string
-          side: string
-          units: number
           fill_price_cents: number
           gross_cents: number
+          id: string
           opened_units: number
-          closed_units: number
-          cost_cents: number
+          person_avatar: string
+          person_category: string
+          person_id: string
+          person_name: string
+          person_slug: string
           proceeds_cents: number
           realized_pnl_cents: number
-          balance_after_cents: number | null
-          surface: string | null
-          person_id: string
-          person_slug: string
-          person_name: string
-          person_category: string
-          person_avatar: string | null
+          side: string
+          surface: string
+          units: number
         }[]
-      }
-      my_position: {
-        Args: { p_person_id: string }
-        Returns: Json
-      }
-      net_position_units: {
-        Args: { p_person_id: string; p_user_id: string }
-        Returns: number
-      }
-      place_order: {
-        Args: { p_person_id: string; p_side: string; p_units: number; p_quoted_price_cents?: number | null; p_surface?: string | null }
-        Returns: Json
-      }
-      points_to_cents: {
-        Args: { p_points: number }
-        Returns: number
-      }
-      position_summary_for: {
-        Args: { p_person_id: string; p_user_id: string }
-        Returns: Json
-      }
-      reset_paper_balance: {
-        Args: { p_user_id: string }
-        Returns: Json
-      }
-      starting_balance_cents: {
-        Args: Record<PropertyKey, never>
-        Returns: number
-      }
-      trade_quote: {
-        Args: { p_person_id: string }
-        Returns: Json
-      }
-      trade_rejection: {
-        Args: { p_code: string; p_message: string; p_quote: Json; p_extra?: Json }
-        Returns: Json
       }
       net_position_cents: {
+        Args: { p_person_id: string; p_user_id: string }
+        Returns: number
+      }
+      net_position_units: {
         Args: { p_person_id: string; p_user_id: string }
         Returns: number
       }
@@ -1276,12 +1517,54 @@ export type Database = {
           score: number
         }[]
       }
+      place_order: {
+        Args: {
+          p_person_id: string
+          p_quoted_price_cents?: number
+          p_side: string
+          p_surface?: string
+          p_units: number
+        }
+        Returns: Json
+      }
       placeholder_financial_mutation: {
         Args: { p_amount_cents: number }
         Returns: undefined
       }
+      points_to_cents: { Args: { p_points: number }; Returns: number }
+      portfolio_summary_for: { Args: { p_user_id: string }; Returns: Json }
+      portfolio_value_cents: { Args: { p_user_id: string }; Returns: number }
+      portfolio_value_series_for: {
+        Args: { p_points?: number; p_since?: string; p_user_id: string }
+        Returns: {
+          bucket_at: string
+          open_cents: number
+          samples: number
+          value_cents: number
+        }[]
+      }
+      position_summary_for: {
+        Args: { p_person_id: string; p_user_id: string }
+        Returns: Json
+      }
+      record_narratives: { Args: { p_narratives: Json }; Returns: number }
+      record_portfolio_snapshot: {
+        Args: {
+          p_at?: string
+          p_order_id?: string
+          p_tick_number?: number
+          p_user_id: string
+        }
+        Returns: number
+      }
+      reset_paper_balance: { Args: { p_user_id: string }; Returns: Json }
       resolve_position_order: {
-        Args: { p_amount_cents: number; p_net_before: number; p_shorting_enabled: boolean; p_side: string }
+        Args: {
+          p_amount_cents: number
+          p_net_before: number
+          p_shorting_enabled: boolean
+          p_side: string
+        }
         Returns: {
           net_after: number
           open_cents: number
@@ -1289,7 +1572,50 @@ export type Database = {
           reduce_cents: number
         }[]
       }
-      shorting_enabled: { Args: Record<PropertyKey, never>; Returns: boolean }
+      shorting_enabled: { Args: never; Returns: boolean }
+      snapshot_portfolios: {
+        Args: { p_at: string; p_tick_number?: number }
+        Returns: number
+      }
+      starting_balance_cents: { Args: never; Returns: number }
+      trade_history_for: {
+        Args: {
+          p_before?: string
+          p_before_id?: string
+          p_limit?: number
+          p_user_id: string
+        }
+        Returns: {
+          balance_after_cents: number
+          closed_units: number
+          cost_cents: number
+          created_at: string
+          fill_price_cents: number
+          gross_cents: number
+          id: string
+          opened_units: number
+          person_avatar: string
+          person_category: string
+          person_id: string
+          person_name: string
+          person_slug: string
+          proceeds_cents: number
+          realized_pnl_cents: number
+          side: string
+          surface: string
+          units: number
+        }[]
+      }
+      trade_quote: { Args: { p_person_id: string }; Returns: Json }
+      trade_rejection: {
+        Args: {
+          p_code: string
+          p_extra?: Json
+          p_message: string
+          p_quote: Json
+        }
+        Returns: Json
+      }
       username_available: { Args: { p_username: string }; Returns: boolean }
     }
     Enums: {

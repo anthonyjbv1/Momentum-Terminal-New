@@ -52,7 +52,13 @@ export const SENTIMENT_RESPONSE_SCHEMA: LLMJsonSchema = {
   },
 };
 
-const PAYLOAD_KEYS = ["kind", "metric", "previous", "current", "delta", "relativeChange", "milestone", "channelTitle", "publishedAt"];
+/**
+ * The only payload fields that may reach the model. Normalised values and
+ * descriptive metadata only: never a raw level (a follower count, a view
+ * total, a balance) and never a raw delta, whatever a connector stored.
+ * A test asserts that a payload carrying such fields cannot leak through.
+ */
+export const PAYLOAD_KEYS = ["kind", "metric", "label", "relativeChange", "sigma", "direction", "window_hours", "channelTitle", "videoTitle", "publishedAt", "outlet"] as const;
 const MAX_PAYLOAD_CHARS = 320;
 
 function compactPayload(payload: Json | null): string {

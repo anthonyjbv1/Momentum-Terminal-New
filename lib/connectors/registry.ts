@@ -8,17 +8,21 @@ import { spotifyConnector } from "./spotify";
 import { twitchConnector } from "./twitch";
 import type { DataConnector } from "./types";
 import { youtubeConnector } from "./youtube";
+import { youtubeCommentsConnector } from "./youtube-comments";
 
 /**
  * Connector registry: data_sources.name -> implementation.
  *
- * To add a source: create lib/connectors/<name>.ts implementing DataConnector,
- * add it to the list below, insert a data_sources row with the same name, map
- * people to it in person_data_sources, then flip is_active. The runner picks
- * it up on the next run with no other code changes.
+ * A connector is the code that can talk to a kind of upstream; a SOURCE is a
+ * data_sources row (tier, poll interval, metric declarations) plus its
+ * credentials in the environment. Adding a source is inserting the row and
+ * mapping people to it; removing one is flipping is_active. Neither needs a
+ * code change. To support a new kind of upstream: create
+ * lib/connectors/<name>.ts implementing DataConnector and add it below.
  */
 const ALL_CONNECTORS: readonly DataConnector[] = [
   youtubeConnector,
+  youtubeCommentsConnector,
   twitchConnector,
   spotifyConnector,
   forbesConnector,

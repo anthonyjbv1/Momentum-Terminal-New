@@ -11,11 +11,13 @@ import { createSupabaseAdminClient } from "@/lib/supabase-admin";
  *
  * Protected by INGEST_SECRET (header `x-ingest-secret` or `Authorization:
  * Bearer`). Optional `?source=youtube` (repeatable) limits the run to the
- * named sources. Responds with the IngestSummary as JSON.
+ * named sources; `?force=1` polls a source even if it was polled within its
+ * poll_interval_minutes. Responds with the IngestSummary as JSON.
  *
- * Runs with the service-role client: trusted server code only. Scheduling is
- * deliberately not set up yet; trigger it manually, e.g.
- *   curl -X POST -H "x-ingest-secret: $INGEST_SECRET" http://localhost:3000/api/ingest
+ * This is the manual, service-role-triggered run: it produces snapshots,
+ * observations and signals and advances no score (the Engine tick is a
+ * separate call). Nothing schedules it; trigger it by hand, e.g.
+ *   curl -X POST -H "x-ingest-secret: $INGEST_SECRET" "https://<host>/api/ingest?force=1"
  */
 
 export const runtime = "nodejs";
@@ -28,13 +30,17 @@ async function handle(request: NextRequest) {
     return NextResponse.json({ error: auth.message }, { status: auth.status });
   }
 
-  const requestedSources = request.nextUrl.searchParams.getAll("source").filter(Boolean);
+  const params = request.nextUrl.searchParams;
+  const requestedSources = params.getAll("source").filter(Boolean);
+  const force = ["1", "true"].includes((params.get("force") ?? "").toLowerCase());
 
   try {
     const store = createSupabaseIngestStore(createSupabaseAdminClient());
     const summary = await runIngestion({
       store,
       sources: requestedSources.length > 0 ? requestedSources : undefined,
+      force,
+      trigger: "manual",
     });
     return NextResponse.json(summary);
   } catch (error) {

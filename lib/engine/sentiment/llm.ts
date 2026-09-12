@@ -6,6 +6,7 @@ import { LLMError, type LLMResponse } from "@/lib/llm/types";
 import { noopUsageLogger, usageFromResponse, type LLMUsageLogger } from "@/lib/llm/usage";
 import type { Json } from "@/types/database";
 
+import { metricScorer as defaultMetricScorer } from "./metric";
 import { SENTIMENT_RESPONSE_SCHEMA, SENTIMENT_SYSTEM_PROMPT, buildSentimentUserPrompt } from "./prompts";
 import { rulesBasedScorer } from "./rules";
 import type { SentimentAnomaly, SentimentInput, SentimentResult, SentimentScorer } from "./types";
@@ -47,6 +48,8 @@ export interface LLMScorerDeps {
   /** Resolves person details for a person id (name, slug, category). */
   resolvePerson?: (personId: string) => Promise<LLMScorerPerson | null>;
   fallback?: SentimentScorer;
+  /** Scores metric signals, which never reach the model. Defaults to the shared MetricScorer. */
+  metricScorer?: SentimentScorer;
   config?: EngineConfig["llm"];
   tickIntervalSeconds?: number;
   /** Delay before a batch is flushed, in ms. 0 = next macrotask. */
@@ -101,6 +104,7 @@ export class LLMScorer implements SentimentScorer {
   private readonly usageLoggerSource: LLMUsageLogger | (() => Promise<LLMUsageLogger>);
   private readonly resolvePerson: (personId: string) => Promise<LLMScorerPerson | null>;
   private readonly fallback: SentimentScorer;
+  private readonly metricScorer: SentimentScorer;
   private readonly config: EngineConfig["llm"];
   private readonly windowMs: number;
   private readonly batchDelayMs: number;
@@ -119,6 +123,7 @@ export class LLMScorer implements SentimentScorer {
     this.usageLoggerSource = deps.usageLogger ?? noopUsageLogger;
     this.resolvePerson = deps.resolvePerson ?? (async () => null);
     this.fallback = deps.fallback ?? rulesBasedScorer;
+    this.metricScorer = deps.metricScorer ?? defaultMetricScorer;
     this.config = deps.config ?? DEFAULT_ENGINE_CONFIG.llm;
     this.windowMs = (deps.tickIntervalSeconds ?? DEFAULT_ENGINE_CONFIG.tick.intervalSeconds) * 1000;
     this.batchDelayMs = deps.batchDelayMs ?? 0;
@@ -143,6 +148,12 @@ export class LLMScorer implements SentimentScorer {
   /** Signals that must never cost an LLM call. */
   private prefilter(signal: SentimentInput): Promise<SentimentResult> | null {
     const kind = payloadField(signal.rawPayload, "kind");
+    // A metric signal is scored from its explicit polarity and sigma; the
+    // model never sees it, so no prompt can carry a metric to it either.
+    if (kind === "metric") {
+      this.stats.prefiltered += 1;
+      return this.metricScorer.scoreSignal(signal);
+    }
     if (kind === "baseline") {
       this.stats.prefiltered += 1;
       return Promise.resolve({ label: "neutral", confidence: 0, direction: 0, rationale: "baseline signal: zero impact by design", scorer: "prefilter" });
@@ -246,7 +257,7 @@ export class LLMScorer implements SentimentScorer {
 
     try {
       const logger = await this.resolve(this.usageLoggerSource);
-      await logger.log(usageFromResponse(response, { taskType: "sentiment", personId }));
+      await logger.log(usageFromResponse(response, { taskType: "sentiment", personId, tickNumber: signals.find((s) => s.tickNumber !== undefined)?.tickNumber ?? null }));
     } catch {
       // usage logging never affects scoring
     }
