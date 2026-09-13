@@ -7,7 +7,9 @@ import { describe, expect, it } from "vitest";
 import {
   NOINDEX_HEADER_NAME,
   NOINDEX_HEADER_VALUE,
+  PUBLIC_ROUTES,
   ROBOTS_TXT,
+  SHARED_SECRET_ROUTES,
   applyAuthGate,
   decideAuthGate,
 } from "./auth-gate";
@@ -15,11 +17,13 @@ import type { ResolvedSession } from "./supabase-proxy";
 
 /**
  * The auth gate: the whole app behind a session while the test is closed,
- * robots kept out, and the gate itself contained in one file.
+ * robots kept out, the allowlist explicit, the unauthenticated flows able to
+ * complete, and the gate itself contained in one file.
  */
 
 const SIGNED_OUT = false;
 const SIGNED_IN = true;
+const root = join(__dirname, "..");
 
 describe("decideAuthGate", () => {
   it("sends a signed-out visitor to login from every page, remembering where they were going", () => {
@@ -40,22 +44,26 @@ describe("decideAuthGate", () => {
     expect(decideAuthGate("/api", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
   });
 
-  it("keeps sign-in, sign-up and the auth callbacks reachable", () => {
+  it("keeps sign-in, sign-up and the auth callback reachable, by exact route only", () => {
+    expect(PUBLIC_ROUTES).toEqual(["/login", "/signup", "/auth/callback"]);
     expect(decideAuthGate("/login", "?next=%2Ffeed", SIGNED_OUT)).toEqual({ kind: "allow" });
     expect(decideAuthGate("/signup", "", SIGNED_OUT)).toEqual({ kind: "allow" });
     expect(decideAuthGate("/auth/callback", "?code=abc", SIGNED_OUT)).toEqual({ kind: "allow" });
-    expect(decideAuthGate("/auth", "", SIGNED_OUT)).toEqual({ kind: "allow" });
-    // Exact and prefix matches only: nothing that merely starts with a public name.
+    // No prefix semantics: nothing that merely starts with a public route is open.
+    expect(decideAuthGate("/auth", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/auth" });
+    expect(decideAuthGate("/auth/callback/extra", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/auth/callback/extra" });
     expect(decideAuthGate("/login-help", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/login-help" });
-    expect(decideAuthGate("/authors", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/authors" });
+    expect(decideAuthGate("/signup/", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/signup/" });
   });
 
-  it("leaves the shared-secret internal routes to their own check", () => {
-    expect(decideAuthGate("/api/ingest", "?source=youtube", SIGNED_OUT)).toEqual({ kind: "allow" });
-    expect(decideAuthGate("/api/engine/tick", "?dryRun=1", SIGNED_OUT)).toEqual({ kind: "allow" });
-    expect(decideAuthGate("/api/engine/cron", "", SIGNED_OUT)).toEqual({ kind: "allow" });
-    expect(decideAuthGate("/api/admin/health", "", SIGNED_OUT)).toEqual({ kind: "allow" });
+  it("leaves the shared-secret internal routes to their own check, by exact route only", () => {
+    expect(SHARED_SECRET_ROUTES).toEqual(["/api/ingest", "/api/engine/tick", "/api/engine/cron", "/api/admin/health"]);
+    for (const route of SHARED_SECRET_ROUTES) expect(decideAuthGate(route, "?force=1", SIGNED_OUT)).toEqual({ kind: "allow" });
     expect(decideAuthGate("/api/ingestion", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
+    expect(decideAuthGate("/api/engine", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
+    expect(decideAuthGate("/api/engine/reset", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
+    expect(decideAuthGate("/api/admin", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
+    expect(decideAuthGate("/api/admin/users", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
   });
 
   it("serves robots.txt to everyone and lets a signed-in user through everywhere", () => {
@@ -120,25 +128,98 @@ describe("applyAuthGate", () => {
   });
 });
 
+/**
+ * Every request a signed-out visitor's browser makes to us during sign-up
+ * and sign-in, in order, run through the gate exactly as the proxy would.
+ * A Server Action is a POST to the page's own path with a Next-Action
+ * header; the username check and auth.signUp happen inside it, server to
+ * server against Supabase, so no API route of ours is involved.
+ */
+describe("the unauthenticated flows complete against the gate", () => {
+  const passes = (method: string, url: string, headers: Record<string, string> = {}, isSignedIn = SIGNED_OUT) => {
+    let reached = false;
+    const response = applyAuthGate(new NextRequest(url, { method, headers }), session(isSignedIn), () => {
+      reached = true;
+      return NextResponse.next();
+    });
+    return { reached, status: response.status, location: response.headers.get("location") };
+  };
+
+  it("sign-up: open the form, submit the Server Action, land on the confirmation link, arrive signed in", () => {
+    expect(passes("GET", "https://example.test/signup")).toMatchObject({ reached: true, status: 200 });
+    expect(passes("GET", "https://example.test/signup?_rsc=abc", { rsc: "1" })).toMatchObject({ reached: true, status: 200 });
+    expect(passes("POST", "https://example.test/signup", { "next-action": "6012014edb0afa7f2abf2c47c0f8790ff690956132", "content-type": "multipart/form-data" })).toMatchObject({ reached: true, status: 200 });
+    // After a failed attempt the form re-posts to the same path with the same headers.
+    expect(passes("POST", "https://example.test/signup", { "next-action": "6012014edb0afa7f2abf2c47c0f8790ff690956132" })).toMatchObject({ reached: true, status: 200 });
+    // The confirmation email lands here, still signed out, in either link style.
+    expect(passes("GET", "https://example.test/auth/callback?code=pkce-code&next=%2Fprofile")).toMatchObject({ reached: true, status: 200 });
+    expect(passes("GET", "https://example.test/auth/callback?token_hash=abc&type=signup&next=%2Fprofile")).toMatchObject({ reached: true, status: 200 });
+    // The callback sets the session and redirects; the destination is then open.
+    expect(passes("GET", "https://example.test/profile", {}, SIGNED_IN)).toMatchObject({ reached: true, status: 200 });
+  });
+
+  it("sign-in: open the form with a destination, submit the Server Action, follow the redirect signed in", () => {
+    expect(passes("GET", "https://example.test/login?next=%2Fperson%2Fdrake")).toMatchObject({ reached: true, status: 200 });
+    expect(passes("POST", "https://example.test/login?next=%2Fperson%2Fdrake", { "next-action": "abc" })).toMatchObject({ reached: true, status: 200 });
+    expect(passes("GET", "https://example.test/person/drake", {}, SIGNED_IN)).toMatchObject({ reached: true, status: 200 });
+    // A failed callback sends the visitor back to the form with a notice.
+    expect(passes("GET", "https://example.test/login?error=auth_callback")).toMatchObject({ reached: true, status: 200 });
+  });
+
+  it("a signed-out visitor who is not signing up or in still cannot reach a page or an API route", () => {
+    expect(passes("GET", "https://example.test/person/drake")).toMatchObject({ reached: false, status: 307 });
+    expect(passes("GET", "https://example.test/api/feed")).toMatchObject({ reached: false, status: 401 });
+    expect(passes("POST", "https://example.test/api/trade/order")).toMatchObject({ reached: false, status: 401 });
+  });
+});
+
 /** Every source file under the app, excluding dependencies and build output. */
-function sourceFiles(root: string): string[] {
+function sourceFiles(dir: string): string[] {
   const out: string[] = [];
   const skip = new Set(["node_modules", ".next", ".git", "supabase", "public"]);
-  const walk = (dir: string) => {
-    for (const entry of readdirSync(dir)) {
+  const walk = (current: string) => {
+    for (const entry of readdirSync(current)) {
       if (skip.has(entry)) continue;
-      const full = join(dir, entry);
+      const full = join(current, entry);
       if (statSync(full).isDirectory()) walk(full);
       else if (/\.(ts|tsx|mjs|js)$/.test(entry)) out.push(full);
     }
   };
-  walk(root);
+  walk(dir);
   return out;
 }
 
-describe("the gate is contained", () => {
-  const root = join(__dirname, "..");
+describe("the audit of what the unauthenticated flows call", () => {
+  const authCode = [join(root, "app", "(auth)"), join(root, "app", "auth"), join(root, "components", "auth"), join(root, "lib", "auth")].flatMap((dir) => sourceFiles(dir));
 
+  it("covers the sign-up, sign-in and callback code", () => {
+    const names = authCode.map((file) => relative(root, file)).sort();
+    expect(names).toEqual(expect.arrayContaining(["app/(auth)/actions.ts", "app/(auth)/login/page.tsx", "app/(auth)/signup/page.tsx", "app/auth/callback/route.ts", "components/auth/LoginForm.tsx", "components/auth/SignupForm.tsx", "lib/auth/username-availability.ts"]));
+  });
+
+  it("finds no API route of ours in those flows that the gate does not name", () => {
+    const apiPaths = new Set<string>();
+    for (const file of authCode) {
+      for (const match of readFileSync(file, "utf8").matchAll(/["'`](\/api\/[a-z0-9/_\-[\]]+)/g)) apiPaths.add(match[1]);
+    }
+    const unlisted = [...apiPaths].filter((path) => !PUBLIC_ROUTES.includes(path) && !SHARED_SECRET_ROUTES.includes(path));
+    expect(unlisted).toEqual([]);
+  });
+
+  it("finds every page and callback those flows use in the allowlist", () => {
+    const routes = new Set<string>();
+    for (const file of authCode) {
+      const source = readFileSync(file, "utf8");
+      for (const match of source.matchAll(/redirect\(\s*["'`](\/[a-z][a-z0-9/_-]*)/g)) routes.add(match[1]);
+      for (const match of source.matchAll(/(?:href|\/auth\/callback)["'`=:\s]*["'`]?(\/(?:auth\/callback|login|signup)[a-z/]*)/g)) routes.add(match[1]);
+    }
+    // Destinations after sign-in (/profile, next) are reached signed in; the signed-out routes must be listed.
+    const signedOutRoutes = [...routes].filter((route) => route.startsWith("/login") || route.startsWith("/signup") || route.startsWith("/auth/"));
+    for (const route of signedOutRoutes) expect(PUBLIC_ROUTES, route).toContain(route);
+  });
+});
+
+describe("the gate is contained", () => {
   it("is imported from proxy.ts and nowhere else, so removing it is one file and one line", () => {
     const importers = sourceFiles(root)
       .filter((file) => /auth-gate["']/.test(readFileSync(file, "utf8")))

@@ -3,6 +3,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { checkUsernameAvailability, clientIpFrom } from "@/lib/auth/username-availability";
 import { getSiteUrl } from "@/lib/env";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 
@@ -67,22 +68,26 @@ export async function signup(_prev: AuthFormState, formData: FormData): Promise<
     return { error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`, values };
   }
 
-  const supabase = await createSupabaseServerClient();
-
-  const { data: available, error: availabilityError } = await supabase.rpc("username_available", {
-    p_username: username,
-  });
-  if (availabilityError) {
-    console.error("[signup] username_available RPC failed:", availabilityError.message);
+  // The username check runs on the server, service role, behind a per-IP
+  // rate limit: the RPC is not executable by the public roles, so this is
+  // the only way to ask, and it cannot be walked.
+  const requestHeaders = await headers();
+  const availability = await checkUsernameAvailability(username, clientIpFrom(requestHeaders));
+  if (!availability.ok) {
+    if (availability.reason === "rate_limited") {
+      return { error: "Too many attempts from your connection. Please wait a few minutes and try again.", values };
+    }
     return { error: "Could not check username availability. Please try again.", values };
   }
-  if (!available) {
+  if (!availability.available) {
     return { error: "That username is already taken.", values };
   }
 
+  const supabase = await createSupabaseServerClient();
+
   // The on_auth_user_created trigger reads username / display_name from this
-  // metadata to build the public.users row with the $1,000 demo balance.
-  const origin = (await headers()).get("origin") ?? getSiteUrl();
+  // metadata to build the public.users row with the paper balance.
+  const origin = requestHeaders.get("origin") ?? getSiteUrl();
   const { data, error } = await supabase.auth.signUp({
     email,
     password,

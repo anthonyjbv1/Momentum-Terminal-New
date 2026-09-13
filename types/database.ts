@@ -755,6 +755,24 @@ export type Database = {
           },
         ]
       }
+      rate_limit_buckets: {
+        Row: {
+          hits: number
+          key: string
+          window_started_at: string
+        }
+        Insert: {
+          hits?: number
+          key: string
+          window_started_at: string
+        }
+        Update: {
+          hits?: number
+          key?: string
+          window_started_at?: string
+        }
+        Relationships: []
+      }
       raw_metric_observations: {
         Row: {
           created_at: string
@@ -1545,6 +1563,10 @@ export type Database = {
       }
       position_summary_for: {
         Args: { p_person_id: string; p_user_id: string }
+        Returns: Json
+      }
+      rate_limit_hit: {
+        Args: { p_key: string; p_limit: number; p_window_seconds: number }
         Returns: Json
       }
       record_narratives: { Args: { p_narratives: Json }; Returns: number }
