@@ -216,6 +216,19 @@ describe("observability", () => {
     expect(new Date(health.last_success_at as string).getTime()).toBeGreaterThan(new Date(health.last_error_at as string).getTime());
   });
 
+  it("llm_model_prices carries the verified rates for the current models, with no assumed row", async () => {
+    const rows = await database.rows<{ model: string; input_per_mtok: string | number; output_per_mtok: string | number; cache_read_per_mtok: string | number; cache_write_per_mtok: string | number; note: string | null }>(
+      "select model, input_per_mtok, output_per_mtok, cache_read_per_mtok, cache_write_per_mtok, note from public.llm_model_prices where model in ('claude-opus-5', 'claude-sonnet-5') order by model",
+    );
+    expect(rows.map((r) => [r.model, Number(r.input_per_mtok), Number(r.output_per_mtok), Number(r.cache_read_per_mtok), Number(r.cache_write_per_mtok)])).toEqual([
+      ["claude-opus-5", 5, 25, 0.5, 6.25],
+      ["claude-sonnet-5", 2, 10, 0.2, 2.5],
+    ]);
+    const all = await database.rows<{ note: string | null }>("select note from public.llm_model_prices");
+    for (const row of all) expect(row.note ?? "").not.toMatch(/ASSUMED/);
+    for (const row of rows) expect(row.note).toMatch(/Verified 2026-09-13/);
+  });
+
   it("llm_cost_per_tick prices usage per tick and says when a model has no price", async () => {
     await database.exec(`
       insert into public.llm_usage (provider, model, task_type, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, latency_ms, tick_number) values
