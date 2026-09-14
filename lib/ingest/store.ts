@@ -159,6 +159,12 @@ export interface IngestStore {
   recordObservations(rows: ObservationRow[]): Promise<number>;
   /** When the source was last polled successfully for anyone, or null. */
   lastSuccessfulPollAt(dataSourceId: string): Promise<Date | null>;
+  /**
+   * A run that was opened at or after `since` and never closed: the overlap
+   * guard for the scheduled job. Older unfinished rows are presumed dead (a
+   * crashed invocation never closes its row) and are not returned.
+   */
+  openRunStartedSince(since: Date): Promise<{ id: string; startedAt: Date } | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +403,19 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
       if (error) throw new Error(`Failed to read the last poll: ${error.message}`);
       return data ? new Date(data.finished_at) : null;
     },
+
+    async openRunStartedSince(since) {
+      const { data, error } = await client
+        .from("ingest_runs")
+        .select("id, started_at")
+        .is("finished_at", null)
+        .gte("started_at", since.toISOString())
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw new Error(`Failed to check for a run in flight: ${error.message}`);
+      return data ? { id: data.id, startedAt: new Date(data.started_at) } : null;
+    },
   };
 }
 
@@ -543,6 +562,13 @@ export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): Memor
         .filter((p) => p.dataSourceId === dataSourceId && p.status === "ok")
         .sort((a, b) => b.finishedAt.getTime() - a.finishedAt.getTime())[0];
       return last ? last.finishedAt : null;
+    },
+
+    async openRunStartedSince(since) {
+      const open = runs
+        .filter((r) => r.result === null && r.startedAt.getTime() >= since.getTime())
+        .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())[0];
+      return open ? { id: open.id, startedAt: open.startedAt } : null;
     },
   };
 }

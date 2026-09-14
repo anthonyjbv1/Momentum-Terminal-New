@@ -1414,6 +1414,27 @@ export type Database = {
         }
         Relationships: []
       }
+      metric_baseline_progress: {
+        Row: {
+          first_snapshot_at: string | null
+          last_emitted_signal: boolean | null
+          last_observed_at: string | null
+          last_outcome: string | null
+          last_snapshot_at: string | null
+          metric_key: string | null
+          min_samples: number | null
+          person_name: string | null
+          person_slug: string | null
+          sample_progress: number | null
+          samples: number | null
+          snapshots: number | null
+          source: string | null
+          span_hours: number | null
+          span_progress: number | null
+          window_hours: number | null
+        }
+        Relationships: []
+      }
       source_health: {
         Row: {
           avg_latency_ms_24h: number | null

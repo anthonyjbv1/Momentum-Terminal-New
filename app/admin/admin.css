@@ -1,0 +1,386 @@
+/* =============================================================================
+   THE OPERATOR CONSOLE — /admin only.
+
+   Deliberately NOT the consumer design system. app/styles/tokens.css describes
+   an editorial monochrome world for people looking at scores; this describes a
+   panel for one person looking at numbers. It is plain CSS scoped under `.adm`,
+   imported only by app/admin/layout.tsx, and it references no consumer token,
+   so nothing here can drift into the product and nothing there constrains this.
+
+   The look: light ground, dense rows, tabular numerals, hairline rules, a
+   single blue for magnitude and a reserved status trio (ok / warn / bad) that
+   always ships next to a word — never colour alone.
+   ============================================================================= */
+
+.adm {
+  --adm-bg: #f6f7f9;
+  --adm-panel: #ffffff;
+  --adm-panel-alt: #fbfcfd;
+  --adm-line: #dfe3e8;
+  --adm-line-soft: #eceff3;
+  --adm-ink: #12161c;
+  --adm-ink-2: #444d59;
+  --adm-ink-3: #6b7480;
+  --adm-accent: #1d4ed8;
+  --adm-accent-soft: #dbe6fe;
+  --adm-ok: #116b3a;
+  --adm-ok-soft: #dff3e6;
+  --adm-warn: #8a5800;
+  --adm-warn-soft: #fdf0d2;
+  --adm-bad: #a4121f;
+  --adm-bad-soft: #fbe0e2;
+  --adm-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --adm-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  color-scheme: light;
+  min-height: 100dvh;
+  background: var(--adm-bg);
+  color: var(--adm-ink);
+  font-family: var(--adm-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+.adm *,
+.adm *::before,
+.adm *::after {
+  box-sizing: border-box;
+  border-color: var(--adm-line);
+}
+
+/* --- shell ---------------------------------------------------------------- */
+
+.adm-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 16px;
+  padding: 10px 20px;
+  background: var(--adm-ink);
+  color: #fff;
+}
+.adm-bar b {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.adm-bar .adm-who {
+  font-family: var(--adm-mono);
+  font-size: 11px;
+  color: #aab3bf;
+}
+.adm-bar nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: auto;
+}
+.adm-bar nav a {
+  padding: 3px 8px;
+  border-radius: 4px;
+  color: #cfd6de;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+.adm-bar nav a:hover {
+  background: #2a313b;
+  color: #fff;
+}
+
+.adm-main {
+  margin: 0 auto;
+  padding: 16px 20px 64px;
+  max-width: 1600px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* --- panels --------------------------------------------------------------- */
+
+.adm-panel {
+  background: var(--adm-panel);
+  border: 1px solid var(--adm-line);
+  border-radius: 6px;
+  overflow: hidden;
+  scroll-margin-top: 56px;
+}
+.adm-panel > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--adm-line);
+  background: var(--adm-panel-alt);
+}
+.adm-panel > header h2 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.adm-panel > header p {
+  margin: 0;
+  color: var(--adm-ink-3);
+  font-size: 11px;
+}
+.adm-panel > header .adm-right {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--adm-ink-3);
+}
+.adm-body {
+  padding: 12px;
+}
+.adm-sub {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--adm-ink-3);
+}
+.adm-note {
+  margin: 8px 0 0;
+  color: var(--adm-ink-3);
+  font-size: 11px;
+}
+.adm-empty {
+  padding: 14px 12px;
+  color: var(--adm-ink-3);
+  font-size: 12px;
+  font-style: italic;
+}
+.adm-cols {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+/* --- stat strip ----------------------------------------------------------- */
+
+.adm-stats {
+  display: grid;
+  gap: 1px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  background: var(--adm-line);
+  border-bottom: 1px solid var(--adm-line);
+}
+.adm-stat {
+  padding: 9px 12px;
+  background: var(--adm-panel);
+}
+.adm-stat dt {
+  margin: 0;
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--adm-ink-3);
+}
+.adm-stat dd {
+  margin: 2px 0 0;
+  font-family: var(--adm-mono);
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+.adm-stat small {
+  display: block;
+  margin-top: 1px;
+  color: var(--adm-ink-3);
+  font-size: 10px;
+}
+.adm-stat[data-tone="ok"] dd {
+  color: var(--adm-ok);
+}
+.adm-stat[data-tone="warn"] dd {
+  color: var(--adm-warn);
+}
+.adm-stat[data-tone="bad"] dd {
+  color: var(--adm-bad);
+}
+
+/* --- tables --------------------------------------------------------------- */
+
+.adm-scroll {
+  overflow-x: auto;
+}
+table.adm-t {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+table.adm-t th,
+table.adm-t td {
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--adm-line-soft);
+  text-align: left;
+  white-space: nowrap;
+  vertical-align: top;
+}
+table.adm-t thead th {
+  position: sticky;
+  top: 0;
+  background: var(--adm-panel-alt);
+  border-bottom: 1px solid var(--adm-line);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--adm-ink-3);
+}
+table.adm-t tbody tr:hover td {
+  background: #f4f7fb;
+}
+table.adm-t tbody tr:last-child td {
+  border-bottom: 0;
+}
+table.adm-t .n {
+  font-family: var(--adm-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+table.adm-t th.n {
+  text-align: right;
+}
+table.adm-t .wrap {
+  white-space: normal;
+  min-width: 260px;
+}
+table.adm-t tfoot td {
+  border-top: 1px solid var(--adm-line);
+  background: var(--adm-panel-alt);
+  font-weight: 600;
+}
+.adm-k {
+  font-family: var(--adm-mono);
+  font-size: 11px;
+}
+.adm-dim {
+  color: var(--adm-ink-3);
+}
+
+/* --- badges (always beside a word, never colour alone) --------------------- */
+
+.adm-b {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--adm-line-soft);
+  color: var(--adm-ink-2);
+  font-family: var(--adm-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.adm-b[data-tone="ok"] {
+  background: var(--adm-ok-soft);
+  color: var(--adm-ok);
+}
+.adm-b[data-tone="warn"] {
+  background: var(--adm-warn-soft);
+  color: var(--adm-warn);
+}
+.adm-b[data-tone="bad"] {
+  background: var(--adm-bad-soft);
+  color: var(--adm-bad);
+}
+.adm-b[data-tone="info"] {
+  background: var(--adm-accent-soft);
+  color: var(--adm-accent);
+}
+
+/* --- window tabs ---------------------------------------------------------- */
+
+.adm-tabs {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+.adm-tabs a {
+  padding: 2px 9px;
+  border: 1px solid var(--adm-line);
+  border-radius: 3px;
+  background: var(--adm-panel);
+  color: var(--adm-ink-2);
+  font-size: 11px;
+  text-decoration: none;
+}
+.adm-tabs a[aria-current="true"] {
+  border-color: var(--adm-ink);
+  background: var(--adm-ink);
+  color: #fff;
+}
+
+/* --- meter: one hue, light to dark, magnitude only ------------------------ */
+
+.adm-meter {
+  position: relative;
+  width: 110px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--adm-line-soft);
+  overflow: hidden;
+}
+.adm-meter span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--adm-accent);
+}
+.adm-meter[data-tone="ok"] span {
+  background: var(--adm-ok);
+}
+.adm-meter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.adm-meter-row .n {
+  font-family: var(--adm-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- trend: one series, direct-labelled, table below ---------------------- */
+
+.adm-trend {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 92px;
+  padding-top: 14px;
+}
+.adm-trend div {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 6px;
+  border-radius: 2px 2px 0 0;
+  background: var(--adm-accent);
+}
+.adm-trend div[data-zero="true"] {
+  background: var(--adm-line);
+}
+.adm-trend-x {
+  display: flex;
+  gap: 3px;
+  margin-top: 4px;
+  color: var(--adm-ink-3);
+  font-family: var(--adm-mono);
+  font-size: 9px;
+}
+.adm-trend-x span {
+  flex: 1 1 0;
+  min-width: 6px;
+  overflow: hidden;
+  text-align: center;
+}

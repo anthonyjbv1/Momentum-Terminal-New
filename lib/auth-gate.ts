@@ -51,7 +51,7 @@ export const NOINDEX_HEADER_VALUE = "noindex, nofollow, noarchive";
 export const PUBLIC_ROUTES: readonly string[] = ["/login", "/signup", "/auth/callback"];
 
 /** Authorised by their own shared secret, never by a browser session. Exact paths. */
-export const SHARED_SECRET_ROUTES: readonly string[] = ["/api/ingest", "/api/engine/tick", "/api/engine/cron", "/api/admin/health"];
+export const SHARED_SECRET_ROUTES: readonly string[] = ["/api/ingest", "/api/ingest/cron", "/api/engine/tick", "/api/engine/cron", "/api/admin/health"];
 
 const ROBOTS_PATH = "/robots.txt";
 

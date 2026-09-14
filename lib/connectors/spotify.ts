@@ -75,6 +75,8 @@ export interface SpotifyArtist {
   followers: number | null;
   /** Top-level keys the artist response carried, for diagnosing a response that yields no level. */
   fields: string[];
+  /** The endpoint path the object came from, so the error names where it was read. */
+  endpoint: string;
 }
 
 interface ArtistResponse {
@@ -85,8 +87,8 @@ interface ArtistResponse {
   error?: { status?: number; message?: string };
 }
 
-export async function fetchSpotifyArtist(artistId: string, accessToken: string, fetchImpl: typeof fetch): Promise<SpotifyArtist> {
-  const response = await fetchImpl(`${API_BASE}/artists/${encodeURIComponent(artistId)}`, { headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" } });
+async function readArtist(url: string, accessToken: string, fetchImpl: typeof fetch, pick: (body: unknown) => ArtistResponse | undefined): Promise<SpotifyArtist> {
+  const response = await fetchImpl(url, { headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" } });
   if (!response.ok) {
     let detail: string | undefined;
     try {
@@ -99,8 +101,8 @@ export async function fetchSpotifyArtist(artistId: string, accessToken: string, 
       retryable: response.status === 429 || response.status >= 500,
     });
   }
-  const body = (await response.json()) as ArtistResponse;
-  if (!body.id) throw new ConnectorError(`Spotify artist ${artistId} not found`, { status: 404 });
+  const body = pick(await response.json());
+  if (!body?.id) throw new ConnectorError(`Spotify artist not found at ${new URL(url).pathname}`, { status: 404 });
   return {
     id: body.id,
     name: body.name ?? null,
@@ -108,7 +110,40 @@ export async function fetchSpotifyArtist(artistId: string, accessToken: string, 
     followers: typeof body.followers?.total === "number" ? body.followers.total : null,
     /** The keys the response actually carried, so a missing level can be diagnosed from the error alone. */
     fields: Object.keys(body).sort(),
+    endpoint: new URL(url).pathname,
   };
+}
+
+/** Does this artist object carry either level the connector reads? */
+function hasLevel(artist: SpotifyArtist): boolean {
+  return artist.popularity !== null || artist.followers !== null;
+}
+
+/**
+ * One artist, read from the FULL artist object.
+ *
+ * `GET /v1/artists/{id}` is the documented source of `popularity` and
+ * `followers.total` and is tried first. In production it answered 200 with
+ * `external_urls, href, id, images, name, type, uri` — the full object minus
+ * exactly its three computed fields (followers, genres, popularity) — so a
+ * 200 from the documented endpoint is not a guarantee that the documented
+ * fields are present. When that happens the plural form
+ * (`GET /v1/artists?ids=`) is tried once as a second, independent code path
+ * on Spotify's side; if it too carries no level, the caller raises with the
+ * fields both attempts returned, because an app whose access mode withholds
+ * those fields is a credential problem no amount of retrying fixes.
+ */
+export async function fetchSpotifyArtist(artistId: string, accessToken: string, fetchImpl: typeof fetch): Promise<SpotifyArtist> {
+  const single = await readArtist(`${API_BASE}/artists/${encodeURIComponent(artistId)}`, accessToken, fetchImpl, (body) => body as ArtistResponse);
+  if (hasLevel(single)) return single;
+
+  const plural = await readArtist(
+    `${API_BASE}/artists?ids=${encodeURIComponent(artistId)}`,
+    accessToken,
+    fetchImpl,
+    (body) => (body as { artists?: ArtistResponse[] } | undefined)?.artists?.[0],
+  );
+  return hasLevel(plural) ? plural : { ...plural, fields: [...new Set([...single.fields, ...plural.fields])].sort(), endpoint: `${single.endpoint} and ${plural.endpoint}` };
 }
 
 export const spotifyConnector: DataConnector = {
@@ -151,7 +186,8 @@ export const spotifyConnector: DataConnector = {
       // shape is not what this connector reads. Fail the poll loudly with the
       // keys that came back rather than returning nothing and reading as ok.
       throw new ConnectorError(
-        `Spotify artist ${identifier}${artist.name ? ` (${artist.name})` : ""} carried neither popularity nor follower count; response fields: ${artist.fields.join(", ") || "none"}`,
+        `Spotify artist ${identifier}${artist.name ? ` (${artist.name})` : ""} carried neither popularity nor follower count from ${artist.endpoint}; response fields: ${artist.fields.join(", ") || "none"}. ` +
+          `The full artist object includes followers, genres and popularity; an app whose access mode withholds them returns exactly this shape, which is a credential problem no retry fixes.`,
       );
     }
     return readings;

@@ -17,7 +17,18 @@ import { createTestDatabase, type TestDatabase } from "@/lib/__tests__/pglite";
  */
 
 const RAW_TABLES = ["raw_source_snapshots", "raw_metric_observations"];
-const INTERNAL_RELATIONS = [...RAW_TABLES, "ingest_runs", "source_polls", "llm_model_prices", "source_health", "llm_cost_per_tick", "publisher_domains"];
+const INTERNAL_RELATIONS = [
+  ...RAW_TABLES,
+  "ingest_runs",
+  "source_polls",
+  "llm_model_prices",
+  "source_health",
+  "llm_cost_per_tick",
+  "publisher_domains",
+  // Phase 9. metric_baseline_progress counts rows in the raw tables, so it is
+  // internal on exactly the same terms as source_health: service role only.
+  "metric_baseline_progress",
+];
 const USER_ROLES = ["anon", "authenticated"];
 
 let database: TestDatabase;

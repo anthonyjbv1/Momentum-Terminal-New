@@ -187,6 +187,20 @@ export function isEngineCronEnabled(): boolean {
   return process.env.ENGINE_CRON_ENABLED?.trim() === "true";
 }
 
+/**
+ * The on/off switch for autonomous INGESTION, independent of the Engine's.
+ *
+ * Two jobs, two schedules, two flags, on purpose: ingestion accumulates the
+ * baselines every metric needs (a week of history before upload cadence says
+ * anything, 24 samples before a deviation counts) while the Engine stays
+ * dormant, so data builds with no score moving and no LLM cost. Turning one on
+ * never turns the other on. Only the exact string "true" enables it, and it
+ * ships unset, which is off.
+ */
+export function isIngestCronEnabled(): boolean {
+  return process.env.INGEST_CRON_ENABLED?.trim() === "true";
+}
+
 /** Vercel's CRON_SECRET (sent as `Authorization: Bearer` on scheduled invocations), or null. */
 export function getCronSecretOrNull(): string | null {
   const value = process.env.CRON_SECRET?.trim();

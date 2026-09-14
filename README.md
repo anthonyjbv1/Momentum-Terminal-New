@@ -212,6 +212,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260914005711_llm_prices_haiku_exact_match.sql` | `llm_model_prices`: `claude-haiku-4-5-20251001` added at the rates verified 2026-09-14 (the dated ID the API echoes, which is what `llm_usage` carries), the alias row's note corrected; `llm_cost_per_tick` joins on model equality instead of the longest prefix, so an unknown string is unpriced rather than mispriced |
 | `20260914152703_phase8plus_connector_corrections.sql` | `publisher_domains`: 17 observed domains promoted at tiers 2–4, plus `amgen.com` and `blog.google` recorded AT the floor with the reasoning; `youtube_comments` gains the `comment_volume` metric declaration |
 | `20260914021237_phase8_rss_signal_quality.sql` | `publisher_domains` (the tiered publisher allowlist as configuration: normalised domain, allowed with a tier or blocked, service role only) with its seed; `signals.tier` (per-item credibility tier, null = the source's); `blocked_dropped` / `duplicates_collapsed` on `source_polls` and `ingest_runs`; `source_health` gains `blocked_24h` / `collapsed_24h` |
+| `20260914165502_phase9_admin_baseline_progress.sql` | `metric_baseline_progress` (per person / source / metric: samples against the declared minimum, snapshot span against the declared window, snapshot count, last outcome — counts, configuration and timestamps only, service role only); `users.is_admin` documented and set for the operator account |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
 
@@ -911,6 +912,49 @@ Four corrections the first two production runs made visible. All change what ent
 
 **Declared inputs.** A metric that is the `from` of a `config.derived` entry and carries no declaration of its own is an INPUT: snapshotted forever and never scored, on purpose. `readMetricConfigs` names them (`inputs`), and the observation log line carries `inputFor`, so YouTube's `video_count` — the history `upload_rate` is computed from, which needs 160 hours of it before the derived metric can say anything — reads as a declared input rather than an oversight.
 
+## The ingestion cron and the operator console (Phase 9)
+
+### Spotify, for the record
+
+The connector was **already calling `GET /v1/artists/{id}` directly** — `lib/connectors/spotify.ts` builds `https://api.spotify.com/v1/artists/<id>` and reads that response; there is no track, album or search call anywhere in the file, and no nested `artists[]` array is read. The field list the Phase 8+ error printed (`external_urls, href, id, images, name, type, uri`) includes `images`, which Spotify's *simplified* artist object does not carry, so what came back was the **full** object minus exactly its three computed fields — `followers`, `genres` and `popularity`. That is an app-level restriction on the credential, not the wrong endpoint: a wrong token 401s, a wrong id 404s, and a simplified object read out of a nested context would have been missing `images` too. The class of mistake worth recording is therefore the diagnosis, not the code: *an endpoint that returns 200 with fewer fields than documented looks exactly like a code bug and is not one.*
+
+What changed anyway: the single-artist read is now a shared reader, and if it comes back without both a popularity and a follower count the connector tries the plural form (`GET /v1/artists?ids=<id>`) before giving up — different Spotify access modes have historically differed between the two, and it costs one extra call only on a path that was about to fail. When neither carries a level the Phase 8+ error still throws, now naming the endpoint it read as well as the fields it got, so the poll is recorded as an error with its reason rather than silently producing nothing. `popularity` and `followers.total` are both read and both snapshotted.
+
+### Two crons, two flags
+
+`vercel.json` now registers two schedules, and they share nothing:
+
+| Job | Path | Schedule | Flag | Cost |
+|---|---|---|---|---|
+| Engine | `/api/engine/cron` | `* * * * *` | `ENGINE_CRON_ENABLED` | model calls |
+| Ingestion | `/api/ingest/cron` | `0 * * * *` | `INGEST_CRON_ENABLED` | none |
+
+Both ship **unset, which is off**; only the exact string `"true"` enables either. That separation is the point: baselines need a week of history and 24 samples before most metrics say anything, and ingestion can fill that while the Engine stays dormant and nothing costs.
+
+`GET /api/ingest/cron` does three things in this order, and the order matters:
+
+1. **The flag, before anything else.** If `INGEST_CRON_ENABLED` is not `"true"` the handler returns `{ enabled: false, status: "skipped", reason: 'INGEST_CRON_ENABLED is not "true"' }` immediately — no auth check, no database connection, no poll. So the flag's state is observable from outside without holding a secret, and a disabled endpoint cannot be made to do work by anyone.
+2. **Authentication.** Vercel Cron sends `Authorization: Bearer $CRON_SECRET`; `INGEST_SECRET` is also accepted (`x-ingest-secret` or the same bearer header) so the job can be exercised by hand. `ENGINE_SECRET` is deliberately *not* accepted: the two jobs do not share an authority. Nothing here needs a human to paste a secret into curl — the platform supplies it.
+3. **The overlap guard.** An `ingest_runs` row with `finished_at is null` started inside the last 15 minutes means a run is still in flight, and this invocation returns `status: "skipped", reason: "a run is already in flight"` instead of polling everything twice. The staleness window is what stops a crashed run from blocking the schedule forever.
+
+**No model call happens on this path.** `lib/ingest/cron.test.ts` asserts it by reading the source: no file under `lib/ingest` or `lib/connectors`, and neither ingest route, imports `@/lib/llm`, a relative `llm` module, or `@anthropic-ai/sdk`. Sentiment scoring, narratives and memory all live behind the Engine's tick, which this job never enters. The manual `POST /api/ingest` is unchanged and still works exactly as before; the cron is a second door onto the same runner.
+
+### The operator console
+
+`/admin` is **its own route tree**, outside the `(app)` group, and that is structural rather than cosmetic. The Phase 7 auth gate is one file that gets deleted when the beta opens; anything living inside the main tree becomes public at that moment. Here the role check is the only thing that has ever guarded these routes, so removing the gate cannot expose them.
+
+Access is the existing Supabase session plus `users.is_admin`, checked **server-side in the layout and again inside every single read** (`lib/admin/data.ts` calls `requireAdmin()` before it constructs the service-role client, so a non-admin never reaches a query — the privileged client is not even built). A non-admin gets **404, not 403**: a 403 advertises that the route exists. The flag was granted **by migration** (`20260914165502`, `update public.users set is_admin = true where email = 'anthonyjbv1@gmail.com'`), not by a one-off service-role action, so it is reproducible on a fresh database. It cannot be self-granted: the `authenticated` UPDATE grant on `users` covers `username`, `display_name` and `avatar_url` only, and every operational relation the console reads (`llm_usage`, `llm_model_prices`, `llm_cost_per_tick`, `ingest_runs`, `source_polls`, `source_health`, `metric_baseline_progress`) grants nothing at all to `anon` or `authenticated`. Both halves are tested — the application half in `lib/admin/access.test.ts`, the SQL half in `lib/admin/access.db.test.ts`.
+
+Five sections, dense tables, its own stylesheet (`app/admin/admin.css`, scoped under `.adm`) that references no consumer token and is imported by nothing else — the editorial monochrome system is untouched:
+
+- **LLM cost and usage** — total cost, calls and tokens by window; by model and by task type; cost per tick with the per-task split; a daily trend. The **unpriced-calls counter is a headline stat**, names the offending model strings, and is never folded into a total: unknown is not zero.
+- **Ingestion health** — per source: last success and its age, last poll, trailing-day polls, errors, error rate, latency, signals, blocked drops, collapsed duplicates, and the last error or skip reason; the recent runs; the recent poll errors with their messages. And the clock: **per-metric baseline progress**, samples against the minimum and span against the window, each as a number and a meter, with the state (`emitted` / `inside_band` / `insufficient_baseline` / `first_contact` / `no_config`) spelled out.
+- **Engine state** — both crons named separately with their schedules and paths, never conflated; tick count, last tick, mean latency; the recent ticks with what moved and by how much; the score distribution.
+- **Risk levers** — the six from 6e plus the notable-move threshold and the Signals impact brake, read-only. There is no form and no write path on this page at all, and a test asserts the absence.
+- **User behaviour** — active users, sessions, events by type, most-viewed people, feed engagement (impressions, distinct entries, dwell, scroll depth, filter changes, tap-throughs, expands), and the trade funnel with the **abandon-to-trade ratio** called out.
+
+**The privacy rule holds here.** Admin is a user-facing path, so no raw metric level appears on it. Baseline progress is read from `metric_baseline_progress`, a view whose columns are counts, configuration and timestamps — `value`, `previous`, `delta`, `mean`, `sd` and `sigma` are not columns of it, so a level is not selectable through it even by mistake. No file under `app/admin`, `components/admin` or `lib/admin` names either raw table; the existing whole-repo scan in `lib/ingest/privacy.db.test.ts` still resolves to `lib/ingest/store.ts` alone.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -934,6 +978,8 @@ Four corrections the first two production runs made visible. All change what ent
 
 - **Phase 8**: RSS signal quality: the tiered publisher allowlist as configuration (`publisher_domains`: known domains at their tier, unknown ones at the floor, blocked ones dropped and logged), per-item tier resolution from the publisher domain Google News names in `<source url>`, `signals.tier` read by the Engine over the source's tier, story-level deduplication at ingestion (Dice ≥ 0.5 over content words, 48-hour lookback, highest-tier survivor, in-place upgrade of an unread stored copy) applied to signals and to `news_volume_24h` alike, the drop and collapse counters on polls, runs and `source_health`, and the Feed placeholder that no longer restates the source.
 
+- **Phase 9**: the ingestion cron (hourly, `INGEST_CRON_ENABLED`, flag checked before authentication, overlap-guarded on an in-flight run, no model call on the path) alongside the untouched manual endpoint and the separately gated Engine cron; the Spotify artist read hardened with a plural-endpoint fallback behind the Phase 8+ named error; and `/admin`, its own route tree behind `users.is_admin`, 404 for everyone else, showing LLM cost and the unpriced counter, ingestion health with per-metric baseline progress, both cron states, the read-only risk levers and the behaviour funnel — with no raw metric level anywhere on it.
+
 - **Phase 8+**: connector corrections: comment digests (one signal per video per poll, the distribution and the sample size, comments as evidence only), `comment_volume` as a metric on the shared baseline, Spotify's silent path turned into a named error, the dedup threshold lowered to 0.4 with the local-TV misses pinned as tests, 17 observed domains promoted and two corporate-PR domains held at the floor by decision, and derived-metric inputs declared.
 
-Deliberately not built yet: the profile screen, search results, the Forecast force, and the recommendation algorithm (For You). Shorting stays switched off; the risk levers stay inert (the cooldown's rise to 60 s is a policy floor, not a calibration); the heartbeat is wired but switched off, and ingestion is manual.
+Deliberately not built yet: the profile screen, search results, the Forecast force, and the recommendation algorithm (For You). Shorting stays switched off; the risk levers stay inert (the cooldown's rise to 60 s is a policy floor, not a calibration); and both schedules are wired but switched off — the Engine's heartbeat behind `ENGINE_CRON_ENABLED` and the hourly ingestion behind `INGEST_CRON_ENABLED`, each of which ships unset.

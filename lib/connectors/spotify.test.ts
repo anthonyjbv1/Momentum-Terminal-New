@@ -16,7 +16,7 @@ interface Call {
 }
 
 /** A Spotify double: records every call with its headers, answers the token and artist endpoints. */
-function spotifyFetch(options: { artistStatus?: number[]; tokenStatus?: number; popularity?: number; followers?: number; artistBody?: Record<string, unknown> } = {}) {
+function spotifyFetch(options: { artistStatus?: number[]; tokenStatus?: number; popularity?: number; followers?: number; artistBody?: Record<string, unknown>; pluralBody?: Record<string, unknown> } = {}) {
   const calls: Call[] = [];
   const artistStatuses = [...(options.artistStatus ?? [])];
   let tokens = 0;
@@ -31,8 +31,11 @@ function spotifyFetch(options: { artistStatus?: number[]; tokenStatus?: number; 
     }
     const status = artistStatuses.shift() ?? 200;
     if (status !== 200) return Response.json({ error: { status, message: status === 401 ? "The access token expired" : "nope" } }, { status });
+    const full = { id: ARTIST, name: "Drake", popularity: options.popularity ?? 93, followers: { href: null, total: options.followers ?? 98_000_000 } };
+    // The plural endpoint wraps the same object in an artists array.
+    if (url.includes("/artists?ids=")) return Response.json({ artists: [options.pluralBody ?? full] });
     if (options.artistBody) return Response.json(options.artistBody);
-    return Response.json({ id: ARTIST, name: "Drake", popularity: options.popularity ?? 93, followers: { href: null, total: options.followers ?? 98_000_000 } });
+    return Response.json(full);
   };
   return Object.assign(impl, { calls });
 }
@@ -102,14 +105,38 @@ describe("spotifyConnector", () => {
     expect(fetch.calls[3].headers.authorization).toBe("Bearer token-2");
   });
 
-  it("never returns nothing quietly: an artist carrying no level fails the poll and names the fields that came back", async () => {
+  it("reads the FULL artist object from /v1/artists/{id}, the documented source of both levels", async () => {
+    const fetch = spotifyFetch();
+    await spotifyConnector.fetchMetrics!(person, ARTIST, context(fetch));
+    // One artist call, to the singular path, and no second attempt when the first carries the levels.
+    const artistCalls = fetch.calls.filter((c) => c.url.includes("/artists"));
+    expect(artistCalls.map((c) => new URL(c.url).pathname)).toEqual([`/v1/artists/${ARTIST}`]);
+  });
+
+  it("falls back to the plural endpoint when the singular one answers 200 without the computed fields", async () => {
+    // Exactly what production returned: the full object minus followers, genres and popularity.
+    const simplified = { external_urls: {}, href: "h", id: ARTIST, images: [], name: "Drake", type: "artist", uri: `spotify:artist:${ARTIST}` };
+    const fetch = spotifyFetch({ artistBody: simplified });
+    expect(await spotifyConnector.fetchMetrics!(person, ARTIST, context(fetch))).toEqual([
+      { metricKey: "popularity", value: 93 },
+      { metricKey: "follower_count", value: 98_000_000 },
+    ]);
+    expect(fetch.calls.filter((c) => c.url.includes("/artists")).map((c) => new URL(c.url).pathname)).toEqual([`/v1/artists/${ARTIST}`, "/v1/artists"]);
+  });
+
+  it("never returns nothing quietly: when neither endpoint carries a level the poll fails and names the fields that came back", async () => {
     // The production failure: two runs reported "ok" in 130 ms with no snapshot, no observation and no error,
     // because an artist response with neither field produced an empty reading list. It is now an error with its cause.
-    const fetch = spotifyFetch({ artistBody: { id: ARTIST, name: "Drake", uri: `spotify:artist:${ARTIST}`, type: "artist" } });
+    const simplified = { external_urls: {}, href: "h", id: ARTIST, images: [], name: "Drake", type: "artist", uri: `spotify:artist:${ARTIST}` };
+    const fetch = spotifyFetch({ artistBody: simplified, pluralBody: simplified });
     await expect(spotifyConnector.fetchMetrics!(person, ARTIST, context(fetch))).rejects.toMatchObject({
       name: "ConnectorError",
-      message: expect.stringContaining("carried neither popularity nor follower count; response fields: id, name, type, uri"),
+      message: expect.stringContaining("carried neither popularity nor follower count"),
     });
+    await expect(spotifyConnector.fetchMetrics!(person, ARTIST, context(spotifyFetch({ artistBody: simplified, pluralBody: simplified })))).rejects.toMatchObject({
+      message: expect.stringContaining("response fields: external_urls, href, id, images, name, type, uri"),
+    });
+
     // One level is enough to keep the poll alive: a partial response is not a silent one.
     resetSpotifyTokenCache();
     const partial = spotifyFetch({ artistBody: { id: ARTIST, name: "Drake", popularity: 93 } });
