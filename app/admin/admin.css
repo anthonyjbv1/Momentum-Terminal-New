@@ -33,7 +33,11 @@
   /* Magnitude: one neutral, light on a dark track — the platform's own way of
      drawing an instrument. Emphasis is the platform accent (near-white). */
   --adm-accent: var(--color-fg-secondary);
-  --adm-accent-soft: color-mix(in oklab, var(--color-accent) 16%, var(--color-surface));
+  /* Above the plain badge's ground, not below it. On the light theme "plain"
+     was the palest chip and the accent chip a blue tint; mapped naively onto
+     dark, plain (a line colour) came out brighter than the accent and the two
+     read as the same badge. The accent stays the louder of the two. */
+  --adm-accent-soft: color-mix(in oklab, var(--color-accent) 30%, var(--color-surface));
 
   /* Status. The hues are the platform's positive and negative; red is lifted
      toward white because it carries small text on black here, where on the
@@ -78,7 +82,11 @@
   align-items: baseline;
   gap: 8px 16px;
   padding: 10px 20px;
-  background: var(--adm-panel);
+  /* A rung above the panels rather than level with them: this bar is sticky,
+     and on the light ground it was a solid dark band that rows plainly passed
+     under. At the panel value it is indistinguishable from the canvas and the
+     table scrolling beneath it appears to merge with the title. */
+  background: var(--color-surface-raised);
   color: var(--adm-ink);
 }
 .adm-bar b {
