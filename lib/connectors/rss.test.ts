@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { fakeFetchRoutes, makePerson, makeSource } from "@/lib/__tests__/fixtures";
 
+import { buildPublisherPolicy } from "@/lib/ingest/publishers";
+import { personNames } from "@/lib/ingest/stories";
+
 import { articleSignal, feedUrlFor, newsVolume, parseFeed, readRssConfig, resetFeedCache, rssConnector, type FeedItem } from "./rss";
 import { ConnectorError } from "./types";
 
@@ -59,19 +62,19 @@ describe("feedUrlFor", () => {
 });
 
 describe("parseFeed", () => {
-  it("reads RSS 2.0 with CDATA titles, guids, dates and outlets, dropping blank items", () => {
+  it("reads RSS 2.0 with CDATA titles, guids, dates, outlets and the source URL, dropping blank items", () => {
     const feed = parseFeed(RSS);
     expect(feed.title).toBe('"MrBeast" - Google News');
     expect(feed.items).toHaveLength(3);
-    expect(feed.items[0]).toEqual({ title: "MrBeast opens a theme park - Example Times", link: "https://news.google.com/rss/articles/one", guid: "one-guid", publishedAt: new Date("2026-09-12T10:30:00Z"), outlet: "Example Times" });
-    expect(feed.items[1]).toMatchObject({ guid: null, outlet: '"MrBeast" - Google News', publishedAt: new Date("2026-09-11T09:00:00Z") });
+    expect(feed.items[0]).toEqual({ title: "MrBeast opens a theme park - Example Times", link: "https://news.google.com/rss/articles/one", guid: "one-guid", publishedAt: new Date("2026-09-12T10:30:00Z"), outlet: "Example Times", sourceUrl: "https://example.com" });
+    expect(feed.items[1]).toMatchObject({ guid: null, outlet: '"MrBeast" - Google News', publishedAt: new Date("2026-09-11T09:00:00Z"), sourceUrl: null });
     expect(feed.items[2].publishedAt).toBeNull();
   });
 
   it("reads Atom, preferring the alternate link", () => {
     const feed = parseFeed(ATOM);
     expect(feed.title).toBe("Outlet tag feed");
-    expect(feed.items).toEqual([{ title: "Drake announces a tour", link: "https://outlet.example/drake-tour", guid: "tag:outlet.example,2026:1", publishedAt: new Date("2026-09-12T08:00:00Z"), outlet: "Outlet" }]);
+    expect(feed.items).toEqual([{ title: "Drake announces a tour", link: "https://outlet.example/drake-tour", guid: "tag:outlet.example,2026:1", publishedAt: new Date("2026-09-12T08:00:00Z"), outlet: "Outlet", sourceUrl: null }]);
   });
 
   it("refuses what is not a feed", () => {
@@ -83,20 +86,54 @@ describe("parseFeed", () => {
 describe("articleSignal and newsVolume", () => {
   const items = parseFeed(RSS).items;
 
-  it("keys on the guid, then the link, and dates by pubDate or the run", () => {
+  it("keys on the guid, then the link, dates by pubDate or the run, and names the publisher and the story", () => {
     const first = articleSignal(items[0], NOW)!;
-    expect(first).toMatchObject({ headline: "MrBeast opens a theme park - Example Times", dedupeKey: "rss:one-guid", occurredAt: new Date("2026-09-12T10:30:00Z") });
-    expect(first.rawPayload).toEqual({ kind: "article", source: "rss", outlet: "Example Times", link: "https://news.google.com/rss/articles/one", guid: "one-guid", publishedAt: "2026-09-12T10:30:00.000Z" });
-    expect(articleSignal(items[1], NOW)!.dedupeKey).toBe("rss:https://news.google.com/rss/articles/two");
+    // The outlet suffix Google News appends is not part of the headline; the publisher comes from the source URL, never the Google News link.
+    expect(first).toMatchObject({ headline: "MrBeast opens a theme park", story: "MrBeast opens a theme park", publisherDomain: "example.com", dedupeKey: "rss:one-guid", occurredAt: new Date("2026-09-12T10:30:00Z") });
+    expect(first.rawPayload).toEqual({
+      kind: "article",
+      source: "rss",
+      outlet: "Example Times",
+      title: "MrBeast opens a theme park - Example Times",
+      link: "https://news.google.com/rss/articles/one",
+      guid: "one-guid",
+      publishedAt: "2026-09-12T10:30:00.000Z",
+      source_url: "https://example.com",
+      publisher_domain: "example.com",
+      publisher_domain_from: "source",
+    });
+    // No source URL and a Google News link: the item names no publisher (the runner treats it as unknown, never as news.google.com).
+    const second = articleSignal(items[1], NOW)!;
+    expect(second).toMatchObject({ dedupeKey: "rss:https://news.google.com/rss/articles/two", publisherDomain: null });
+    expect(second.rawPayload).toMatchObject({ publisher_domain: null, publisher_domain_from: null });
+    // A direct outlet feed: the link's host is the publisher.
+    const atom = articleSignal(parseFeed(ATOM).items[0], NOW)!;
+    expect(atom).toMatchObject({ publisherDomain: "outlet.example", headline: "Drake announces a tour" });
+    expect(atom.rawPayload).toMatchObject({ publisher_domain: "outlet.example", publisher_domain_from: "link" });
     expect(articleSignal(items[2], NOW)!.occurredAt).toBe(NOW);
-    expect(articleSignal({ title: "x", link: null, guid: null, publishedAt: null, outlet: null }, NOW)).toBeNull();
+    expect(articleSignal({ title: "x", link: null, guid: null, publishedAt: null, outlet: null, sourceUrl: null }, NOW)).toBeNull();
+    expect(personNames(person)).toEqual(["MrBeast", "James Stephen Donaldson"]);
   });
 
   it("counts dated items inside the trailing window only", () => {
     expect(newsVolume(items, NOW, 24)).toBe(1);
     expect(newsVolume(items, NOW, 48)).toBe(2);
-    const future: FeedItem = { title: "f", link: "l", guid: null, publishedAt: new Date(NOW.getTime() + 3_600_000), outlet: null };
+    const future: FeedItem = { title: "f", link: "l", guid: null, publishedAt: new Date(NOW.getTime() + 3_600_000), outlet: null, sourceUrl: null };
     expect(newsVolume([future], NOW, 24)).toBe(0);
+  });
+
+  it("counts distinct stories, not copies, and never a blocked publisher", () => {
+    const item = (title: string, outlet: string, sourceUrl: string, minutesAgo: number): FeedItem => ({ title: `${title} - ${outlet}`, outlet, sourceUrl, link: "https://news.google.com/rss/articles/x", guid: null, publishedAt: new Date(NOW.getTime() - minutesAgo * 60_000) });
+    const feed = [
+      item("MrBeast opens a theme park in Kansas", "Example Times", "https://www.example.com", 60),
+      item("MrBeast opens theme park in Kansas", "Copy Cat Daily", "https://copycat.example", 50),
+      item("MrBeast Opens a Theme Park in Kansas", "Farm", "https://farm.example", 40),
+      item("MrBeast sued over sweepstakes", "Example Times", "https://www.example.com", 30),
+    ];
+    const publishers = buildPublisherPolicy([{ domain: "example.com", status: "allowed", tier: 2 }, { domain: "farm.example", status: "blocked", tier: null }]);
+    expect(newsVolume(feed, NOW, 24)).toBe(2);
+    expect(newsVolume(feed, NOW, 24, { publishers, personNames: personNames(person) })).toBe(2);
+    expect(newsVolume(feed.slice(2), NOW, 24, { publishers })).toBe(1);
   });
 });
 
@@ -118,7 +155,8 @@ describe("rssConnector", () => {
     const signals = await rssConnector.fetchForPerson(person, url, context(fetch, { max_items: 2 }));
     const readings = await rssConnector.fetchMetrics!(person, url, context(fetch, { max_items: 2 }));
     expect(fetch.calls).toEqual([url]);
-    expect(signals.map((s) => s.headline)).toEqual(["MrBeast opens a theme park - Example Times", "MrBeast sued over sweepstakes"]);
+    expect(signals.map((s) => s.headline)).toEqual(["MrBeast opens a theme park", "MrBeast sued over sweepstakes"]);
+    expect(signals.map((s) => s.publisherDomain)).toEqual(["example.com", null]);
     expect(readings).toEqual([{ metricKey: "news_volume_24h", value: 1 }]);
     expect(readRssConfig({ max_items: 500, volume_window_hours: 0 })).toEqual({ max_items: 100, volume_window_hours: 24 });
   });

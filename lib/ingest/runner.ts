@@ -3,8 +3,11 @@ import type { ConnectorContext, MetricReading, RawSignal, SnapshotStore } from "
 import type { DataSource } from "@/types";
 import type { Json } from "@/types/database";
 
+import { admitEvents, recentSince } from "./events";
 import { deriveMetric, metricSignal, observeMetric, readMetricConfigs, type MetricConfigs, type MetricObservation, type SnapshotPoint } from "./metrics";
+import { buildPublisherPolicy } from "./publishers";
 import type { IngestStore, IngestTrigger, ObservationRow, PollRow, PollStatus, SignalRow, SnapshotRow } from "./store";
+import { STORY_DEDUP_LOOKBACK_HOURS } from "./stories";
 
 /**
  * The ingestion runner.
@@ -13,7 +16,14 @@ import type { IngestStore, IngestTrigger, ObservationRow, PollRow, PollStatus, S
  * available connector, it loads the active person_data_sources mappings and
  * polls the connector once per person:
  *
- *   events    fetchForPerson → RawSignals, stored as they are (processed = false)
+ *   events    fetchForPerson → RawSignals → admitted (lib/ingest/events.ts):
+ *             an event that names a publisher domain is resolved through the
+ *             publisher allowlist (blocked → dropped before scoring, known →
+ *             its tier, unknown → the floor tier), and events that carry
+ *             story text are collapsed with the other copies of the same
+ *             story, in the poll and among the signals stored inside the
+ *             lookback, keeping the highest-tier copy → stored as they are
+ *             (processed = false), with the per-item tier
  *   metrics   fetchMetrics → raw levels → snapshot → delta against the
  *             person's previous snapshots → normalised against their own
  *             trailing baseline (lib/ingest/metrics.ts) → a signal only when
@@ -21,13 +31,16 @@ import type { IngestStore, IngestTrigger, ObservationRow, PollRow, PollStatus, S
  *   derived   config.derived metrics computed from another metric's history,
  *             then normalised the same way
  *
- * Nothing here names a source. What a metric means is on its data_sources
- * row; adding or removing a source is a row and a credential.
+ * Nothing here names a source or a domain. What a metric means is on its
+ * data_sources row; the publisher allowlist is the publisher_domains table;
+ * adding or removing a source is a row and a credential.
  *
- * Observability: the run, every poll (source, person, outcome, latency) and
- * every observation (level, delta, baseline statistics, sigma, outcome,
- * the signal it produced) are written through the store and logged, so a
- * score move can be reconstructed from the signal back to the poll.
+ * Observability: the run, every poll (source, person, outcome, latency,
+ * what it produced, what it dropped and collapsed), every observation
+ * (level, delta, baseline statistics, sigma, outcome, the signal it
+ * produced), every blocked drop and every collapse are written through the
+ * store and logged, so a score move can be reconstructed from the signal
+ * back to the poll, and a missing story back to the item it collapsed into.
  *
  * A source whose connector reports missing credentials is inactive for the
  * run: recorded, logged, skipped; the rest of the run is unaffected. One
@@ -37,7 +50,7 @@ import type { IngestStore, IngestTrigger, ObservationRow, PollRow, PollStatus, S
  */
 
 export interface IngestLogLine {
-  event: "run" | "source" | "poll" | "observation" | "signal";
+  event: "run" | "source" | "poll" | "observation" | "signal" | "drop" | "collapse" | "upgrade";
   [key: string]: unknown;
 }
 
@@ -69,6 +82,10 @@ export interface SourceRunSummary {
   snapshotsRecorded: number;
   observations: number;
   errors: number;
+  /** Items dropped before scoring because their publisher domain is blocked. */
+  blockedDropped: number;
+  /** Items collapsed into a story already kept, in this run or inside the lookback. */
+  duplicatesCollapsed: number;
 }
 
 export interface IngestError {
@@ -95,6 +112,8 @@ export interface IngestSummary {
     snapshotsRecorded: number;
     observations: number;
     errors: number;
+    blockedDropped: number;
+    duplicatesCollapsed: number;
   };
   errors: IngestError[];
 }
@@ -166,6 +185,9 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
 
   const runId = await store.beginRun({ startedAt: now, trigger, forced: force, requestedSources: requested });
 
+  // The publisher allowlist, read once per run: configuration, never code.
+  const publishers = buildPublisherPolicy(await store.listPublisherDomains());
+
   const sourcesRun: SourceRunSummary[] = [];
   const sourcesSkipped: IngestSummary["sourcesSkipped"] = [];
   const configProblems: IngestSummary["configProblems"] = [];
@@ -185,6 +207,8 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
       signalsCreated: 0,
       snapshotsRecorded: 0,
       observations: 0,
+      blockedDropped: 0,
+      duplicatesCollapsed: 0,
       startedAt: now,
       finishedAt: now,
     });
@@ -225,7 +249,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
       mappings = await store.listMappings(source.id);
     } catch (error) {
       errors.push({ source: source.name, message: errorMessage(error) });
-      sourcesRun.push({ name: source.name, people: 0, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 0, observations: 0, errors: 1 });
+      sourcesRun.push({ name: source.name, people: 0, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 0, observations: 0, errors: 1, blockedDropped: 0, duplicatesCollapsed: 0 });
       continue;
     }
 
@@ -250,6 +274,8 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
       snapshotsRecorded: 0,
       observations: 0,
       errors: 0,
+      blockedDropped: 0,
+      duplicatesCollapsed: 0,
     };
 
     for (const { person, externalIdentifier } of mappings) {
@@ -260,7 +286,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         record: (metricKey, value, recordedAt = now) =>
           pendingSnapshots.push({ personId: person.id, dataSourceId: source.id, metricKey, value, recordedAt }),
       };
-      const context: ConnectorContext = { source, config, snapshots, now, fetch: fetchWithTimeout };
+      const context: ConnectorContext = { source, config, snapshots, now, fetch: fetchWithTimeout, publishers };
       const poll: Omit<PollRow, "status" | "reason" | "latencyMs" | "finishedAt"> = {
         runId,
         dataSourceId: source.id,
@@ -268,6 +294,8 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         signalsCreated: 0,
         snapshotsRecorded: 0,
         observations: 0,
+        blockedDropped: 0,
+        duplicatesCollapsed: 0,
         // Poll times are measured from the run's `now`, so a run with an
         // injected clock stays consistent with itself and reproducible.
         startedAt: new Date(now.getTime() + (Date.now() - wallClockStart)),
@@ -279,6 +307,44 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         // 1. Poll ---------------------------------------------------------------
         const events: RawSignal[] = await connector.fetchForPerson(person, externalIdentifier, context);
         const readings: MetricReading[] = connector.fetchMetrics ? await connector.fetchMetrics(person, externalIdentifier, context) : [];
+
+        // 1b. Admit -------------------------------------------------------------
+        // Each event's publisher is resolved through the allowlist (a blocked
+        // domain is dropped here, before anything scores it) and copies of
+        // one story are collapsed, against this poll and against what is
+        // already stored inside the lookback. Every drop and collapse is
+        // logged with what it was dropped for or collapsed into.
+        const since = recentSince(events, now, STORY_DEDUP_LOOKBACK_HOURS);
+        const recent = since ? await store.listRecentSignals(person.id, source.id, since) : [];
+        const admission = admitEvents({ events, person, sourceTier: source.tier, policy: publishers, recent });
+        for (const { signal, publisher } of admission.blocked) {
+          log({ event: "drop", run: runId, source: source.name, person: person.slug, reason: "blocked_domain", domain: publisher.domain, matched: publisher.matched, headline: signal.headline, dedupeKey: signal.dedupeKey ?? null });
+        }
+        for (const collapse of admission.collapsed) {
+          log({
+            event: "collapse",
+            run: runId,
+            source: source.name,
+            person: person.slug,
+            headline: collapse.signal.headline,
+            publisherDomain: collapse.signal.publisherDomain ?? null,
+            tier: collapse.tier,
+            similarity: Number(collapse.similarity.toFixed(3)),
+            into:
+              collapse.into.kind === "stored"
+                ? { kind: "stored", signalId: collapse.into.id, tier: collapse.into.tier }
+                : { kind: "run", headline: collapse.into.signal.headline, publisherDomain: collapse.into.signal.publisherDomain ?? null, dedupeKey: collapse.into.signal.dedupeKey ?? null },
+            upgraded: collapse.upgrade !== null,
+          });
+          if (collapse.upgrade) {
+            const changed = await store.upgradeSignal(collapse.upgrade.id, { tier: collapse.upgrade.tier, headline: collapse.upgrade.headline, rawPayload: collapse.upgrade.rawPayload });
+            log({ event: "upgrade", run: runId, source: source.name, person: person.slug, signalId: collapse.upgrade.id, tier: collapse.upgrade.tier, from: collapse.into.kind === "stored" ? collapse.into.tier : null, headline: collapse.upgrade.headline, changed });
+          }
+        }
+        poll.blockedDropped = admission.blocked.length;
+        poll.duplicatesCollapsed = admission.collapsed.length;
+        summary.blockedDropped += admission.blocked.length;
+        summary.duplicatesCollapsed += admission.collapsed.length;
 
         // 2. Snapshot + history -------------------------------------------------
         const current = new Map<string, SnapshotPoint>();
@@ -345,21 +411,29 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
 
         // 5. Persist -----------------------------------------------------------
         const metricSignals = observations.flatMap((o) => (o.signal ? [o.signal] : []));
-        const toRow = (signal: RawSignal): SignalRow => ({
+        const toRow = (signal: RawSignal, tier: number | null = null): SignalRow => ({
           personId: person.id,
           dataSourceId: source.id,
           headline: signal.headline,
           rawPayload: signal.rawPayload,
           occurredAt: signal.occurredAt,
           dedupeKey: signal.dedupeKey,
+          tier,
         });
-        const stored = await store.insertSignals([...events, ...metricSignals].map(toRow));
+        const stored = await store.insertSignals([...admission.accepted.map(({ signal, tier }) => toRow(signal, tier)), ...metricSignals.map((signal) => toRow(signal))]);
         const idByDedupeKey = new Map(stored.filter((s) => s.dedupeKey !== null).map((s) => [s.dedupeKey as string, s.id]));
         const metricStored = metricSignals.filter((s) => s.dedupeKey && idByDedupeKey.has(s.dedupeKey)).length;
         summary.signalsCreated += stored.length;
         summary.metricSignals += metricStored;
         summary.eventSignals += stored.length - metricStored;
         poll.signalsCreated = stored.length;
+
+        for (const { signal, tier, publisher } of admission.accepted) {
+          // Events with a resolved publisher are logged with their domain and tier, so the resolution can be read off the run.
+          if (!publisher) continue;
+          const signalId = signal.dedupeKey ? (idByDedupeKey.get(signal.dedupeKey) ?? null) : null;
+          log({ event: "signal", run: runId, source: source.name, person: person.slug, kind: "event", headline: signal.headline, publisherDomain: publisher.domain, tier, tierBasis: publisher.status, signalId, stored: signalId !== null });
+        }
 
         const snapshotRows: SnapshotRow[] = [
           ...pendingSnapshots,
@@ -418,6 +492,8 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     snapshotsRecorded: sourcesRun.reduce((sum, s) => sum + s.snapshotsRecorded, 0),
     observations: sourcesRun.reduce((sum, s) => sum + s.observations, 0),
     errors: errors.length,
+    blockedDropped: sourcesRun.reduce((sum, s) => sum + s.blockedDropped, 0),
+    duplicatesCollapsed: sourcesRun.reduce((sum, s) => sum + s.duplicatesCollapsed, 0),
   };
   const summary: IngestSummary = {
     runId,
@@ -443,6 +519,8 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
       snapshotsRecorded: totals.snapshotsRecorded,
       observations: totals.observations,
       errors: totals.errors,
+      blockedDropped: totals.blockedDropped,
+      duplicatesCollapsed: totals.duplicatesCollapsed,
     });
   } catch (error) {
     summary.errors.push({ source: "run", message: `run log failed: ${errorMessage(error)}` });

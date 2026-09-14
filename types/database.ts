@@ -130,7 +130,9 @@ export type Database = {
       }
       ingest_runs: {
         Row: {
+          blocked_dropped: number
           created_at: string
+          duplicates_collapsed: number
           errors: number
           finished_at: string | null
           forced: boolean
@@ -145,7 +147,9 @@ export type Database = {
           trigger: string
         }
         Insert: {
+          blocked_dropped?: number
           created_at?: string
+          duplicates_collapsed?: number
           errors?: number
           finished_at?: string | null
           forced?: boolean
@@ -160,7 +164,9 @@ export type Database = {
           trigger: string
         }
         Update: {
+          blocked_dropped?: number
           created_at?: string
+          duplicates_collapsed?: number
           errors?: number
           finished_at?: string | null
           forced?: boolean
@@ -755,6 +761,33 @@ export type Database = {
           },
         ]
       }
+      publisher_domains: {
+        Row: {
+          created_at: string
+          domain: string
+          note: string | null
+          status: string
+          tier: number | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          domain: string
+          note?: string | null
+          status: string
+          tier?: number | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          domain?: string
+          note?: string | null
+          status?: string
+          tier?: number | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       rate_limit_buckets: {
         Row: {
           hits: number
@@ -1022,6 +1055,7 @@ export type Database = {
           raw_payload: Json | null
           sentiment_confidence: number | null
           sentiment_label: string | null
+          tier: number | null
         }
         Insert: {
           created_at?: string
@@ -1037,6 +1071,7 @@ export type Database = {
           raw_payload?: Json | null
           sentiment_confidence?: number | null
           sentiment_label?: string | null
+          tier?: number | null
         }
         Update: {
           created_at?: string
@@ -1052,6 +1087,7 @@ export type Database = {
           raw_payload?: Json | null
           sentiment_confidence?: number | null
           sentiment_label?: string | null
+          tier?: number | null
         }
         Relationships: [
           {
@@ -1079,8 +1115,10 @@ export type Database = {
       }
       source_polls: {
         Row: {
+          blocked_dropped: number
           created_at: string
           data_source_id: string
+          duplicates_collapsed: number
           finished_at: string
           id: string
           latency_ms: number | null
@@ -1094,8 +1132,10 @@ export type Database = {
           status: string
         }
         Insert: {
+          blocked_dropped?: number
           created_at?: string
           data_source_id: string
+          duplicates_collapsed?: number
           finished_at: string
           id?: string
           latency_ms?: number | null
@@ -1109,8 +1149,10 @@ export type Database = {
           status: string
         }
         Update: {
+          blocked_dropped?: number
           created_at?: string
           data_source_id?: string
+          duplicates_collapsed?: number
           finished_at?: string
           id?: string
           latency_ms?: number | null
@@ -1375,6 +1417,8 @@ export type Database = {
       source_health: {
         Row: {
           avg_latency_ms_24h: number | null
+          blocked_24h: number | null
+          collapsed_24h: number | null
           data_source_id: string | null
           display_name: string | null
           error_rate_24h: number | null

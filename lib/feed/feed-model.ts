@@ -184,7 +184,9 @@ export function indefiniteArticle(word: string): "A" | "An" {
 export function frameSignal(personName: string, source: string | null, impact: number | null, processed: boolean | null): string {
   const what = source ? `${indefiniteArticle(source)} ${source} signal` : "A signal";
   if (processed === false || (processed === null && impact === null)) {
-    return `${what} on ${personName} is waiting for the Engine's next read.`;
+    // The placeholder, for a signal the Engine has not read. The source is
+    // named once per entry, in the attribution line beneath; not here too.
+    return `Something new on ${personName}, waiting for the Engine's next read.`;
   }
   if (impact === null) return `${what} on ${personName} has been read.`;
   if (Math.abs(impact) < 0.05) return `${what} on ${personName} read as neutral.`;

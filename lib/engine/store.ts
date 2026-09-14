@@ -56,7 +56,7 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         client.from("people").select("*").eq("is_active", true).order("slug"),
         client
           .from("signals")
-          .select("id, person_id, headline, raw_payload, occurred_at, created_at, source:data_sources!inner(name, tier)")
+          .select("id, person_id, headline, raw_payload, occurred_at, created_at, tier, source:data_sources!inner(name, tier)")
           .eq("processed", false)
           // Oldest first, then id: one ingestion run stamps a whole batch with
           // the same created_at, and the cap must cut it the same way every time.
@@ -83,7 +83,8 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
           headline: row.headline,
           rawPayload: row.raw_payload,
           sourceName: row.source.name,
-          sourceTier: row.source.tier,
+          // A per-item tier (RSS resolves one from the publisher domain) outranks the source's; null means the source's applies.
+          sourceTier: row.tier ?? row.source.tier,
           occurredAt: new Date(row.occurred_at),
           createdAt: new Date(row.created_at),
         }));

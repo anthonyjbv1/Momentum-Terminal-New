@@ -17,7 +17,7 @@ import { createTestDatabase, type TestDatabase } from "@/lib/__tests__/pglite";
  */
 
 const RAW_TABLES = ["raw_source_snapshots", "raw_metric_observations"];
-const INTERNAL_RELATIONS = [...RAW_TABLES, "ingest_runs", "source_polls", "llm_model_prices", "source_health", "llm_cost_per_tick"];
+const INTERNAL_RELATIONS = [...RAW_TABLES, "ingest_runs", "source_polls", "llm_model_prices", "source_health", "llm_cost_per_tick", "publisher_domains"];
 const USER_ROLES = ["anon", "authenticated"];
 
 let database: TestDatabase;
@@ -155,6 +155,52 @@ describe("the signals table", () => {
     expect(await insert("MrBeast signs a $1,000,000,000 deal with 516M fans watching", { kind: "article", source: "rss", outlet: "Example" })).toHaveLength(1);
     expect(await insert("Plain headline", null)).toHaveLength(1);
   });
+
+  it("carries a per-item tier inside 1..5, or none, in which case the source's tier applies", async () => {
+    const withTier = (tier: number | null) =>
+      database.rows<{ id: string }>("insert into public.signals (person_id, data_source_id, headline, raw_payload, dedupe_key, tier) values ($1, $2, $3, $4::jsonb, $5, $6) returning id", [
+        personId,
+        sourceId,
+        "Tiered headline",
+        JSON.stringify({ kind: "article" }),
+        `tier:${Math.random()}`,
+        tier,
+      ]);
+    expect(await withTier(1)).toHaveLength(1);
+    expect(await withTier(5)).toHaveLength(1);
+    expect(await withTier(null)).toHaveLength(1);
+    await expect(withTier(0)).rejects.toThrow(/signals_tier_range/);
+    await expect(withTier(6)).rejects.toThrow(/signals_tier_range/);
+  });
+});
+
+describe("the publisher allowlist", () => {
+  it("is seeded small: wires, papers of record and the two subjects' trade press, one blocked scraper, tiers 1 to 3 only", async () => {
+    const rows = await database.rows<{ domain: string; status: string; tier: number | null }>("select domain, status, tier from public.publisher_domains order by domain");
+    expect(rows.length).toBeGreaterThanOrEqual(40);
+    expect(rows.length).toBeLessThanOrEqual(60);
+    expect(rows.filter((r) => r.status === "blocked").map((r) => r.domain)).toEqual(["defensorianna.gob.ar"]);
+    for (const row of rows.filter((r) => r.status === "allowed")) expect([1, 2, 3], row.domain).toContain(row.tier);
+    for (const domain of ["billboard.com", "rollingstone.com", "theneedledrop.com", "complex.com", "theverge.com", "tubefilter.com", "marketingdive.com"]) {
+      expect(rows.map((r) => r.domain), domain).toContain(domain);
+    }
+    expect(rows.find((r) => r.domain === "theneedledrop.com")?.tier).toBe(2);
+    expect(rows.find((r) => r.domain === "billboard.com")?.tier).toBe(1);
+  });
+
+  it("is configuration with a normalised key: a row is a domain in canonical form, allowed rows carry a tier, and adding one is an insert", async () => {
+    const add = (domain: string, status: string, tier: number | null) => database.rows("insert into public.publisher_domains (domain, status, tier) values ($1, $2, $3) returning domain", [domain, status, tier]);
+    expect(await add("stereoboard.example", "allowed", 3)).toEqual([{ domain: "stereoboard.example" }]);
+    await expect(add("WWW.Shouty.example", "allowed", 3)).rejects.toThrow(/publisher_domains_domain_normalised/);
+    await expect(add("www.shouty.example", "allowed", 3)).rejects.toThrow(/publisher_domains_domain_normalised/);
+    await expect(add("trailing.example.", "allowed", 3)).rejects.toThrow(/publisher_domains_domain_normalised/);
+    await expect(add("nodot", "allowed", 3)).rejects.toThrow(/publisher_domains_domain_normalised/);
+    await expect(add("https://scheme.example", "allowed", 3)).rejects.toThrow(/publisher_domains_domain_normalised/);
+    await expect(add("untiered.example", "allowed", null)).rejects.toThrow(/publisher_domains_tier_when_allowed/);
+    await expect(add("wrong.example", "allowed", 9)).rejects.toThrow(/publisher_domains_tier_range/);
+    await expect(add("maybe.example", "unsure", null)).rejects.toThrow(/publisher_domains_status_check/);
+    expect(await add("scraper.example", "blocked", null)).toEqual([{ domain: "scraper.example" }]);
+  });
 });
 
 describe("the registry", () => {
@@ -201,15 +247,17 @@ describe("observability", () => {
   it("source_health reads last poll, last success, last error and the trailing-day rates", async () => {
     const [{ id: runId }] = await database.rows<{ id: string }>("insert into public.ingest_runs (started_at, trigger) values (now(), 'manual') returning id");
     await database.exec(`
-      insert into public.source_polls (run_id, data_source_id, person_id, status, reason, latency_ms, signals_created, started_at, finished_at) values
-        ('${runId}', '${sourceId}', '${personId}', 'ok',    null,   120, 2, now() - interval '3 hours', now() - interval '3 hours'),
-        ('${runId}', '${sourceId}', '${personId}', 'error', 'quota', 80, 0, now() - interval '2 hours', now() - interval '2 hours'),
-        ('${runId}', '${sourceId}', '${personId}', 'ok',    null,   200, 1, now() - interval '1 hour',  now() - interval '1 hour'),
-        ('${runId}', '${sourceId}', null,          'skipped', 'inactive: YOUTUBE_API_KEY is not set', null, 0, now(), now());
+      insert into public.source_polls (run_id, data_source_id, person_id, status, reason, latency_ms, signals_created, blocked_dropped, duplicates_collapsed, started_at, finished_at) values
+        ('${runId}', '${sourceId}', '${personId}', 'ok',    null,   120, 2, 1, 4, now() - interval '3 hours', now() - interval '3 hours'),
+        ('${runId}', '${sourceId}', '${personId}', 'error', 'quota', 80, 0, 0, 0, now() - interval '2 hours', now() - interval '2 hours'),
+        ('${runId}', '${sourceId}', '${personId}', 'ok',    null,   200, 1, 0, 2, now() - interval '1 hour',  now() - interval '1 hour'),
+        ('${runId}', '${sourceId}', null,          'skipped', 'inactive: YOUTUBE_API_KEY is not set', null, 0, 0, 0, now(), now());
     `);
     const [health] = await database.rows<Record<string, unknown>>("select * from public.source_health where name = 'youtube'");
     expect(health).toMatchObject({ name: "youtube", last_error: "quota", last_skip_reason: "inactive: YOUTUBE_API_KEY is not set" });
     expect([health.people_mapped, health.polls_24h, health.errors_24h, health.signals_24h].map(Number)).toEqual([1, 3, 1, 3]);
+    // The Phase 8 counters: what the trailing day dropped as blocked and collapsed as duplicates.
+    expect([health.blocked_24h, health.collapsed_24h].map(Number)).toEqual([1, 6]);
     expect(Number(health.error_rate_24h)).toBeCloseTo(1 / 3, 4);
     expect(Number(health.avg_latency_ms_24h)).toBe(160);
     expect(health.last_success_at).not.toBeNull();

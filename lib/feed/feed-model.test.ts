@@ -92,14 +92,17 @@ describe("toFeedEntry", () => {
         evidence: [{ id: "aaaaaaaa-0000-4000-8000-000000000002", headline: "Label confirms release date slipped", source: "RSS (per-person news feed)", impact: null, occurred_at: iso(NOW), processed: false }],
       }),
     );
+    // The placeholder names the person and the wait, not the source: the attribution line beneath ("Observed via RSS") already does.
     expect(unread).toMatchObject({
       kind: "signal",
-      text: "An RSS signal on Drake is waiting for the Engine's next read.",
+      text: "Something new on Drake, waiting for the Engine's next read.",
       quote: "Label confirms release date slipped",
       impact: null,
       direction: "neutral",
       sources: ["RSS"],
     });
+    expect(unread?.text).not.toMatch(/RSS/);
+    expect(frameSignal("MrBeast", "YouTube", null, false)).toBe("Something new on MrBeast, waiting for the Engine's next read.");
 
     const read = toFeedEntry(
       row({

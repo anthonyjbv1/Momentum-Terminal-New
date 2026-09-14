@@ -45,7 +45,7 @@ describe("runIngestion", () => {
     expect(summary.sourcesRun).toEqual([]);
     expect(summary.sourcesSkipped).toEqual([]);
     expect(summary.errors).toEqual([]);
-    expect(summary.totals).toEqual({ sources: 0, people: 0, signalsCreated: 0, snapshotsRecorded: 0, observations: 0, errors: 0 });
+    expect(summary.totals).toEqual({ sources: 0, people: 0, signalsCreated: 0, snapshotsRecorded: 0, observations: 0, errors: 0, blockedDropped: 0, duplicatesCollapsed: 0 });
     expect(summary).toMatchObject({ runId: store.runs[0].id, trigger: "manual", forced: false });
     expect(store.runs[0].result).toMatchObject({ sourcesRun: 0, errors: 0 });
     expect(store.signals).toHaveLength(0);
@@ -78,7 +78,7 @@ describe("runIngestion", () => {
     const store = createMemoryIngestStore({
       sources: [source],
       mappings: { "src-x": [{ person, externalIdentifier: "id" }] },
-      polls: [{ runId: "r0", dataSourceId: "src-x", personId: person.id, status: "ok", reason: null, latencyMs: 5, signalsCreated: 0, snapshotsRecorded: 0, observations: 0, startedAt: hour(-0.5), finishedAt: hour(-0.5) }],
+      polls: [{ runId: "r0", dataSourceId: "src-x", personId: person.id, status: "ok", reason: null, latencyMs: 5, signalsCreated: 0, snapshotsRecorded: 0, observations: 0, blockedDropped: 0, duplicatesCollapsed: 0, startedAt: hour(-0.5), finishedAt: hour(-0.5) }],
     });
     const registry = buildRegistry([levelConnector("x", () => ({ followers: 100 }))]);
 
@@ -110,7 +110,7 @@ describe("runIngestion", () => {
 
     it("first run: a snapshot and a first-contact observation, no signal", async () => {
       const summary = await run(NOW);
-      expect(summary.sourcesRun).toEqual([{ name: "x", people: 1, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 1, observations: 1, errors: 0 }]);
+      expect(summary.sourcesRun).toEqual([{ name: "x", people: 1, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 1, observations: 1, errors: 0, blockedDropped: 0, duplicatesCollapsed: 0 }]);
       expect(store.snapshots).toEqual([{ personId: person.id, dataSourceId: "src-x", metricKey: "followers", value: 1_000_000, recordedAt: NOW }]);
       expect(store.observations[0]).toMatchObject({ metricKey: "followers", outcome: "first_contact", value: 1_000_000, previous: null, signalId: null });
       expect(store.signals).toEqual([]);
@@ -242,6 +242,128 @@ describe("runIngestion", () => {
     expect(store.signals.map((s) => s.headline)).toEqual(["MrBeast launches a burger", "MrBeast opens a store"]);
   });
 
+  describe("admitting events: the publisher allowlist and story deduplication", () => {
+    interface Item {
+      headline: string;
+      key: string;
+      domain?: string | null;
+      story?: boolean;
+      at?: Date;
+    }
+    /** An event connector whose items name a publisher and a story, like a news feed's. */
+    const newsConnector = (items: () => Item[]): DataConnector => ({
+      name: "news",
+      async fetchForPerson() {
+        return items().map((item) => ({
+          headline: item.headline,
+          dedupeKey: item.key,
+          occurredAt: item.at ?? NOW,
+          rawPayload: { kind: "article", outlet: "Outlet", publisher_domain: item.domain ?? null },
+          ...(item.domain === undefined ? {} : { publisherDomain: item.domain }),
+          ...(item.story === false ? {} : { story: item.headline }),
+        }));
+      },
+    });
+    const source = makeSource({ id: "src-news", name: "news", tier: 3, is_active: true });
+    const seed = () =>
+      createMemoryIngestStore({
+        sources: [source],
+        mappings: { "src-news": [{ person, externalIdentifier: "feed" }] },
+        publisherDomains: [
+          { domain: "example.com", status: "allowed", tier: 2 },
+          { domain: "farm.example", status: "blocked", tier: null },
+        ],
+      });
+    const park: Item[] = [
+      { headline: "MrBeast opens a theme park in Kansas", key: "a", domain: "www.example.com" },
+      { headline: "MrBeast Opens Theme Park in Kansas", key: "b", domain: "unknown.example" },
+      { headline: "MrBeast opens a theme park in Kansas", key: "c", domain: "farm.example" },
+      { headline: "MrBeast sued over sweepstakes", key: "d", domain: "unknown.example" },
+      { headline: "A milestone with no publisher and no story", key: "e", story: false },
+    ];
+
+    it("resolves a tier per item, drops blocked domains before anything is stored, accepts unknown ones at the floor, and collapses copies of one story", async () => {
+      const store = seed();
+      const lines: IngestLogLine[] = [];
+      const summary = await runIngestion({ store, now: NOW, registry: buildRegistry([newsConnector(() => park)]), force: true, log: (line) => lines.push(line) });
+
+      expect(summary.sourcesRun[0]).toMatchObject({ signalsCreated: 3, eventSignals: 3, blockedDropped: 1, duplicatesCollapsed: 1 });
+      expect(summary.totals).toMatchObject({ signalsCreated: 3, blockedDropped: 1, duplicatesCollapsed: 1 });
+      expect(store.signals.map((s) => [s.dedupeKey, s.tier, s.headline])).toEqual([
+        ["a", 2, "MrBeast opens a theme park in Kansas"],
+        ["d", 5, "MrBeast sued over sweepstakes"],
+        ["e", null, "A milestone with no publisher and no story"],
+      ]);
+      // The resolution travels in the payload too, so a signal can be read on its own.
+      expect(store.signals[0].rawPayload).toMatchObject({ publisher_tier: 2, publisher_status: "known", publisher_matched: "example.com" });
+      expect(store.signals[1].rawPayload).toMatchObject({ publisher_tier: 5, publisher_status: "unknown", publisher_matched: null });
+      expect(store.signals[2].rawPayload).not.toHaveProperty("publisher_tier");
+      expect(JSON.stringify(store.signals)).not.toContain("farm.example");
+
+      expect(lines.find((l) => l.event === "drop")).toMatchObject({ source: "news", person: "mrbeast", reason: "blocked_domain", domain: "farm.example", matched: "farm.example", dedupeKey: "c" });
+      expect(lines.find((l) => l.event === "collapse")).toMatchObject({ headline: "MrBeast Opens Theme Park in Kansas", tier: 5, into: { kind: "run", dedupeKey: "a", publisherDomain: "example.com" }, upgraded: false });
+      expect(lines.filter((l) => l.event === "signal" && l.kind === "event").map((l) => [l.publisherDomain, l.tier, l.tierBasis, l.stored])).toEqual([
+        ["example.com", 2, "known", true],
+        ["unknown.example", 5, "unknown", true],
+      ]);
+      expect(store.polls[0]).toMatchObject({ status: "ok", signalsCreated: 3, blockedDropped: 1, duplicatesCollapsed: 1 });
+      expect(store.runs[0].result).toMatchObject({ signalsCreated: 3, blockedDropped: 1, duplicatesCollapsed: 1 });
+    });
+
+    it("collapses a later copy against what is stored inside the lookback, and upgrades an unread signal to a better publisher", async () => {
+      const store = seed();
+      const registry = buildRegistry([newsConnector(() => park)]);
+      await runIngestion({ store, now: NOW, registry, force: true, log: quiet });
+
+      // The same feed an hour later: nothing new; the unknown copy collapses into the stored story, the blocked one is dropped again.
+      const again = await runIngestion({ store, now: hour(1), registry, force: true, log: quiet });
+      expect(again.sourcesRun[0]).toMatchObject({ signalsCreated: 0, blockedDropped: 1, duplicatesCollapsed: 1 });
+      expect(store.signals).toHaveLength(3);
+
+      // A tier-2 outlet picks up the sweepstakes story, stored so far from an unknown domain at the floor: the stored signal is upgraded, not joined.
+      const lines: IngestLogLine[] = [];
+      const pickup: Item[] = [{ headline: "MrBeast is sued over a sweepstakes", key: "f", domain: "example.com", at: hour(3) }];
+      const third = await runIngestion({ store, now: hour(3), registry: buildRegistry([newsConnector(() => pickup)]), force: true, log: (line) => lines.push(line) });
+      expect(third.sourcesRun[0]).toMatchObject({ signalsCreated: 0, duplicatesCollapsed: 1 });
+      expect(store.signals).toHaveLength(3);
+      expect(store.signals[1]).toMatchObject({ dedupeKey: "d", tier: 2, headline: "MrBeast is sued over a sweepstakes" });
+      expect(store.signals[1].rawPayload).toMatchObject({ publisher_domain: "example.com", publisher_tier: 2 });
+      expect(lines.find((l) => l.event === "collapse")).toMatchObject({ into: { kind: "stored", signalId: store.signals[1].id, tier: 5 }, upgraded: true });
+      expect(lines.find((l) => l.event === "upgrade")).toMatchObject({ signalId: store.signals[1].id, tier: 2, from: 5, changed: true });
+
+      // Once the Engine has read a signal it is never rewritten.
+      store.signals[1].processed = true;
+      const fourth = await runIngestion({ store, now: hour(4), registry: buildRegistry([newsConnector(() => [{ headline: "MrBeast sued over sweepstakes prize", key: "g", domain: "example.com", at: hour(4) }])]), force: true, log: quiet });
+      expect(fourth.sourcesRun[0]).toMatchObject({ signalsCreated: 0, duplicatesCollapsed: 1 });
+      expect(store.signals[1].headline).toBe("MrBeast is sued over a sweepstakes");
+    });
+
+    it("keeps two different stories about the person on the same day, and the same headline outside the lookback", async () => {
+      const store = seed();
+      const first = await runIngestion({ store, now: NOW, registry: buildRegistry([newsConnector(() => park.slice(0, 1))]), force: true, log: quiet });
+      expect(first.sourcesRun[0]).toMatchObject({ signalsCreated: 1, duplicatesCollapsed: 0 });
+      const later: Item[] = [
+        { headline: "MrBeast opens a theme park in Kansas", key: "h", domain: "unknown.example", at: hour(72) },
+        { headline: "MrBeast settles the sweepstakes lawsuit for an undisclosed sum", key: "i", domain: "unknown.example", at: hour(72) },
+      ];
+      const next = await runIngestion({ store, now: hour(72), registry: buildRegistry([newsConnector(() => later)]), force: true, log: quiet });
+      expect(next.sourcesRun[0]).toMatchObject({ signalsCreated: 2, duplicatesCollapsed: 0 });
+      expect(store.signals.map((s) => s.dedupeKey)).toEqual(["a", "h", "i"]);
+    });
+
+    it("leaves a connector that names no publisher exactly as it was: the source's tier, no story rule", async () => {
+      const store = createMemoryIngestStore({
+        sources: [makeSource({ id: "src-x", name: "x", tier: 4, is_active: true })],
+        mappings: { "src-x": [{ person, externalIdentifier: "id" }] },
+        publisherDomains: [{ domain: "example.com", status: "blocked", tier: null }],
+      });
+      const registry = buildRegistry([levelConnector("x", () => ({}), () => [{ headline: "MrBeast opens a theme park in Kansas", dedupeKey: "a1" }, { headline: "MrBeast opens a theme park in Kansas", dedupeKey: "a2" }])]);
+      const summary = await runIngestion({ store, now: NOW, registry, force: true, log: quiet });
+      expect(summary.sourcesRun[0]).toMatchObject({ signalsCreated: 2, blockedDropped: 0, duplicatesCollapsed: 0 });
+      expect(store.signals.map((s) => s.tier)).toEqual([null, null]);
+    });
+  });
+
   it("records connector failures per person as error polls and keeps going", async () => {
     const drake = makePerson({ id: "33333333-3333-4333-8333-333333333333", slug: "drake", display_name: "Drake" });
     const failing: DataConnector = {
@@ -262,12 +384,56 @@ describe("runIngestion", () => {
     const summary = await runIngestion({ store, now: NOW, registry: buildRegistry([failing]), force: true, log: quiet });
 
     expect(summary.errors).toEqual([{ source: "x", person: "drake", message: "boom" }]);
-    expect(summary.sourcesRun).toEqual([{ name: "x", people: 2, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 1, observations: 1, errors: 1 }]);
+    expect(summary.sourcesRun).toEqual([{ name: "x", people: 2, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 1, observations: 1, errors: 1, blockedDropped: 0, duplicatesCollapsed: 0 }]);
     expect(store.polls.map((p) => [p.personId, p.status, p.reason])).toEqual([
       [drake.id, "error", "boom"],
       [person.id, "ok", null],
     ]);
     expect(summary.totals.errors).toBe(1);
+  });
+
+  describe("with the RSS connector, end to end", () => {
+    // A Google News search feed as Google serves it: every link wrapped in a news.google.com redirect, the title suffixed
+    // with the outlet, and the publisher named in <source url="...">. Three copies of one story, one blocked scraper, one
+    // unlisted outlet, one different story.
+    const GOOGLE_NEWS = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>"MrBeast" - Google News</title>
+  <item><title>MrBeast Opens a Theme Park in Kansas - Farm Daily</title><link>https://news.google.com/rss/articles/CBMi1</link><guid isPermaLink="false">CBMi1</guid><pubDate>Mon, 07 Sep 2026 09:00:00 GMT</pubDate><source url="https://www.farm.example">Farm Daily</source></item>
+  <item><title>MrBeast opens a theme park in Kansas - Small Blog</title><link>https://news.google.com/rss/articles/CBMi2</link><guid isPermaLink="false">CBMi2</guid><pubDate>Mon, 07 Sep 2026 09:30:00 GMT</pubDate><source url="https://smallblog.example">Small Blog</source></item>
+  <item><title>MrBeast opens theme park in Kansas, first of its kind - Billboard</title><link>https://news.google.com/rss/articles/CBMi3</link><guid isPermaLink="false">CBMi3</guid><pubDate>Mon, 07 Sep 2026 10:00:00 GMT</pubDate><source url="https://www.billboard.com">Billboard</source></item>
+  <item><title>MrBeast sued over sweepstakes - Complex</title><link>https://news.google.com/rss/articles/CBMi4</link><guid isPermaLink="false">CBMi4</guid><pubDate>Mon, 07 Sep 2026 11:00:00 GMT</pubDate><source url="https://www.complex.com">Complex</source></item>
+</channel></rss>`;
+
+    it("resolves the publisher from the feed's source URL, never from the Google News link, tiers each item, drops the blocked scraper, collapses the copies into the tier-1 item and counts distinct stories for the volume metric", async () => {
+      const rss = makeSource({ id: "src-rss", name: "rss", tier: 3, is_active: true, config: { max_items: 30, volume_window_hours: 24 } });
+      const store = createMemoryIngestStore({
+        sources: [rss],
+        mappings: { "src-rss": [{ person, externalIdentifier: "https://news.google.com/rss/search?q=%22MrBeast%22" }] },
+        publisherDomains: [
+          { domain: "billboard.com", status: "allowed", tier: 1 },
+          { domain: "complex.com", status: "allowed", tier: 2 },
+          { domain: "farm.example", status: "blocked", tier: null },
+        ],
+      });
+      const fetch = fakeFetchRoutes([{ match: "news.google.com/rss/search", body: GOOGLE_NEWS }]);
+      const lines: IngestLogLine[] = [];
+      const { resetFeedCache } = await import("@/lib/connectors/rss");
+      resetFeedCache();
+
+      const summary = await runIngestion({ store, now: NOW, fetch, force: true, log: (line) => lines.push(line) });
+
+      expect(summary.sourcesRun).toEqual([{ name: "rss", people: 1, signalsCreated: 2, eventSignals: 2, metricSignals: 0, snapshotsRecorded: 1, observations: 1, errors: 0, blockedDropped: 1, duplicatesCollapsed: 1 }]);
+      expect(store.signals.map((s) => [s.headline, s.tier, s.rawPayload.publisher_domain, s.rawPayload.publisher_domain_from, s.rawPayload.publisher_status])).toEqual([
+        ["MrBeast opens theme park in Kansas, first of its kind", 1, "billboard.com", "source", "known"],
+        ["MrBeast sued over sweepstakes", 2, "complex.com", "source", "known"],
+      ]);
+      expect(JSON.stringify(store.signals)).not.toContain("news.google.com\"");
+      expect(store.signals.every((s) => s.rawPayload.link === `https://news.google.com/rss/articles/${s.rawPayload.guid}`)).toBe(true);
+      // The volume metric counts the two distinct, non-blocked stories, not the four items.
+      expect(store.snapshots).toEqual([{ personId: person.id, dataSourceId: "src-rss", metricKey: "news_volume_24h", value: 2, recordedAt: NOW }]);
+      expect(lines.find((l) => l.event === "drop")).toMatchObject({ reason: "blocked_domain", domain: "farm.example", headline: "MrBeast Opens a Theme Park in Kansas" });
+      expect(lines.find((l) => l.event === "collapse")).toMatchObject({ headline: "MrBeast opens a theme park in Kansas", publisherDomain: "smallblog.example", tier: 5, into: { kind: "run", publisherDomain: "billboard.com" } });
+    });
   });
 
   describe("with the YouTube connector", () => {
@@ -292,7 +458,7 @@ describe("runIngestion", () => {
 
       const summary = await runIngestion({ store, now: NOW, fetch, force: true, log: quiet });
 
-      expect(summary.sourcesRun).toEqual([{ name: "youtube", people: 1, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 5, observations: 5, errors: 0 }]);
+      expect(summary.sourcesRun).toEqual([{ name: "youtube", people: 1, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 5, observations: 5, errors: 0, blockedDropped: 0, duplicatesCollapsed: 0 }]);
       expect(store.snapshots.map((s) => [s.metricKey, s.value])).toEqual([
         ["subscriber_count", 516_000_000],
         ["view_count", 90_000_000_000],

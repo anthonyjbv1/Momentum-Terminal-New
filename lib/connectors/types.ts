@@ -1,3 +1,4 @@
+import type { PublisherPolicy } from "@/lib/ingest/publishers";
 import type { DataSource, Person } from "@/types";
 import type { Json } from "@/types/database";
 
@@ -20,6 +21,22 @@ export interface RawSignal {
    * id). Re-running ingestion never stores the same key twice.
    */
   dedupeKey?: string;
+  /**
+   * The publisher's domain, for sources that name one per item (a news
+   * search feed). The runner resolves the item's credibility tier from it
+   * through the publisher allowlist: a blocked domain is dropped before
+   * scoring, an unknown one accepted at the floor tier. Null = the item named
+   * no publisher (treated as unknown). Leave undefined when the data source's
+   * own tier applies, as it does for every API connector.
+   */
+  publisherDomain?: string | null;
+  /**
+   * The text that identifies the story, for story-level deduplication: the
+   * headline as the outlet wrote it, without the outlet's name. Items that
+   * carry it are collapsed with the same story's other copies; leave it
+   * undefined for events that are not syndicated news (comments, milestones).
+   */
+  story?: string;
 }
 
 /** A stored metric value. */
@@ -67,6 +84,12 @@ export interface ConnectorContext {
   now: Date;
   /** fetch implementation with a timeout applied. Use it instead of global fetch so it can be mocked. */
   fetch: typeof fetch;
+  /**
+   * The publisher allowlist for the run, for connectors that count or weigh
+   * items by publisher (a news feed's volume metric must not count blocked
+   * domains). The runner supplies it; absent means every domain is unknown.
+   */
+  publishers?: PublisherPolicy;
 }
 
 /**

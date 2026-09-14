@@ -1,5 +1,7 @@
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
+import { publisherDomainOf, type PublisherPolicy } from "@/lib/ingest/publishers";
+import { collapseStories, personNames, storyTokens, stripOutletSuffix } from "@/lib/ingest/stories";
 import type { Json } from "@/types/database";
 
 import { ConnectorError, type ConnectorContext, type DataConnector, type MetricReading, type RawSignal } from "./types";
@@ -15,13 +17,21 @@ import { ConnectorError, type ConnectorContext, type DataConnector, type MetricR
  * feed from client code.
  *
  * Two kinds of evidence from one fetch:
- *   events    one signal per new item: the headline as the outlet wrote it,
- *             deduplicated by guid or link, dated by pubDate; the sentiment
- *             scorer reads the text
- *   metric    news_volume_24h, how many items the feed carries from the
- *             trailing volume window, a raw level the runner normalises
- *             against the person's own trailing weeks; the viral-moment
- *             frequency is derived from its spikes (config.derived)
+ *   events    one signal per new item: the headline as the outlet wrote it
+ *             (the outlet suffix Google News appends removed), keyed by guid
+ *             or link, dated by pubDate; the sentiment scorer reads the
+ *             text. Each item names its PUBLISHER DOMAIN, from the feed's
+ *             source element (Google News wraps every link in its own
+ *             redirect and names the publisher in `<source url=...>`) or
+ *             else the link's host, and its STORY text, so the runner can
+ *             resolve a credibility tier per item through the publisher
+ *             allowlist and collapse syndicated copies of one story into one
+ *             signal. The connector itself weighs nothing.
+ *   metric    news_volume_24h, how many DISTINCT, non-blocked stories the
+ *             feed carries from the trailing volume window, a raw level the
+ *             runner normalises against the person's own trailing weeks; the
+ *             viral-moment frequency is derived from its spikes
+ *             (config.derived)
  */
 
 export const RSS_SOURCE_NAME = "rss";
@@ -57,11 +67,14 @@ export function feedUrlFor(identifier: string): string {
 }
 
 export interface FeedItem {
+  /** The title as the feed carries it (Google News: "Headline - Outlet"). */
   title: string;
   link: string | null;
   guid: string | null;
   publishedAt: Date | null;
   outlet: string | null;
+  /** The publisher's site as the feed names it (`<source url="...">` in Google News RSS, the source link in Atom), or null. */
+  sourceUrl: string | null;
 }
 
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_", textNodeName: "#text", cdataPropName: "#cdata", trimValues: true });
@@ -75,6 +88,13 @@ function text(value: unknown): string | null {
     return text(record["#cdata"]) ?? text(record["#text"]) ?? text(record["@_href"]) ?? null;
   }
   return null;
+}
+
+/** An element's attribute, when the element was parsed as an object carrying it. */
+function attribute(value: unknown, name: string): string | null {
+  if (value === null || typeof value !== "object") return null;
+  const raw = (value as Record<string, unknown>)[`@_${name}`];
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
 }
 
 function asArray<T>(value: T | T[] | undefined): T[] {
@@ -116,6 +136,7 @@ export function parseFeed(xml: string): { title: string | null; items: FeedItem[
           guid: text(item.guid),
           publishedAt: date(item.pubDate) ?? date(item["dc:date"]),
           outlet: text(item.source) ?? channelTitle,
+          sourceUrl: attribute(item.source, "url"),
         },
       ];
     });
@@ -130,13 +151,17 @@ export function parseFeed(xml: string): { title: string | null; items: FeedItem[
       if (!title) return [];
       const links = asArray(entry.link as Record<string, unknown> | Record<string, unknown>[] | undefined);
       const alternate = links.find((l) => !l["@_rel"] || l["@_rel"] === "alternate") ?? links[0];
+      const source = entry.source as Record<string, unknown> | undefined;
+      const sourceLinks = asArray(source?.link as Record<string, unknown> | Record<string, unknown>[] | undefined);
+      const sourceLink = sourceLinks.find((l) => !l["@_rel"] || l["@_rel"] === "alternate") ?? sourceLinks[0];
       return [
         {
           title,
           link: alternate ? text(alternate) : null,
           guid: text(entry.id),
           publishedAt: date(entry.published) ?? date(entry.updated),
-          outlet: text((entry.source as Record<string, unknown> | undefined)?.title) ?? feedTitle,
+          outlet: text(source?.title) ?? feedTitle,
+          sourceUrl: sourceLink ? text(sourceLink) : null,
         },
       ];
     });
@@ -149,25 +174,58 @@ export function parseFeed(xml: string): { title: string | null; items: FeedItem[
 export function articleSignal(item: FeedItem, now: Date): RawSignal | null {
   const key = item.guid ?? item.link;
   if (!key) return null;
+  const headline = stripOutletSuffix(item.title, item.outlet);
+  const publisher = publisherDomainOf(item);
   return {
-    headline: item.title,
+    headline,
+    story: headline,
+    publisherDomain: publisher.domain,
     occurredAt: item.publishedAt ?? now,
     dedupeKey: `rss:${key}`,
     rawPayload: {
       kind: "article",
       source: RSS_SOURCE_NAME,
       outlet: item.outlet,
+      title: item.title,
       link: item.link,
       guid: item.guid,
       publishedAt: item.publishedAt ? item.publishedAt.toISOString() : null,
+      source_url: item.sourceUrl,
+      publisher_domain: publisher.domain,
+      publisher_domain_from: publisher.from,
     },
   };
 }
 
-/** Items published inside the trailing window. Undated items are not counted. */
-export function newsVolume(items: FeedItem[], now: Date, windowHours: number): number {
+export interface NewsVolumeOptions {
+  /** The run's publisher allowlist: blocked domains are not counted. Absent = nothing is blocked. */
+  publishers?: PublisherPolicy;
+  /** The person's names, removed before stories are compared. */
+  personNames?: string[];
+}
+
+/**
+ * Distinct stories published inside the trailing window: dated items only,
+ * blocked publishers excluded, syndicated copies of one story counted once
+ * (the same rule the runner applies before a signal is stored). A metric
+ * that counted URLs would teach the baseline that a wire pickup is news.
+ */
+export function newsVolume(items: FeedItem[], now: Date, windowHours: number, options: NewsVolumeOptions = {}): number {
   const since = now.getTime() - windowHours * 3_600_000;
-  return items.filter((item) => item.publishedAt !== null && item.publishedAt.getTime() >= since && item.publishedAt.getTime() <= now.getTime() + 60_000).length;
+  const inWindow = items.filter((item) => item.publishedAt !== null && item.publishedAt.getTime() >= since && item.publishedAt.getTime() <= now.getTime() + 60_000);
+  const resolved = inWindow
+    .map((item) => ({ item, publisher: options.publishers?.resolve(publisherDomainOf(item).domain) ?? null }))
+    .filter(({ publisher }) => publisher === null || publisher.status !== "blocked");
+  const { kept } = collapseStories(
+    resolved,
+    ({ item, publisher }) => ({
+      tokens: storyTokens(item.title, { personNames: options.personNames, outlet: item.outlet }),
+      tier: publisher && publisher.status !== "blocked" ? publisher.tier : 5,
+      occurredAt: item.publishedAt as Date,
+    }),
+    [],
+  );
+  return kept.length;
 }
 
 // One fetch serves both fetchForPerson and fetchMetrics within a run: the
@@ -214,6 +272,7 @@ export const rssConnector: DataConnector = {
     if (!identifier.trim()) throw new ConnectorError(`No feed configured for ${person.slug}`);
     const config = readRssConfig(context.config);
     const feed = await loadFeed(identifier, context);
-    return [{ metricKey: "news_volume_24h", value: newsVolume(feed.items, context.now, config.volume_window_hours) }];
+    const value = newsVolume(feed.items, context.now, config.volume_window_hours, { publishers: context.publishers, personNames: personNames(person) });
+    return [{ metricKey: "news_volume_24h", value }];
   },
 };

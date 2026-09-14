@@ -3,6 +3,7 @@ import type { DataSource, Person, TypedSupabaseClient } from "@/types";
 import type { Json } from "@/types/database";
 
 import type { MetricDeltaKind, MetricOutcome } from "./metrics";
+import type { PublisherDomainRow } from "./publishers";
 
 /**
  * Persistence boundary for the ingestion runner. The Supabase implementation
@@ -26,12 +27,33 @@ export interface SignalRow {
   rawPayload: Record<string, unknown>;
   occurredAt: Date;
   dedupeKey?: string;
+  /** The credibility tier resolved for this item (RSS: from the publisher domain). Null or absent = the data source's tier applies. */
+  tier?: number | null;
 }
 
 /** A signal as stored: its id, and the dedupe key it was stored under. */
 export interface StoredSignal {
   id: string;
   dedupeKey: string | null;
+}
+
+/** An event signal already stored for a person and source, as story deduplication sees it. */
+export interface StoredSignalStory {
+  id: string;
+  dedupeKey: string | null;
+  headline: string;
+  /** raw_payload.outlet, when the connector recorded one (the outlet suffix to strip before comparing). */
+  outlet: string | null;
+  tier: number | null;
+  processed: boolean;
+  occurredAt: Date;
+}
+
+/** A better publisher's copy of a story the Engine has not read yet, written over the stored signal. */
+export interface SignalUpgrade {
+  tier: number;
+  headline: string;
+  rawPayload: Record<string, unknown>;
 }
 
 export interface SnapshotRow {
@@ -60,6 +82,10 @@ export interface RunResult {
   snapshotsRecorded: number;
   observations: number;
   errors: number;
+  /** Items dropped before scoring because their publisher domain is blocked. */
+  blockedDropped: number;
+  /** Items collapsed into a story already kept, in the run or inside the lookback. */
+  duplicatesCollapsed: number;
 }
 
 export type PollStatus = "ok" | "error" | "skipped";
@@ -75,6 +101,8 @@ export interface PollRow {
   signalsCreated: number;
   snapshotsRecorded: number;
   observations: number;
+  blockedDropped: number;
+  duplicatesCollapsed: number;
   startedAt: Date;
   finishedAt: Date;
 }
@@ -113,6 +141,12 @@ export interface IngestStore {
   listSnapshots(personId: string, dataSourceId: string, metricKey: string, since: Date): Promise<SnapshotValue[]>;
   /** Insert signals (processed = false). Rows whose dedupe key already exists are skipped. Returns the rows stored. */
   insertSignals(rows: SignalRow[]): Promise<StoredSignal[]>;
+  /** The publisher allowlist: every publisher_domains row. */
+  listPublisherDomains(): Promise<PublisherDomainRow[]>;
+  /** Event signals (not metric signals) of one person and source that occurred at or after `since`, oldest first, for story deduplication. */
+  listRecentSignals(personId: string, dataSourceId: string, since: Date): Promise<StoredSignalStory[]>;
+  /** Rewrites a stored, still unprocessed signal to a better publisher's copy of the same story. Returns whether a row changed (false once the Engine has read it). */
+  upgradeSignal(id: string, upgrade: SignalUpgrade): Promise<boolean>;
   /** Insert snapshots. Exact duplicates (same person/source/metric/time) are skipped. Returns the number stored. */
   insertSnapshots(rows: SnapshotRow[]): Promise<number>;
   /** Opens an ingest_runs row and returns its id. */
@@ -194,6 +228,7 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
             raw_payload: row.rawPayload as Json,
             occurred_at: row.occurredAt.toISOString(),
             dedupe_key: row.dedupeKey ?? null,
+            tier: row.tier ?? null,
             processed: false,
           })),
           { onConflict: "data_source_id,dedupe_key", ignoreDuplicates: true },
@@ -201,6 +236,50 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
         .select("id, dedupe_key");
       if (error) throw new Error(`Failed to insert signals: ${error.message}`);
       return data.map((row) => ({ id: row.id, dedupeKey: row.dedupe_key }));
+    },
+
+    async listPublisherDomains() {
+      const { data, error } = await client.from("publisher_domains").select("domain, status, tier").order("domain");
+      if (error) throw new Error(`Failed to load the publisher allowlist: ${error.message}`);
+      return data.map((row) => ({ domain: row.domain, status: row.status === "blocked" ? "blocked" : "allowed", tier: row.tier }));
+    },
+
+    async listRecentSignals(personId, dataSourceId, since) {
+      const { data, error } = await client
+        .from("signals")
+        .select("id, dedupe_key, headline, raw_payload, tier, processed, occurred_at")
+        .eq("person_id", personId)
+        .eq("data_source_id", dataSourceId)
+        .gte("occurred_at", since.toISOString())
+        .order("occurred_at", { ascending: true })
+        .order("id", { ascending: true })
+        .limit(2_000);
+      if (error) throw new Error(`Failed to load recent signals: ${error.message}`);
+      return data
+        .filter((row) => !(row.raw_payload && typeof row.raw_payload === "object" && !Array.isArray(row.raw_payload) && row.raw_payload.kind === "metric"))
+        .map((row) => {
+          const payload = row.raw_payload && typeof row.raw_payload === "object" && !Array.isArray(row.raw_payload) ? row.raw_payload : null;
+          return {
+            id: row.id,
+            dedupeKey: row.dedupe_key,
+            headline: row.headline,
+            outlet: payload && typeof payload.outlet === "string" ? payload.outlet : null,
+            tier: row.tier,
+            processed: row.processed,
+            occurredAt: new Date(row.occurred_at),
+          };
+        });
+    },
+
+    async upgradeSignal(id, upgrade) {
+      const { data, error } = await client
+        .from("signals")
+        .update({ tier: upgrade.tier, headline: upgrade.headline, raw_payload: upgrade.rawPayload as Json })
+        .eq("id", id)
+        .eq("processed", false)
+        .select("id");
+      if (error) throw new Error(`Failed to upgrade signal ${id}: ${error.message}`);
+      return data.length > 0;
     },
 
     async insertSnapshots(rows) {
@@ -248,6 +327,8 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
           snapshots_recorded: result.snapshotsRecorded,
           observations: result.observations,
           errors: result.errors,
+          blocked_dropped: result.blockedDropped,
+          duplicates_collapsed: result.duplicatesCollapsed,
         })
         .eq("id", runId);
       if (error) throw new Error(`Failed to close the ingest run: ${error.message}`);
@@ -264,6 +345,8 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
         signals_created: poll.signalsCreated,
         snapshots_recorded: poll.snapshotsRecorded,
         observations: poll.observations,
+        blocked_dropped: poll.blockedDropped,
+        duplicates_collapsed: poll.duplicatesCollapsed,
         started_at: poll.startedAt.toISOString(),
         finished_at: poll.finishedAt.toISOString(),
       });
@@ -328,14 +411,17 @@ export interface MemoryIngestStoreSeed {
   snapshots?: SnapshotRow[];
   /** Pre-existing polls, e.g. to test the poll interval. */
   polls?: PollRow[];
+  /** The publisher allowlist. Empty = every domain unknown, nothing blocked. */
+  publisherDomains?: PublisherDomainRow[];
 }
 
 export interface MemoryIngestStore extends IngestStore {
-  readonly signals: Array<SignalRow & { id: string }>;
+  readonly signals: Array<SignalRow & { id: string; tier: number | null; processed: boolean }>;
   readonly snapshots: SnapshotRow[];
   readonly runs: Array<RunMeta & { id: string; result: RunResult | null }>;
   readonly polls: PollRow[];
   readonly observations: ObservationRow[];
+  readonly publisherDomains: PublisherDomainRow[];
 }
 
 export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): MemoryIngestStore {
@@ -346,6 +432,7 @@ export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): Memor
   const runs: MemoryIngestStore["runs"] = [];
   const polls: PollRow[] = [...(seed.polls ?? [])];
   const observations: ObservationRow[] = [];
+  const publisherDomains: PublisherDomainRow[] = [...(seed.publisherDomains ?? [])];
   let nextId = 1;
   const id = (prefix: string) => `${prefix}-${String(nextId++).padStart(4, "0")}`;
 
@@ -358,6 +445,7 @@ export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): Memor
     runs,
     polls,
     observations,
+    publisherDomains,
 
     async listActiveSources() {
       return sources.filter((source) => source.is_active).sort((a, b) => a.name.localeCompare(b.name));
@@ -386,11 +474,31 @@ export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): Memor
           row.dedupeKey !== undefined &&
           signals.some((s) => s.dataSourceId === row.dataSourceId && s.dedupeKey === row.dedupeKey);
         if (duplicate) continue;
-        const signal = { ...row, id: id("sig") };
+        const signal = { ...row, id: id("sig"), tier: row.tier ?? null, processed: false };
         signals.push(signal);
         stored.push({ id: signal.id, dedupeKey: row.dedupeKey ?? null });
       }
       return stored;
+    },
+
+    async listPublisherDomains() {
+      return [...publisherDomains];
+    },
+
+    async listRecentSignals(personId, dataSourceId, since) {
+      return signals
+        .filter((s) => s.personId === personId && s.dataSourceId === dataSourceId && s.occurredAt.getTime() >= since.getTime() && s.rawPayload.kind !== "metric")
+        .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime() || a.id.localeCompare(b.id))
+        .map((s) => ({ id: s.id, dedupeKey: s.dedupeKey ?? null, headline: s.headline, outlet: typeof s.rawPayload.outlet === "string" ? s.rawPayload.outlet : null, tier: s.tier, processed: s.processed, occurredAt: s.occurredAt }));
+    },
+
+    async upgradeSignal(signalId, upgrade) {
+      const signal = signals.find((s) => s.id === signalId && !s.processed);
+      if (!signal) return false;
+      signal.tier = upgrade.tier;
+      signal.headline = upgrade.headline;
+      signal.rawPayload = upgrade.rawPayload;
+      return true;
     },
 
     async insertSnapshots(rows) {
