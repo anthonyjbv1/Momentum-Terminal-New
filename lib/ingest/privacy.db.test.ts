@@ -176,11 +176,21 @@ describe("the signals table", () => {
 
 describe("the publisher allowlist", () => {
   it("is seeded small: wires, papers of record and the two subjects' trade press, one blocked scraper, tiers 1 to 3 only", async () => {
-    const rows = await database.rows<{ domain: string; status: string; tier: number | null }>("select domain, status, tier from public.publisher_domains order by domain");
+    const rows = await database.rows<{ domain: string; status: string; tier: number | null; note: string | null }>("select domain, status, tier, note from public.publisher_domains order by domain");
     expect(rows.length).toBeGreaterThanOrEqual(40);
-    expect(rows.length).toBeLessThanOrEqual(60);
+    expect(rows.length).toBeLessThanOrEqual(90);
     expect(rows.filter((r) => r.status === "blocked").map((r) => r.domain)).toEqual(["defensorianna.gob.ar"]);
-    for (const row of rows.filter((r) => r.status === "allowed")) expect([1, 2, 3], row.domain).toContain(row.tier);
+    for (const row of rows.filter((r) => r.status === "allowed")) expect([1, 2, 3, 4, 5], row.domain).toContain(row.tier);
+    // Held at the floor by decision, not by omission: a subject's own promotional channel is not coverage of them.
+    for (const domain of ["amgen.com", "blog.google"]) {
+      const held = rows.find((r) => r.domain === domain);
+      expect(held, domain).toMatchObject({ status: "allowed", tier: 5 });
+      expect(held?.note ?? "", domain).toMatch(/^FLOOR BY DECISION:/);
+    }
+    // Promoted from what the first runs surfaced, at the tiers decided for them.
+    expect(rows.find((r) => r.domain === "morningbrew.com")?.tier).toBe(2);
+    expect(rows.find((r) => r.domain === "kctv5.com")?.tier).toBe(3);
+    expect(rows.find((r) => r.domain === "police1.com")?.tier).toBe(4);
     for (const domain of ["billboard.com", "rollingstone.com", "theneedledrop.com", "complex.com", "theverge.com", "tubefilter.com", "marketingdive.com"]) {
       expect(rows.map((r) => r.domain), domain).toContain(domain);
     }
@@ -208,6 +218,8 @@ describe("the registry", () => {
     const sources = await database.rows<{ name: string; tier: number; is_active: boolean; config: Record<string, unknown> | null }>(
       "select name, tier, is_active, config from public.data_sources where name in ('youtube', 'youtube_comments', 'rss', 'spotify') order by name",
     );
+    // youtube_comments now declares a metric of its own (comment_volume), so it is no longer metric-free.
+    expect((sources.find((s) => s.name === "youtube_comments")?.config as { metrics: Record<string, unknown> }).metrics).toHaveProperty("comment_volume");
     expect(sources.map((s) => [s.name, s.tier, s.is_active])).toEqual([
       ["rss", 3, true],
       ["spotify", 2, true],
@@ -215,7 +227,6 @@ describe("the registry", () => {
       ["youtube_comments", 4, true],
     ]);
     for (const source of sources) {
-      if (source.name === "youtube_comments") continue;
       const metrics = (source.config as { metrics: Record<string, Record<string, unknown>> }).metrics;
       for (const [key, declaration] of Object.entries(metrics)) {
         expect([1, -1], `${source.name}.${key} polarity`).toContain(declaration.polarity);

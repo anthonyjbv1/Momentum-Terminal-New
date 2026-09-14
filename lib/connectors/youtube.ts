@@ -177,19 +177,35 @@ export async function fetchRecentUploads(playlistId: string, max: number, apiKey
 }
 
 interface YouTubeVideosResponse {
-  items?: Array<{ id: string; statistics?: { viewCount?: string } }>;
+  items?: Array<{ id: string; statistics?: { viewCount?: string; commentCount?: string } }>;
+}
+
+/** One videos.list call (up to 50 ids), reading one statistic per video. */
+async function fetchVideoStatistic(videoIds: string[], statistic: "viewCount" | "commentCount", apiKey: string, fetchImpl: typeof fetch): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (videoIds.length === 0) return counts;
+  const body = await youtubeGet<YouTubeVideosResponse>("videos", { part: "statistics", id: videoIds.slice(0, 50).join(",") }, apiKey, fetchImpl);
+  for (const item of body.items ?? []) {
+    const count = parseCount(item.statistics?.[statistic]);
+    if (count !== null) counts.set(item.id, count);
+  }
+  return counts;
 }
 
 /** View counts for a set of video IDs (one call, up to 50). */
-export async function fetchVideoViews(videoIds: string[], apiKey: string, fetchImpl: typeof fetch): Promise<Map<string, number>> {
-  const views = new Map<string, number>();
-  if (videoIds.length === 0) return views;
-  const body = await youtubeGet<YouTubeVideosResponse>("videos", { part: "statistics", id: videoIds.slice(0, 50).join(",") }, apiKey, fetchImpl);
-  for (const item of body.items ?? []) {
-    const count = parseCount(item.statistics?.viewCount);
-    if (count !== null) views.set(item.id, count);
-  }
-  return views;
+export function fetchVideoViews(videoIds: string[], apiKey: string, fetchImpl: typeof fetch): Promise<Map<string, number>> {
+  return fetchVideoStatistic(videoIds, "viewCount", apiKey, fetchImpl);
+}
+
+/**
+ * Total comment counts for a set of video IDs (one call, up to 50).
+ *
+ * The real count on each video, not how many comments were sampled: a sample
+ * is capped by configuration and so could never show a surge, and how MUCH an
+ * audience is reacting is a different measurement from which way it leans.
+ */
+export function fetchVideoCommentCounts(videoIds: string[], apiKey: string, fetchImpl: typeof fetch): Promise<Map<string, number>> {
+  return fetchVideoStatistic(videoIds, "commentCount", apiKey, fetchImpl);
 }
 
 interface YouTubeSearchResponse {

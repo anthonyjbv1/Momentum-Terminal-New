@@ -1,3 +1,4 @@
+import { COMMENT_DIGEST_KIND, COMMENT_LEAN_MARGIN } from "@/lib/ingest/comments";
 import type { Json } from "@/types/database";
 
 import type { SentimentInput, SentimentResult, SentimentScorer } from "./types";
@@ -137,6 +138,29 @@ export function applyPayloadHints(result: SentimentResult, payload: Json | null)
   // scorer. Keywords must never assign it a direction.
   if (kind === "metric") {
     return { label: "neutral", confidence: 0, direction: 0, rationale: "metric signal: scored by the metric scorer, never by keywords" };
+  }
+
+  // A comment digest carries a distribution, not an opinion: the direction is
+  // whichever side of the sample won, and the confidence is its margin, the
+  // way a metric signal's comes from sigma. Keywords never judge the digest's
+  // headline, which only restates the lean already counted.
+  if (kind === COMMENT_DIGEST_KIND) {
+    const sampled = payloadField(payload, "sampled");
+    const positive = payloadField(payload, "positive");
+    const negative = payloadField(payload, "negative");
+    if (typeof sampled !== "number" || sampled <= 0 || typeof positive !== "number" || typeof negative !== "number") {
+      return { label: "neutral", confidence: 0, direction: 0, rationale: "comment digest without a distribution" };
+    }
+    const margin = (positive - negative) / sampled;
+    if (Math.abs(margin) <= COMMENT_LEAN_MARGIN) {
+      return { label: "neutral", confidence: 0, direction: 0, rationale: `comment digest: ${positive} positive, ${negative} negative of ${sampled} sampled, mixed` };
+    }
+    return {
+      label: margin > 0 ? "positive" : "negative",
+      direction: margin > 0 ? 1 : -1,
+      confidence: Math.min(1, Math.abs(margin)),
+      rationale: `comment digest: ${positive} positive, ${negative} negative of ${sampled} sampled`,
+    };
   }
 
   if (kind === "milestone" && result.direction >= 0) {

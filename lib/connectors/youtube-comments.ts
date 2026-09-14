@@ -1,22 +1,35 @@
 import { getYouTubeApiKeyOrNull } from "@/lib/env";
+import { scoreHeadline } from "@/lib/engine/sentiment/rules";
+import { commentDigestSignal, type CommentLexicon, type SampledComment } from "@/lib/ingest/comments";
 import type { Json } from "@/types/database";
 
-import { ConnectorError, type DataConnector, type RawSignal } from "./types";
-import { fetchRecentUploads, fetchYouTubeChannelStats, youtubeGet } from "./youtube";
+import { ConnectorError, type DataConnector, type MetricReading, type RawSignal } from "./types";
+import { fetchRecentUploads, fetchVideoCommentCounts, fetchYouTubeChannelStats, youtubeGet } from "./youtube";
 
 /**
- * YouTube comments connector — EVENTS with real text, from the Data API v3.
+ * YouTube comments connector — audience reaction, from the Data API v3.
  *
  * Its own source (youtube_comments) rather than part of youtube, because it
  * is a different kind of evidence with a different tier: viewer comments are
  * unofficial, noisy text, weighed low; channel statistics are an official
  * count, weighed higher. Same channel ID as external_identifier, same key.
  *
- * Per poll: the channel's newest `videos` uploads, then the top
- * `max_comments_per_video` comment threads of each (commentThreads.list,
- * order=relevance, plain text). One signal per comment, deduplicated by
- * comment id, so a re-poll only stores what is new. Like counts and reply
- * counts are deliberately not read: a comment is a sentence, not a number.
+ * Two kinds of evidence from one poll, measuring different things:
+ *
+ *   events   ONE digest per video (lib/ingest/comments.ts): the newest
+ *            `videos` uploads, the top `max_comments_per_video` comment
+ *            threads of each, aggregated into a single signal carrying the
+ *            distribution and the sample size. Never one signal per comment:
+ *            a comment is one viewer's reaction to one video, and a force
+ *            built from thousands of them measures editing, not momentum.
+ *   metric   comment_volume, the REAL total comment count across those
+ *            uploads (videos.list statistics, not the capped sample), a raw
+ *            level the runner normalises against the person's own trailing
+ *            baseline. A surge in how much an audience is reacting says
+ *            something happened regardless of what was said.
+ *
+ * Like counts and reply counts are deliberately not read: a comment is a
+ * sentence, not a number.
  */
 
 export const YOUTUBE_COMMENTS_SOURCE_NAME = "youtube_comments";
@@ -24,12 +37,14 @@ export const YOUTUBE_COMMENTS_SOURCE_NAME = "youtube_comments";
 export interface YouTubeCommentsConfig {
   /** Newest uploads to read comments from. Default 3, at most 10. */
   videos: number;
-  /** Comment threads per video. Default 10, at most 50. */
+  /** Comment threads sampled per video. Default 10, at most 50. */
   max_comments_per_video: number;
 }
 
 const DEFAULT_CONFIG: YouTubeCommentsConfig = { videos: 3, max_comments_per_video: 10 };
-const MAX_HEADLINE_TEXT = 160;
+
+/** The Engine's own keyword lexicon, counting each comment's direction. Never a variant of it. */
+const COMMENT_LEXICON: CommentLexicon = (text) => scoreHeadline(text).direction;
 
 export function readYouTubeCommentsConfig(config: Record<string, Json | undefined>): YouTubeCommentsConfig {
   const integer = (value: Json | undefined, fallback: number, max: number) =>
@@ -50,31 +65,45 @@ interface CommentThreadsResponse {
   }>;
 }
 
-/** Collapses whitespace and trims a comment for a one-line headline. */
-export function excerpt(text: string, max = MAX_HEADLINE_TEXT): string {
-  const collapsed = text.replace(/\s+/g, " ").trim();
-  if (collapsed.length <= max) return collapsed;
-  return `${collapsed.slice(0, max - 1).trimEnd()}…`;
+// One upload lookup serves both fetchForPerson and fetchMetrics within a run,
+// so the digests and the volume metric cost one channel call between them.
+const UPLOADS_CACHE_TTL_MS = 10 * 60_000;
+const uploadsCache = new Map<string, { at: number; uploads: Awaited<ReturnType<typeof fetchRecentUploads>> }>();
+
+/** For tests. */
+export function resetUploadsCache(): void {
+  uploadsCache.clear();
 }
 
-export function commentSignal(input: { personName: string; videoId: string; videoTitle: string; commentId: string; text: string; publishedAt: string | null; now: Date }): RawSignal | null {
-  const text = excerpt(input.text);
-  if (!text) return null;
-  const publishedAt = input.publishedAt ? new Date(input.publishedAt) : null;
-  return {
-    headline: `A viewer on ${input.personName}'s "${excerpt(input.videoTitle, 80)}" writes: "${text}"`,
-    occurredAt: publishedAt && !Number.isNaN(publishedAt.getTime()) ? publishedAt : input.now,
-    dedupeKey: `youtube_comment:${input.commentId}`,
-    rawPayload: {
-      kind: "comment",
-      source: YOUTUBE_COMMENTS_SOURCE_NAME,
-      videoId: input.videoId,
-      videoTitle: input.videoTitle,
-      commentId: input.commentId,
-      publishedAt: input.publishedAt,
-      text,
-    },
-  };
+/** The newest uploads of a channel, or an empty list when it has none. */
+async function recentUploads(channelId: string, count: number, apiKey: string, context: { fetch: typeof fetch; now: Date }) {
+  const key = `${channelId}|${count}|${context.now.toISOString()}`;
+  const cached = uploadsCache.get(key);
+  if (cached && Date.now() - cached.at < UPLOADS_CACHE_TTL_MS) return cached.uploads;
+  for (const [k, entry] of uploadsCache) if (Date.now() - entry.at >= UPLOADS_CACHE_TTL_MS) uploadsCache.delete(k);
+
+  const channel = await fetchYouTubeChannelStats(channelId, apiKey, context.fetch);
+  const uploads = channel.uploadsPlaylistId ? await fetchRecentUploads(channel.uploadsPlaylistId, count, apiKey, context.fetch) : [];
+  uploadsCache.set(key, { at: Date.now(), uploads });
+  return uploads;
+}
+
+/** The sampled top-level comments of one video. */
+export async function fetchVideoComments(videoId: string, max: number, apiKey: string, fetchImpl: typeof fetch): Promise<SampledComment[]> {
+  const body = await youtubeGet<CommentThreadsResponse>(
+    "commentThreads",
+    { part: "snippet", videoId, order: "relevance", textFormat: "plainText", maxResults: String(max) },
+    apiKey,
+    fetchImpl,
+  );
+  const comments: SampledComment[] = [];
+  for (const thread of body.items ?? []) {
+    const top = thread.snippet?.topLevelComment;
+    const text = top?.snippet?.textOriginal ?? top?.snippet?.textDisplay ?? "";
+    if (!text.trim()) continue;
+    comments.push({ id: top?.id ?? thread.id, text, publishedAt: top?.snippet?.publishedAt ?? null });
+  }
+  return comments;
 }
 
 export const youtubeCommentsConnector: DataConnector = {
@@ -96,33 +125,43 @@ export const youtubeCommentsConnector: DataConnector = {
     const config = readYouTubeCommentsConfig(context.config);
     if (config.videos === 0 || config.max_comments_per_video === 0) return [];
 
-    const channel = await fetchYouTubeChannelStats(identifier, apiKey, context.fetch);
-    if (!channel.uploadsPlaylistId) return [];
-    const uploads = await fetchRecentUploads(channel.uploadsPlaylistId, config.videos, apiKey, context.fetch);
-
+    const uploads = await recentUploads(identifier, config.videos, apiKey, context);
     const signals: RawSignal[] = [];
     for (const upload of uploads) {
-      const body = await youtubeGet<CommentThreadsResponse>(
-        "commentThreads",
-        { part: "snippet", videoId: upload.videoId, order: "relevance", textFormat: "plainText", maxResults: String(config.max_comments_per_video) },
-        apiKey,
-        context.fetch,
-      );
-      for (const thread of body.items ?? []) {
-        const top = thread.snippet?.topLevelComment;
-        const text = top?.snippet?.textOriginal ?? top?.snippet?.textDisplay ?? "";
-        const signal = commentSignal({
-          personName: person.display_name,
-          videoId: upload.videoId,
-          videoTitle: upload.title,
-          commentId: top?.id ?? thread.id,
-          text,
-          publishedAt: top?.snippet?.publishedAt ?? null,
-          now: context.now,
-        });
-        if (signal) signals.push(signal);
-      }
+      const comments = await fetchVideoComments(upload.videoId, config.max_comments_per_video, apiKey, context.fetch);
+      const signal = commentDigestSignal({
+        sourceName: YOUTUBE_COMMENTS_SOURCE_NAME,
+        personName: person.display_name,
+        videoId: upload.videoId,
+        videoTitle: upload.title,
+        comments,
+        lexicon: COMMENT_LEXICON,
+        now: context.now,
+      });
+      if (signal) signals.push(signal);
     }
     return signals;
+  },
+
+  async fetchMetrics(person, channelId, context): Promise<MetricReading[]> {
+    const apiKey = getYouTubeApiKeyOrNull();
+    if (!apiKey) throw new ConnectorError("YOUTUBE_API_KEY is not set");
+    const identifier = channelId.trim();
+    if (!identifier) throw new ConnectorError(`No YouTube channel ID configured for ${person.slug}`);
+
+    const config = readYouTubeCommentsConfig(context.config);
+    if (config.videos === 0) return [];
+
+    const uploads = await recentUploads(identifier, config.videos, apiKey, context);
+    if (uploads.length === 0) return [];
+    const counts = await fetchVideoCommentCounts(
+      uploads.map((upload) => upload.videoId),
+      apiKey,
+      context.fetch,
+    );
+    if (counts.size === 0) return [];
+    let total = 0;
+    for (const count of counts.values()) total += count;
+    return [{ metricKey: "comment_volume", value: total }];
   },
 };

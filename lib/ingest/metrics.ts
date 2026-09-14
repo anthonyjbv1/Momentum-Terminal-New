@@ -81,6 +81,16 @@ export interface MetricConfigs {
   derived: DerivedMetricConfig[];
   /** Malformed entries, with the reason they were ignored. */
   problems: string[];
+  /**
+   * Metrics snapshotted only to feed a derived metric: the `from` of a
+   * `config.derived` entry, carrying no declaration of their own, so they are
+   * DELIBERATELY never scored. Keyed by metric, valued by the derived metric
+   * that consumes it, so an observation with no config reads as a declared
+   * input rather than an oversight — YouTube's `video_count` is the history
+   * `upload_rate` is computed from, and needs a week of it before the derived
+   * metric can say anything at all.
+   */
+  inputs: Record<string, string>;
 }
 
 const DEFAULT_THRESHOLD_STD_DEVS = 1.0;
@@ -224,7 +234,15 @@ export function readMetricConfigs(config: Record<string, Json | undefined>): Met
     }
   }
 
-  return { metrics, derived, problems };
+  // A derived metric's source, with no declaration of its own, is an input:
+  // snapshotted forever and never scored, on purpose.
+  const declared = new Set(metrics.map((metric) => metric.metricKey));
+  const inputs: Record<string, string> = {};
+  for (const entry of derived) {
+    if (!declared.has(entry.from)) inputs[entry.from] = entry.metricKey;
+  }
+
+  return { metrics, derived, problems, inputs };
 }
 
 // ---------------------------------------------------------------------------

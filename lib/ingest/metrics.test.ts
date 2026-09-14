@@ -72,7 +72,7 @@ describe("readMetricConfigs", () => {
     }
     expect(readMetricConfigs({ metrics: { "Bad Key": { polarity: 1, ...base } as never } }).problems[0]).toMatch(/snake_case/);
     expect(readMetricConfigs({ metrics: [] as never }).problems[0]).toMatch(/object keyed by metric/);
-    expect(readMetricConfigs({})).toEqual({ metrics: [], derived: [], problems: [] });
+    expect(readMetricConfigs({})).toEqual({ metrics: [], derived: [], problems: [], inputs: {} });
   });
 });
 
@@ -224,5 +224,27 @@ describe("metricSignal", () => {
     expect(describeWindow(720)).toBe("month");
     expect(describeWindow(72)).toBe("3 days");
     expect(describeWindow(36)).toBe("36 hours");
+  });
+});
+
+describe("declared inputs", () => {
+  it("names a derived metric's undeclared source as an input, so an unscored snapshot is not an oversight", () => {
+    // YouTube's shape: upload_rate is derived from video_count, which carries no declaration of its own.
+    const configs = readMetricConfigs({
+      metrics: { upload_rate: { label: "upload cadence", polarity: 1, delta: "level", baseline_window_hours: 720, min_samples: 48, sd_floor: 0.15, scale: 0.6 } },
+      derived: { upload_rate: { from: "video_count", kind: "rate", window_hours: 168, per_hours: 24, min_span_hours: 160 } },
+    });
+    expect(configs.inputs).toEqual({ video_count: "upload_rate" });
+    expect(configs.problems).toEqual([]);
+
+    // A source metric that IS declared is scored on its own terms and is not an input.
+    const declared = readMetricConfigs({
+      metrics: {
+        news_volume_24h: { label: "news volume", polarity: 1, delta: "level", baseline_window_hours: 336, min_samples: 24, sd_floor: 0.5, scale: 0.7 },
+        viral_moment_rate: { label: "viral-moment frequency", polarity: 1, delta: "level", baseline_window_hours: 720, min_samples: 48, sd_floor: 0.25, scale: 0.5 },
+      },
+      derived: { viral_moment_rate: { from: "news_volume_24h", kind: "spike_count", window_hours: 168, spike_std_devs: 2, spike_sd_floor: 0.5, min_source_samples: 24 } },
+    });
+    expect(declared.inputs).toEqual({});
   });
 });

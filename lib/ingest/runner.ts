@@ -394,6 +394,8 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
             person: person.slug,
             metric: metricKey,
             outcome: observation.outcome,
+            // A metric with no declaration that feeds a derived one is a declared input, not an oversight.
+            ...(configs.inputs[metricKey] ? { inputFor: configs.inputs[metricKey] } : {}),
             value: observation.value,
             previous: observation.previous,
             delta: observation.delta,

@@ -14,6 +14,14 @@ import { ConnectorError, type DataConnector, type MetricReading } from "./types"
  * Levels read, snapshotted and normalised by the runner:
  *   popularity      Spotify's 0–100 artist popularity index
  *   follower_count  followers.total
+ *
+ * NEVER SILENT. The first two production runs polled this connector, reported
+ * "ok" in 130 ms and produced nothing: no snapshot, no observation, no error.
+ * The only path to that was an artist response carrying an id but neither
+ * popularity nor followers, which returned an empty reading list. A connector
+ * that can produce nothing without saying why cannot be diagnosed from the
+ * ledger, so an artist that yields no level now throws, naming the fields the
+ * response did carry, and the poll is recorded as an error with that reason.
  */
 
 export const SPOTIFY_SOURCE_NAME = "spotify";
@@ -65,6 +73,8 @@ export interface SpotifyArtist {
   name: string | null;
   popularity: number | null;
   followers: number | null;
+  /** Top-level keys the artist response carried, for diagnosing a response that yields no level. */
+  fields: string[];
 }
 
 interface ArtistResponse {
@@ -96,6 +106,8 @@ export async function fetchSpotifyArtist(artistId: string, accessToken: string, 
     name: body.name ?? null,
     popularity: typeof body.popularity === "number" ? body.popularity : null,
     followers: typeof body.followers?.total === "number" ? body.followers.total : null,
+    /** The keys the response actually carried, so a missing level can be diagnosed from the error alone. */
+    fields: Object.keys(body).sort(),
   };
 }
 
@@ -134,6 +146,14 @@ export const spotifyConnector: DataConnector = {
     const readings: MetricReading[] = [];
     if (artist.popularity !== null) readings.push({ metricKey: "popularity", value: artist.popularity });
     if (artist.followers !== null) readings.push({ metricKey: "follower_count", value: artist.followers });
+    if (readings.length === 0) {
+      // Authenticated, the artist resolved, and still no level: the response
+      // shape is not what this connector reads. Fail the poll loudly with the
+      // keys that came back rather than returning nothing and reading as ok.
+      throw new ConnectorError(
+        `Spotify artist ${identifier}${artist.name ? ` (${artist.name})` : ""} carried neither popularity nor follower count; response fields: ${artist.fields.join(", ") || "none"}`,
+      );
+    }
     return readings;
   },
 };

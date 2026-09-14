@@ -26,6 +26,15 @@ describe("storyTokens", () => {
     expect(storyTokens("Drake", { personNames: DRAKE }).size).toBe(0);
     expect([...storyTokens("Beyoncé’s Renaissance")].sort()).toEqual(["beyonce", "renaissance"]);
   });
+
+  it("stems the unambiguous -es plurals without mangling a word that ends in e", () => {
+    // "lunches" must meet "lunch"; "surprises" must still meet "surprise" rather than becoming "surpris".
+    expect([...storyTokens("free lunches at the school")]).toContain("lunch");
+    expect([...storyTokens("a lunch debt push")]).toContain("lunch");
+    expect([...storyTokens("he surprises them")]).toEqual(["surprise"]);
+    expect([...storyTokens("a surprise for them")]).toEqual(["surprise"]);
+    expect([...storyTokens("boxes and classes")].sort()).toEqual(["box", "class"]);
+  });
 });
 
 describe("storySimilarity", () => {
@@ -38,7 +47,7 @@ describe("storySimilarity", () => {
   });
 
   it("puts syndicated copies above the threshold and different stories below it", () => {
-    expect(STORY_SIMILARITY_THRESHOLD).toBe(0.5);
+    expect(STORY_SIMILARITY_THRESHOLD).toBe(0.4);
     const tokens = (text: string, outlet: string) => storyTokens(text, { personNames: DRAKE, outlet });
     const announce = tokens("Drake Announces 'Iceman' Album Release Date - Complex", "Complex");
     const reveals = tokens("Drake reveals release date for new album Iceman - NME", "NME");
@@ -143,11 +152,47 @@ describe("collapseStories", () => {
     expect(collapseStories(farApart, describeItem(DRAKE), []).kept.map((item) => item.id)).toEqual(["billboard", "rollingstone"]);
   });
 
+  it("does NOT collapse local-TV rewrites of one event, and records what they actually score", () => {
+    // Both pairs are the same real event, observed in production, and both survive at 0.4. They are pinned
+    // here with their measured scores because word overlap cannot reach them: the wordings share almost
+    // nothing, and the gap between them and a genuinely different story (0.167 at the widest) is too small
+    // to close with a threshold. A mechanism that reads abbreviations and synonyms would; a looser number
+    // would only start deleting real stories.
+    const lunch: Item[] = [
+      { id: "fox4kc", headline: "MrBeast surprises Tonganoxie students with year of free lunches, back-to-school clothes", outlet: "FOX4KC.com", tier: 5, at: "2026-08-31T07:00:00Z" },
+      { id: "kctv5", headline: "MrBeast surprises Kansas school after teacher’s yearlong lunch debt push", outlet: "KCTV", tier: 5, at: "2026-09-02T07:00:00Z" },
+    ];
+    const police: Item[] = [
+      { id: "police1", headline: "Ind. troopers hunt down MrBeast in ‘Escape 100 Cops’ challenge", outlet: "Police1", tier: 5, at: "2026-08-24T07:00:00Z" },
+      { id: "whas11", headline: "MrBeast hides from 100 Indiana State Police troopers in latest video", outlet: "WHAS11", tier: 5, at: "2026-08-22T07:00:00Z" },
+    ];
+    const score = (pair: Item[]) =>
+      storySimilarity(storyTokens(pair[0].headline, { personNames: MRBEAST, outlet: pair[0].outlet }), storyTokens(pair[1].headline, { personNames: MRBEAST, outlet: pair[1].outlet }));
+
+    expect(score(lunch)).toBeCloseTo(0.353, 3);
+    expect(score(police)).toBeCloseTo(0.286, 3);
+    expect(collapseStories(lunch, describeItem(MRBEAST), []).kept).toHaveLength(2);
+    expect(collapseStories(police, describeItem(MRBEAST), []).kept).toHaveLength(2);
+  });
+
+  it("collapses the local-TV rewrites that DO share wording, as production showed", () => {
+    // From the second run: two of the four police stories did collapse into WHAS11's at 0.5 and 0.526.
+    const police: Item[] = [
+      { id: "whas11", headline: "MrBeast hides from 100 Indiana State Police troopers in latest video", outlet: "WHAS11", tier: 5, at: "2026-08-22T07:00:00Z" },
+      { id: "wthitv", headline: "MrBeast vs. Indiana State Police: 100 troopers hunt down YouTube star in $500K chase at southern Indiana base", outlet: "WTHI-TV", tier: 5, at: "2026-08-22T07:00:00Z" },
+      { id: "wlky", headline: "Indiana State Police scores $500K after appearing in MrBeast’s latest YouTube video", outlet: "wlky.com", tier: 5, at: "2026-08-24T07:00:00Z" },
+    ];
+    const result = collapseStories(police, describeItem(MRBEAST), []);
+    expect(result.kept.map((item) => item.id)).toEqual(["whas11"]);
+    expect(result.collapsed.map((c) => c.item.id).sort()).toEqual(["wlky", "wthitv"]);
+  });
+
   it("applies the threshold at the boundary, inclusive", () => {
     const describe = (item: { id: string; tokens: string[] }) => ({ tokens: new Set(item.tokens), tier: 5, occurredAt: at("2026-09-12T12:00:00Z") });
-    const exactly = collapseStories([{ id: "a", tokens: ["a", "b", "c", "d"] }, { id: "b", tokens: ["a", "b", "e", "f"] }], describe, []);
+    // Two shared of 4 and 6 is exactly 0.4: collapses. Two shared of 4 and 7 is 0.364: does not.
+    const exactly = collapseStories([{ id: "a", tokens: ["a", "b", "c", "d"] }, { id: "b", tokens: ["a", "b", "e", "f", "g", "h"] }], describe, []);
     expect(exactly.kept.map((item) => item.id)).toEqual(["a"]);
-    const under = collapseStories([{ id: "a", tokens: ["a", "b", "c", "d"] }, { id: "b", tokens: ["a", "b", "e", "f", "g"] }], describe, []);
+    const under = collapseStories([{ id: "a", tokens: ["a", "b", "c", "d"] }, { id: "b", tokens: ["a", "b", "e", "f", "g", "h", "i"] }], describe, []);
     expect(under.kept.map((item) => item.id)).toEqual(["a", "b"]);
     // Nothing to compare: an empty headline never collapses into anything.
     const empty = collapseStories([{ id: "a", tokens: [] }, { id: "b", tokens: [] }], describe, []);

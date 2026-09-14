@@ -22,13 +22,28 @@
 
 /**
  * STORY_SIMILARITY_THRESHOLD — the Dice coefficient at or above which two
- * headlines are one story. TUNABLE. 0.5 means the two headlines share as
- * many content words as they each hold on average: "Drake Announces
- * 'Iceman' Album Release Date" and "Drake's 'Iceman' Finally Has a Release
- * Date" collapse (0.67); "Drake announces album release date" and "Drake sued
- * over Toronto concert cancellation" do not (0.0).
+ * headlines are one story. TUNABLE.
+ *
+ * 0.4 (lowered from 0.5 after two production runs). Over-collapse is the worse
+ * error — it silently deletes a real story, where under-collapse only adds a
+ * signal the per-source cap and the square-root sum already damp — so the
+ * threshold sits above every distinct-story pair observed so far: the widest
+ * was 0.167 ("100 Hottest Rappers Right Now" against "Future Ties Drake's
+ * Historic Record"). Measured syndication runs 0.5–1.0 for national outlets
+ * rewriting one wire story.
+ *
+ * WHAT IT STILL MISSES, measured on real data: local-TV rewrites of one event
+ * that share almost no vocabulary. "MrBeast surprises Tonganoxie students with
+ * year of free lunches" against "MrBeast surprises Kansas school after
+ * teacher's yearlong lunch debt push" scores 0.353; "Ind. troopers hunt down
+ * MrBeast in 'Escape 100 Cops' challenge" against "MrBeast hides from 100
+ * Indiana State Police troopers" scores 0.286, because "Ind." and "cops" are
+ * an abbreviation and a synonym of words the other headline spells out. No
+ * threshold catches those without also collapsing genuinely different stories;
+ * word overlap is the wrong instrument for them, not the wrong setting. Both
+ * pairs are pinned as tests so the day the instrument changes, they say so.
  */
-export const STORY_SIMILARITY_THRESHOLD = 0.5;
+export const STORY_SIMILARITY_THRESHOLD = 0.4;
 
 /**
  * STORY_DEDUP_LOOKBACK_HOURS — how far back a new item is compared against
@@ -67,11 +82,16 @@ function fold(value: string): string {
     .trim();
 }
 
-/** A light stem: plural and possessive stripped, so "albums" and "album's" meet "album". */
+/**
+ * A light stem: plural and possessive stripped, so "albums" and "album's"
+ * meet "album". The "-es" cases are handled only where the ending is
+ * unambiguous (ches / shes / sses / xes / zes), so "lunches" meets "lunch"
+ * while "surprises" still meets "surprise" rather than becoming "surpris".
+ */
 function stem(token: string): string {
-  let out = token;
-  if (out.length > 3 && out.endsWith("s") && !out.endsWith("ss")) out = out.slice(0, -1);
-  return out;
+  if (token.length > 4 && /(ch|sh|ss|x|z)es$/.test(token)) return token.slice(0, -2);
+  if (token.length > 3 && token.endsWith("s") && !token.endsWith("ss")) return token.slice(0, -1);
+  return token;
 }
 
 function tokenize(text: string): string[] {

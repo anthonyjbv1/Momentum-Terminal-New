@@ -86,6 +86,14 @@ export function youtubeVideosResponse(views: Record<string, string>) {
   };
 }
 
+/** videos.list with arbitrary statistics per video (viewCount, commentCount, ...). */
+export function youtubeVideoStatisticsResponse(statistics: Record<string, Record<string, string>>) {
+  return {
+    kind: "youtube#videoListResponse",
+    items: Object.entries(statistics).map(([id, stats]) => ({ kind: "youtube#video", id, statistics: stats })),
+  };
+}
+
 export function youtubeCommentThreadsResponse(videoId: string, comments: Array<{ id: string; text: string; publishedAt?: string }>) {
   return {
     kind: "youtube#commentThreadListResponse",
