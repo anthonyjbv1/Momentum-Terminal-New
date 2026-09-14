@@ -1,38 +1,56 @@
 /* =============================================================================
    THE OPERATOR CONSOLE — /admin only.
 
-   Deliberately NOT the consumer design system. app/styles/tokens.css describes
-   an editorial monochrome world for people looking at scores; this describes a
-   panel for one person looking at numbers. It is plain CSS scoped under `.adm`,
-   imported only by app/admin/layout.tsx, and it references no consumer token,
-   so nothing here can drift into the product and nothing there constrains this.
+   The grounds, the type and the rules are the PLATFORM'S: every value below
+   resolves to a token from app/styles/tokens.css, so admin sits on the same jet
+   black with the same white type as the product and follows the base palette if
+   it ever moves. What stays different is the job, not the colour: dense rows,
+   tabular numerals, and a status trio (ok / warn / bad) that means state rather
+   than direction — a thing the consumer surface deliberately does not do.
 
-   The look: light ground, dense rows, tabular numerals, hairline rules, a
-   single blue for magnitude and a reserved status trio (ok / warn / bad) that
-   always ships next to a word — never colour alone.
+   Scoping is one-way. Everything here is under `.adm`, which only
+   app/admin/layout.tsx puts on the page, and nothing here defines or redefines
+   a consumer token: this file reads them, never writes them.
    ============================================================================= */
 
 .adm {
-  --adm-bg: #f6f7f9;
-  --adm-panel: #ffffff;
-  --adm-panel-alt: #fbfcfd;
-  --adm-line: #dfe3e8;
-  --adm-line-soft: #eceff3;
-  --adm-ink: #12161c;
-  --adm-ink-2: #444d59;
-  --adm-ink-3: #6b7480;
-  --adm-accent: #1d4ed8;
-  --adm-accent-soft: #dbe6fe;
-  --adm-ok: #116b3a;
-  --adm-ok-soft: #dff3e6;
-  --adm-warn: #8a5800;
-  --adm-warn-soft: #fdf0d2;
-  --adm-bad: #a4121f;
-  --adm-bad-soft: #fbe0e2;
+  /* Grounds and ink: the platform's, unchanged. */
+  --adm-bg: var(--color-canvas);
+  --adm-panel: var(--color-surface);
+  --adm-panel-alt: var(--color-surface-overlay);
+  --adm-ink: var(--color-fg);
+  --adm-ink-2: var(--color-fg-secondary);
+  --adm-ink-3: var(--color-fg-muted);
+
+  /* Rules, one step up from the product's. The consumer surfaces separate
+     cards, where a whisper is the point; these separate table rows twelve
+     pixels apart, and --color-line against --color-surface is a 1.16:1
+     hairline that simply does not appear. Both weights are still the line
+     tokens, lifted: rows take line-strong, section edges a shade above it. */
+  --adm-line: color-mix(in oklab, var(--color-line-strong) 88%, var(--color-fg));
+  --adm-line-soft: var(--color-line-strong);
+
+  /* Magnitude: one neutral, light on a dark track — the platform's own way of
+     drawing an instrument. Emphasis is the platform accent (near-white). */
+  --adm-accent: var(--color-fg-secondary);
+  --adm-accent-soft: color-mix(in oklab, var(--color-accent) 16%, var(--color-surface));
+
+  /* Status. The hues are the platform's positive and negative; red is lifted
+     toward white because it carries small text on black here, where on the
+     product it only ever carries a large figure. Amber has no consumer
+     equivalent — nothing in the product means "still warming up" — so it is
+     admin's own, written in the same oklch idiom as the tokens. */
+  --adm-ok: var(--color-positive);
+  --adm-ok-soft: color-mix(in oklab, var(--color-positive) 18%, var(--color-surface));
+  --adm-warn: oklch(84% 0.13 85);
+  --adm-warn-soft: color-mix(in oklab, oklch(84% 0.13 85) 18%, var(--color-surface));
+  --adm-bad: color-mix(in oklab, var(--color-negative) 82%, white);
+  --adm-bad-soft: color-mix(in oklab, var(--color-negative) 20%, var(--color-surface));
+
   --adm-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
   --adm-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 
-  color-scheme: light;
+  color-scheme: dark;
   min-height: 100dvh;
   background: var(--adm-bg);
   color: var(--adm-ink);
@@ -60,8 +78,8 @@
   align-items: baseline;
   gap: 8px 16px;
   padding: 10px 20px;
-  background: var(--adm-ink);
-  color: #fff;
+  background: var(--adm-panel);
+  color: var(--adm-ink);
 }
 .adm-bar b {
   font-size: 13px;
@@ -71,7 +89,7 @@
 .adm-bar .adm-who {
   font-family: var(--adm-mono);
   font-size: 11px;
-  color: #aab3bf;
+  color: var(--adm-ink-3);
 }
 .adm-bar nav {
   display: flex;
@@ -82,15 +100,15 @@
 .adm-bar nav a {
   padding: 3px 8px;
   border-radius: 4px;
-  color: #cfd6de;
+  color: var(--adm-ink-2);
   font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   text-decoration: none;
 }
 .adm-bar nav a:hover {
-  background: #2a313b;
-  color: #fff;
+  background: var(--adm-panel-alt);
+  color: var(--adm-ink);
 }
 
 .adm-main {
@@ -236,10 +254,15 @@ table.adm-t thead th {
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--adm-ink-3);
+  /* A step brighter than on the light ground: 10px uppercase in the muted ink
+     lands under 4.5:1 on the header band, and a column label you have to hunt
+     for is the one thing a dense table cannot afford. */
+  color: var(--adm-ink-2);
 }
 table.adm-t tbody tr:hover td {
-  background: #f4f7fb;
+  /* A rung above the header band, so tracking a row across twelve columns on
+     black still works — the light ground could get away with a 2% tint. */
+  background: var(--color-surface-raised);
 }
 table.adm-t tbody tr:last-child td {
   border-bottom: 0;
@@ -317,12 +340,13 @@ table.adm-t tfoot td {
   text-decoration: none;
 }
 .adm-tabs a[aria-current="true"] {
-  border-color: var(--adm-ink);
-  background: var(--adm-ink);
-  color: #fff;
+  /* The platform's primary-control treatment: near-white fill, black label. */
+  border-color: var(--color-surface-inverse);
+  background: var(--color-surface-inverse);
+  color: var(--color-fg-inverse);
 }
 
-/* --- meter: one hue, light to dark, magnitude only ------------------------ */
+/* --- meter: one neutral, light on a dark track, magnitude only ------------ */
 
 .adm-meter {
   position: relative;
