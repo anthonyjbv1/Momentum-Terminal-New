@@ -55,24 +55,36 @@ export async function GET(request: NextRequest) {
       if (result.error) throw new Error(`${label}: ${result.error.message}`);
     }
     const taskTypes: LLMTaskType[] = ["sentiment", "anomaly", "narrative", "memory"];
+    const routes = taskTypes.map((taskType) => {
+      const route = resolveRoute(taskType);
+      return {
+        taskType,
+        route,
+        // The provider's own default applies when no model is configured; the Anthropic adapter's is named here.
+        model: route.model ?? (route.providerName === "anthropic" ? ANTHROPIC_DEFAULT_MODEL : null),
+      };
+    });
+    // Whether each configured model string has a price row, matched exactly as llm_cost_per_tick joins. The
+    // Anthropic adapter records the model the API echoes: a dated ID comes back as itself, an alias as the
+    // dated ID it resolves to, and the price table carries both spellings for Haiku 4.5.
+    const models = [...new Set(routes.map((entry) => entry.model).filter((model): model is string => model !== null))];
+    const prices = models.length > 0 ? await admin.from("llm_model_prices").select("model").in("model", models) : { data: [], error: null };
+    if (prices.error) throw new Error(`llm_model_prices: ${prices.error.message}`);
+    const pricedModels = new Set((prices.data ?? []).map((row) => row.model));
     const llm = {
       scorer: getScorerName(),
       routes: Object.fromEntries(
-        taskTypes.map((taskType) => {
-          const route = resolveRoute(taskType);
-          const explicit = route.model !== undefined;
-          return [
-            taskType,
-            {
-              provider: route.providerName,
-              // The provider's own default applies when no model is configured; the Anthropic adapter's is named here.
-              model: route.model ?? (route.providerName === "anthropic" ? ANTHROPIC_DEFAULT_MODEL : null),
-              modelSource: explicit ? "configured" : "provider default",
-              effort: route.effort,
-              maxTokens: route.maxTokens,
-            },
-          ];
-        }),
+        routes.map(({ taskType, route, model }) => [
+          taskType,
+          {
+            provider: route.providerName,
+            model,
+            modelSource: route.model !== undefined ? "configured" : "provider default",
+            priced: model !== null && pricedModels.has(model),
+            effort: route.effort,
+            maxTokens: route.maxTokens,
+          },
+        ]),
       ),
     };
 

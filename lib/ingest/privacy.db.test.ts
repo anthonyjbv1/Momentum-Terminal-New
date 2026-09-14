@@ -216,17 +216,20 @@ describe("observability", () => {
     expect(new Date(health.last_success_at as string).getTime()).toBeGreaterThan(new Date(health.last_error_at as string).getTime());
   });
 
-  it("llm_model_prices carries the verified rates for the current models, with no assumed row", async () => {
+  it("llm_model_prices carries the verified rates for the models in use, under the strings the API echoes, with no assumed row", async () => {
     const rows = await database.rows<{ model: string; input_per_mtok: string | number; output_per_mtok: string | number; cache_read_per_mtok: string | number; cache_write_per_mtok: string | number; note: string | null }>(
-      "select model, input_per_mtok, output_per_mtok, cache_read_per_mtok, cache_write_per_mtok, note from public.llm_model_prices where model in ('claude-opus-5', 'claude-sonnet-5') order by model",
+      "select model, input_per_mtok, output_per_mtok, cache_read_per_mtok, cache_write_per_mtok, note from public.llm_model_prices where model in ('claude-haiku-4-5-20251001', 'claude-haiku-4-5', 'claude-opus-5', 'claude-sonnet-5') order by model",
     );
     expect(rows.map((r) => [r.model, Number(r.input_per_mtok), Number(r.output_per_mtok), Number(r.cache_read_per_mtok), Number(r.cache_write_per_mtok)])).toEqual([
+      // Haiku 4.5's ID is dated and the adapter records the ID the API echoes, so the dated row is the one usage hits; the alias row prices the same.
+      ["claude-haiku-4-5", 1, 5, 0.1, 1.25],
+      ["claude-haiku-4-5-20251001", 1, 5, 0.1, 1.25],
       ["claude-opus-5", 5, 25, 0.5, 6.25],
       ["claude-sonnet-5", 2, 10, 0.2, 2.5],
     ]);
     const all = await database.rows<{ note: string | null }>("select note from public.llm_model_prices");
     for (const row of all) expect(row.note ?? "").not.toMatch(/ASSUMED/);
-    for (const row of rows) expect(row.note).toMatch(/Verified 2026-09-13/);
+    for (const row of rows) expect(row.note).toMatch(/^Verified 2026-09-1[34] against Anthropic pricing/);
   });
 
   it("llm_cost_per_tick prices usage per tick and says when a model has no price", async () => {
@@ -238,11 +241,35 @@ describe("observability", () => {
     `);
     const rows = await database.rows<Record<string, unknown>>("select * from public.llm_cost_per_tick where tick_number in (7, 8) order by tick_number");
     expect(rows).toHaveLength(2);
-    // Haiku: 1M in × $1 + 100k out × $5 = $1.50; Opus (assumed price): 200k × $5 + 10k × $25 + 100k × $0.50 = $1.30.
+    // Haiku: 1M in × $1 + 100k out × $5 = $1.50; Opus: 200k × $5 + 10k × $25 + 100k × $0.50 = $1.30.
     expect([rows[0].calls, rows[0].sentiment_calls, rows[0].memory_calls, rows[0].unpriced_calls].map(Number)).toEqual([2, 1, 1, 0]);
     expect(Number(rows[0].cost_usd)).toBeCloseTo(2.8, 6);
     expect([rows[1].calls, rows[1].unpriced_calls].map(Number)).toEqual([1, 1]);
     expect(rows[1].cost_usd).toBeNull();
+  });
+
+  it("llm_cost_per_tick matches a price row exactly: a longer model string is unpriced, never priced as its prefix", async () => {
+    // claude-opus-5-1 begins with claude-opus-5 and must NOT be billed at Opus 5's rate; the dated Haiku ID
+    // matches its own row, and an unknown dated string does not fall back to the alias row.
+    await database.exec(`
+      insert into public.llm_usage (provider, model, task_type, input_tokens, output_tokens, tick_number) values
+        ('anthropic', 'claude-opus-5-1',           'sentiment', 1000000, 100000, 21),
+        ('anthropic', 'claude-opus-5',             'sentiment', 1000000, 100000, 22),
+        ('anthropic', 'claude-haiku-4-5-20251001', 'sentiment', 1000000, 100000, 23),
+        ('anthropic', 'claude-haiku-4-5-2026',     'sentiment', 1000000, 100000, 24);
+    `);
+    const rows = await database.rows<{ tick_number: number | string; unpriced_calls: string | number; cost_usd: string | number | null }>(
+      "select tick_number, unpriced_calls, cost_usd from public.llm_cost_per_tick where tick_number between 21 and 24 order by tick_number",
+    );
+    expect(rows.map((r) => [Number(r.tick_number), Number(r.unpriced_calls), r.cost_usd === null ? null : Number(r.cost_usd)])).toEqual([
+      [21, 1, null], // claude-opus-5-1: no row, so unpriced rather than $7.50 at Opus 5's rate
+      [22, 0, 7.5], // claude-opus-5: 1M × $5 + 100k × $25
+      [23, 0, 1.5], // claude-haiku-4-5-20251001: 1M × $1 + 100k × $5
+      [24, 1, null], // an unknown dated string does not fall back to the alias row
+    ]);
+    const [view] = await database.rows<{ def: string }>("select pg_get_viewdef('public.llm_cost_per_tick'::regclass) as def");
+    expect(view.def).not.toMatch(/like/i);
+    expect(view.def).toMatch(/p\.model = u\.model/);
   });
 });
 
