@@ -73,6 +73,19 @@ export function getSpotifyCredentialsOrNull(): { clientId: string; clientSecret:
   return clientId && clientSecret ? { clientId, clientSecret } : null;
 }
 
+/** Twitch Helix app credentials (TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET), or null when either is unset. SERVER ONLY. */
+export function getTwitchCredentialsOrNull(): { clientId: string; clientSecret: string } | null {
+  const clientId = process.env.TWITCH_CLIENT_ID?.trim();
+  const clientSecret = process.env.TWITCH_CLIENT_SECRET?.trim();
+  return clientId && clientSecret ? { clientId, clientSecret } : null;
+}
+
+/** API-Sports key (APISPORTS_API_KEY), or null when unset. SERVER ONLY. One key spans the sport hosts it is subscribed to. */
+export function getApiSportsKeyOrNull(): string | null {
+  const value = process.env.APISPORTS_API_KEY?.trim();
+  return value ? value : null;
+}
+
 /**
  * Shared secret that authorises calls to /api/ingest. SERVER ONLY.
  * Returns null when unset so the route can fail closed with a clear message.

@@ -255,13 +255,71 @@ describe("the registry", () => {
        where pds.is_active
        order by p.slug, d.name
     `);
+    // Exhaustive on purpose: a mapping that appears without being named here is
+    // a person being polled that nobody decided to poll.
     expect(mappings).toEqual([
       { slug: "drake", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Drake%22") },
       { slug: "drake", source: "spotify", identifier: "3TVXtAsR1Inumwj472S9r4" },
+      // Phase 10: a creator whose primary platform is Twitch, and an athlete on
+      // a weekly schedule — two data shapes the first two subjects do not have.
+      { slug: "kai-cenat", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Kai+Cenat%22") },
+      { slug: "kai-cenat", source: "twitch", identifier: "kaicenat" },
       { slug: "mrbeast", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22MrBeast%22") },
       { slug: "mrbeast", source: "youtube", identifier: "UCX6OQ3DkcsbYNE6H8uQQuVA" },
       { slug: "mrbeast", source: "youtube_comments", identifier: "UCX6OQ3DkcsbYNE6H8uQQuVA" },
+      { slug: "patrick-mahomes", source: "apisports", identifier: "1197" },
+      { slug: "patrick-mahomes", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Patrick+Mahomes%22") },
     ]);
+  });
+
+  it("declares Twitch and API-Sports as data, with every metric able to fill its baseline", async () => {
+    const sources = await database.rows<{ name: string; tier: number; is_active: boolean; poll_interval_minutes: number; config: Record<string, unknown> }>(
+      "select name, tier, is_active, poll_interval_minutes, config from public.data_sources where name in ('twitch', 'apisports') order by name",
+    );
+    expect(sources.map((source) => [source.name, source.tier, source.is_active])).toEqual([
+      ["apisports", 2, true],
+      ["twitch", 2, true],
+    ]);
+
+    // The hourly ingestion cron skips a source when the last poll was less than
+    // poll_interval_minutes ago. A run fires on the hour and the previous one
+    // lands a few seconds later, so the check sees 59 minutes: an interval that
+    // is an exact multiple of 60 always loses that race and the source polls
+    // half as often as its interval claims. 55 polls hourly; 175 polls every
+    // third hour, as intended for a weekly sport on a request budget; 60 or 180
+    // would silently halve both.
+    for (const source of sources) expect(source.poll_interval_minutes % 60, `${source.name} interval ${source.poll_interval_minutes}`).not.toBe(0);
+
+    const metrics = Object.fromEntries(
+      sources.flatMap((source) =>
+        Object.entries((source.config as { metrics: Record<string, Record<string, unknown>> }).metrics).map(([key, declaration]) => [`${source.name}.${key}`, declaration]),
+      ),
+    );
+    expect(Object.keys(metrics).sort()).toEqual([
+      "apisports.game_passing_yards",
+      "twitch.follower_count",
+      "twitch.stream_days_7d",
+      "twitch.stream_hours_7d",
+    ]);
+
+    // No instantaneous live reading is a metric: a concurrent-viewer count read
+    // at an arbitrary minute has a distribution set by the polling schedule.
+    for (const key of Object.keys(metrics)) expect(key).not.toMatch(/viewer/);
+
+    // A weekly sport cannot reach the platform's usual 24 samples inside one
+    // season, so its single metric declares a reachable minimum instead.
+    expect(metrics["apisports.game_passing_yards"].min_samples).toBe(8);
+    expect(Number(metrics["apisports.game_passing_yards"].baseline_window_hours)).toBeGreaterThanOrEqual(8 * 168);
+
+    for (const [key, declaration] of Object.entries(metrics)) {
+      expect([1, -1], `${key} polarity`).toContain(declaration.polarity);
+      expect(declaration, key).toMatchObject({
+        baseline_window_hours: expect.any(Number),
+        min_samples: expect.any(Number),
+        sd_floor: expect.any(Number),
+        scale: expect.any(Number),
+      });
+    }
   });
 });
 

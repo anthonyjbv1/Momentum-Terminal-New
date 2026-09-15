@@ -213,6 +213,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260914152703_phase8plus_connector_corrections.sql` | `publisher_domains`: 17 observed domains promoted at tiers 2–4, plus `amgen.com` and `blog.google` recorded AT the floor with the reasoning; `youtube_comments` gains the `comment_volume` metric declaration |
 | `20260914021237_phase8_rss_signal_quality.sql` | `publisher_domains` (the tiered publisher allowlist as configuration: normalised domain, allowed with a tier or blocked, service role only) with its seed; `signals.tier` (per-item credibility tier, null = the source's); `blocked_dropped` / `duplicates_collapsed` on `source_polls` and `ingest_runs`; `source_health` gains `blocked_24h` / `collapsed_24h` |
 | `20260914165502_phase9_admin_baseline_progress.sql` | `metric_baseline_progress` (per person / source / metric: samples against the declared minimum, snapshot span against the declared window, snapshot count, last outcome — counts, configuration and timestamps only, service role only); `users.is_admin` documented and set for the operator account |
+| `20260915170500_phase10_twitch_apisports.sql` | Configures the existing `twitch` and `apisports` registry rows (metric declarations, poll intervals below the hour, active) and maps the already-seeded Kai Cenat and Patrick Mahomes to them plus curated RSS; seeds nineteen sports and streaming publisher domains |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
 
@@ -955,6 +956,44 @@ Five sections, dense tables, its own stylesheet (`app/admin/admin.css`, scoped u
 
 **The privacy rule holds here.** Admin is a user-facing path, so no raw metric level appears on it. Baseline progress is read from `metric_baseline_progress`, a view whose columns are counts, configuration and timestamps — `value`, `previous`, `delta`, `mean`, `sd` and `sigma` are not columns of it, so a level is not selectable through it even by mistake. No file under `app/admin`, `components/admin` or `lib/admin` names either raw table; the existing whole-repo scan in `lib/ingest/privacy.db.test.ts` still resolves to `lib/ingest/store.ts` alone.
 
+## Twitch and API-Sports (Phase 10)
+
+Two more tracked subjects, chosen for having data shapes the first two do not: **Kai Cenat**, a creator whose primary platform is Twitch — high cadence, high variance, live most days — and **Patrick Mahomes**, an athlete on a weekly, scheduled, outcome-bearing calendar. Both were already among the sixteen seeded people with the right categories, so Phase 10 configures and maps; it inserts no person and no data source. Both also take curated RSS, which needed no new connector and started producing on the first run after the migration.
+
+### The sampling problem, and what it decided
+
+A live stream either is or is not running at the moment we poll. Hourly polling samples that unevenly and without control: a six-hour broadcast is caught six times, a ninety-minute one once or not at all, and concurrent viewers read at an arbitrary minute is one point on a curve that ramps and decays. Fed to the baseline machinery — mean and standard deviation over a trailing window — an instantaneous viewer count yields a distribution dominated by the online/offline mixture rather than by the audience, and its sigma would describe the cron schedule rather than the person. **So no instantaneous reading is registered as a metric.** Every Twitch metric is one of two robust shapes:
+
+| Metric | Shape | Why the polling moment cannot distort it |
+|---|---|---|
+| `follower_count` | cumulative, monotone | the same answer at any minute; `relative_rate` over a 168-hour window, 24 samples |
+| `stream_hours_7d` | retrospective window aggregate | total broadcast hours in a fixed trailing week, read from the archive of completed streams |
+| `stream_days_7d` | retrospective window aggregate | distinct days streamed in that week — cadence rather than volume |
+
+The two aggregates are computed from `/helix/videos?type=archive` and attributed by **start** time, so a broadcast spanning the window's edge is counted whole in the week it began and never split between two polls. That is the same shape as `news_volume_24h`, which is why they can take the ordinary baseline treatment without it meaning something different. The spiky fact — live right now, to this many people — is not discarded: it becomes an **event**, one signal per broadcast keyed on the Twitch stream id, so a six-hour stream caught by six consecutive polls stores once and the viewer count rides in the payload where it is an observation about a moment rather than a level pretending to have a baseline.
+
+One deliberate refusal: an **empty** archive records no aggregate at all rather than a zero. A channel with VODs disabled or past retention returns no videos, and writing "0 hours streamed" would put a false level into the baseline and make a busy week read as a collapse.
+
+### Metric versus event, on a weekly sport
+
+A season is scheduled, periodic and outcome-bearing, which is a shape nothing else here has. **Game results are events**: discrete, dated, and already in language the sentiment path reads, one signal per game keyed on the game id. **One metric is registered** — `game_passing_yards` — and the connector samples it *once per game* rather than once per poll, returning a reading only when the figure moves, so `samples` in the baseline counts performances and not hours.
+
+What is deliberately **not** registered, and why it never would have worked: season cumulative totals (passing yards, touchdowns, completions to date) are monotone step functions, flat for a week and then a jump. Snapshotted against their own trailing series they give a standard deviation pinned to the sd floor and a maximal signal on every single game — an expensive way of saying "a game happened", which the event says better. Season completion percentage fails the other way: a running aggregate over hundreds of attempts barely leaves its own mean, so it would never emit however the season went.
+
+**What can emit inside a season.** `game_passing_yards` declares `min_samples: 8`, reachable at his eighth recorded game — roughly the season's halfway point — with a 1680-hour (ten-week) window wide enough to hold eight games. That was the test every candidate had to pass: a metric needing the platform's usual 24 samples would need twenty-four games, which is longer than a regular season.
+
+**Request budget.** The free plan allows 100 requests per day. The connector makes at most two per poll plus a `/status` probe cached per process, behind a 175-minute poll interval: eight polls a day, roughly sixteen requests, against a weekly event cadence that would not reward more.
+
+**The paths are configuration.** api-sports.io is refused by this environment's egress proxy on every domain, so the endpoint paths and statistic field names were not verified against a live response. They live on the `data_sources` row rather than in the connector for exactly that reason — a path that turns out wrong is a one-row update, not a deploy — and every read validates the envelope (including the `errors` payload API-Sports returns *with a 200* for a wrong key or an unsubscribed sport) and throws naming what actually came back.
+
+### Poll intervals below the hour
+
+The runner skips a source when `minutes since last poll < poll_interval_minutes`. The hourly ingestion cron fires on the hour and the previous run's poll lands a few seconds after it, so the check sees **59** minutes: an interval that is an exact multiple of 60 always loses that race and the source polls half as often as its interval claims. Both Phase 10 rows sit off the multiple (55 for Twitch, 175 for API-Sports, which polls every third hour by design), and a test asserts `poll_interval_minutes % 60 !== 0` for them.
+
+### Credentials
+
+`TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` (Helix app access token, Client Credentials — no user auth) and `APISPORTS_API_KEY`. Each connector's `available()` reports the missing variable by name, the runner marks that source inactive for the run with the reason on the poll row, and the run carries on: RSS for both subjects is unaffected, so their news baselines accumulate from day one whatever else is unset.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -977,6 +1016,8 @@ Five sections, dense tables, its own stylesheet (`app/admin/admin.css`, scoped u
 - **Phase 7**: the auth gate (one removable file), the metric connector kind with the shared baseline, the metric scorer with explicit per-metric polarity feeding the Signals force, the schema-enforced privacy rule (raw levels service-role only, signals carry direction and sigma), the registry rows and mappings for `youtube`, `youtube_comments`, `rss` and `spotify` with derived metrics (upload cadence, viral-moment frequency, commentary volume), per-person signal-volume normalisation, and the run / poll / observation ledger with `source_health`, `llm_cost_per_tick` and `/api/admin/health`.
 
 - **Phase 8**: RSS signal quality: the tiered publisher allowlist as configuration (`publisher_domains`: known domains at their tier, unknown ones at the floor, blocked ones dropped and logged), per-item tier resolution from the publisher domain Google News names in `<source url>`, `signals.tier` read by the Engine over the source's tier, story-level deduplication at ingestion (Dice ≥ 0.5 over content words, 48-hour lookback, highest-tier survivor, in-place upgrade of an unread stored copy) applied to signals and to `news_volume_24h` alike, the drop and collapse counters on polls, runs and `source_health`, and the Feed placeholder that no longer restates the source.
+
+- **Phase 10**: two more subjects with deliberately different data shapes — Kai Cenat on Twitch (Helix app token; follower growth plus retrospective broadcast-window aggregates, with the spiky live reading kept as an event rather than forced into a baseline) and Patrick Mahomes on API-Sports NFL (game results as events, one per-game metric sampled once per game, season cumulative totals refused as degenerate) — both with curated RSS, nineteen sports and streaming publisher domains seeded, and poll intervals set off the multiple of sixty that was silently halving the others.
 
 - **Phase 9**: the ingestion cron (hourly, `INGEST_CRON_ENABLED`, flag checked before authentication, overlap-guarded on an in-flight run, no model call on the path) alongside the untouched manual endpoint and the separately gated Engine cron; the Spotify artist read hardened with a plural-endpoint fallback behind the Phase 8+ named error; and `/admin`, its own route tree behind `users.is_admin`, 404 for everyone else, showing LLM cost and the unpriced counter, ingestion health with per-metric baseline progress, both cron states, the read-only risk levers and the behaviour funnel — with no raw metric level anywhere on it.
 

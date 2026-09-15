@@ -8,9 +8,9 @@ import { createStubConnector } from "./stub";
 /** Every name in the data_sources seed must have a connector, and vice versa. */
 const SEEDED_SOURCE_NAMES = ["youtube", "youtube_comments", "twitch", "spotify", "forbes", "finnhub", "newsdata", "billboard", "apisports", "rss"];
 /** Implemented connectors; the rest are interface-compliant stubs. */
-const IMPLEMENTED = ["youtube", "youtube_comments", "spotify", "rss"];
+const IMPLEMENTED = ["youtube", "youtube_comments", "spotify", "rss", "twitch", "apisports"];
 /** Connectors that need a credential and say so. */
-const CREDENTIALED = ["youtube", "youtube_comments", "spotify"];
+const CREDENTIALED = ["youtube", "youtube_comments", "spotify", "twitch", "apisports"];
 
 describe("connector registry", () => {
   it("registers exactly the seeded data sources", () => {
@@ -44,10 +44,17 @@ describe("connector registry", () => {
   });
 
   it("credentialed connectors report themselves unavailable without their credentials", () => {
-    const saved = { youtube: process.env.YOUTUBE_API_KEY, id: process.env.SPOTIFY_CLIENT_ID, secret: process.env.SPOTIFY_CLIENT_SECRET };
-    delete process.env.YOUTUBE_API_KEY;
-    delete process.env.SPOTIFY_CLIENT_ID;
-    delete process.env.SPOTIFY_CLIENT_SECRET;
+    const saved = {
+      youtube: process.env.YOUTUBE_API_KEY,
+      id: process.env.SPOTIFY_CLIENT_ID,
+      secret: process.env.SPOTIFY_CLIENT_SECRET,
+      twitchId: process.env.TWITCH_CLIENT_ID,
+      twitchSecret: process.env.TWITCH_CLIENT_SECRET,
+      apisports: process.env.APISPORTS_API_KEY,
+    };
+    for (const name of ["YOUTUBE_API_KEY", "SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET", "APISPORTS_API_KEY"]) {
+      delete process.env[name];
+    }
     try {
       for (const name of CREDENTIALED) {
         const availability = connectorRegistry.get(name)!.available!();
@@ -59,6 +66,9 @@ describe("connector registry", () => {
       if (saved.youtube !== undefined) process.env.YOUTUBE_API_KEY = saved.youtube;
       if (saved.id !== undefined) process.env.SPOTIFY_CLIENT_ID = saved.id;
       if (saved.secret !== undefined) process.env.SPOTIFY_CLIENT_SECRET = saved.secret;
+      if (saved.twitchId !== undefined) process.env.TWITCH_CLIENT_ID = saved.twitchId;
+      if (saved.twitchSecret !== undefined) process.env.TWITCH_CLIENT_SECRET = saved.twitchSecret;
+      if (saved.apisports !== undefined) process.env.APISPORTS_API_KEY = saved.apisports;
     }
   });
 });
