@@ -272,23 +272,39 @@ describe("the registry", () => {
     ]);
   });
 
+  it("keeps EVERY active source off the multiple of sixty, so the hourly cron never skips one", async () => {
+    // THE DEFECT THIS HOLDS SHUT. The runner skips a source when
+    // `minutes since last poll < poll_interval_minutes`. The hourly cron fires
+    // on the hour and the previous run's poll lands a few seconds after its own
+    // fire, so an hour later the check measures 59-point-something, not 60. Any
+    // interval that is an exact multiple of 60 loses that race every time and
+    // the source polls half as often as its interval claims — which is what rss,
+    // youtube and youtube_comments did, undetectably, from the moment the
+    // ingestion cron went on: a sample count rising at half speed looks exactly
+    // like a sample count rising.
+    //
+    // 55 polls every hour. 175 polls every third hour, which is deliberate for a
+    // weekly sport on a 100-request daily quota. 60 or 180 would silently halve
+    // either. Every ACTIVE source is covered, not just the ones added last,
+    // because the next source registered at a tidy-looking 60 would reintroduce
+    // this in a form nothing on the dashboard reports.
+    const active = await database.rows<{ name: string; poll_interval_minutes: number }>(
+      "select name, poll_interval_minutes from public.data_sources where is_active order by name",
+    );
+    expect(active.length).toBeGreaterThanOrEqual(5);
+    for (const source of active) {
+      expect(source.poll_interval_minutes % 60, `${source.name} polls every ${source.poll_interval_minutes} min, an exact multiple of 60`).not.toBe(0);
+    }
+  });
+
   it("declares Twitch and API-Sports as data, with every metric able to fill its baseline", async () => {
-    const sources = await database.rows<{ name: string; tier: number; is_active: boolean; poll_interval_minutes: number; config: Record<string, unknown> }>(
-      "select name, tier, is_active, poll_interval_minutes, config from public.data_sources where name in ('twitch', 'apisports') order by name",
+    const sources = await database.rows<{ name: string; tier: number; is_active: boolean; config: Record<string, unknown> }>(
+      "select name, tier, is_active, config from public.data_sources where name in ('twitch', 'apisports') order by name",
     );
     expect(sources.map((source) => [source.name, source.tier, source.is_active])).toEqual([
       ["apisports", 2, true],
       ["twitch", 2, true],
     ]);
-
-    // The hourly ingestion cron skips a source when the last poll was less than
-    // poll_interval_minutes ago. A run fires on the hour and the previous one
-    // lands a few seconds later, so the check sees 59 minutes: an interval that
-    // is an exact multiple of 60 always loses that race and the source polls
-    // half as often as its interval claims. 55 polls hourly; 175 polls every
-    // third hour, as intended for a weekly sport on a request budget; 60 or 180
-    // would silently halve both.
-    for (const source of sources) expect(source.poll_interval_minutes % 60, `${source.name} interval ${source.poll_interval_minutes}`).not.toBe(0);
 
     const metrics = Object.fromEntries(
       sources.flatMap((source) =>
