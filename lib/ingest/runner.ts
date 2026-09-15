@@ -1,5 +1,5 @@
 import { connectorRegistry, type ConnectorRegistry } from "@/lib/connectors/registry";
-import type { ConnectorContext, MetricReading, RawSignal, SnapshotStore } from "@/lib/connectors/types";
+import type { ConnectorContext, ExcludedItem, MetricReading, RawSignal, SnapshotStore } from "@/lib/connectors/types";
 import type { DataSource } from "@/types";
 import type { Json } from "@/types/database";
 
@@ -50,7 +50,7 @@ import { STORY_DEDUP_LOOKBACK_HOURS } from "./stories";
  */
 
 export interface IngestLogLine {
-  event: "run" | "source" | "poll" | "observation" | "signal" | "drop" | "collapse" | "upgrade";
+  event: "run" | "source" | "poll" | "observation" | "signal" | "drop" | "collapse" | "upgrade" | "exclude";
   [key: string]: unknown;
 }
 
@@ -86,6 +86,8 @@ export interface SourceRunSummary {
   blockedDropped: number;
   /** Items collapsed into a story already kept, in this run or inside the lookback. */
   duplicatesCollapsed: number;
+  /** Items refused as being about a different entity sharing the subject's name. */
+  excludedFiltered: number;
 }
 
 export interface IngestError {
@@ -114,6 +116,7 @@ export interface IngestSummary {
     errors: number;
     blockedDropped: number;
     duplicatesCollapsed: number;
+    excludedFiltered: number;
   };
   errors: IngestError[];
 }
@@ -209,6 +212,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
       observations: 0,
       blockedDropped: 0,
       duplicatesCollapsed: 0,
+      excludedFiltered: 0,
       startedAt: now,
       finishedAt: now,
     });
@@ -249,7 +253,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
       mappings = await store.listMappings(source.id);
     } catch (error) {
       errors.push({ source: source.name, message: errorMessage(error) });
-      sourcesRun.push({ name: source.name, people: 0, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 0, observations: 0, errors: 1, blockedDropped: 0, duplicatesCollapsed: 0 });
+      sourcesRun.push({ name: source.name, people: 0, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 0, observations: 0, errors: 1, blockedDropped: 0, duplicatesCollapsed: 0, excludedFiltered: 0 });
       continue;
     }
 
@@ -276,9 +280,10 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
       errors: 0,
       blockedDropped: 0,
       duplicatesCollapsed: 0,
+      excludedFiltered: 0,
     };
 
-    for (const { person, externalIdentifier } of mappings) {
+    for (const { person, externalIdentifier, config: personConfig } of mappings) {
       const pollStarted = Date.now();
       const pendingSnapshots: SnapshotRow[] = [];
       const snapshots: SnapshotStore = {
@@ -286,7 +291,19 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         record: (metricKey, value, recordedAt = now) =>
           pendingSnapshots.push({ personId: person.id, dataSourceId: source.id, metricKey, value, recordedAt }),
       };
-      const context: ConnectorContext = { source, config, snapshots, now, fetch: fetchWithTimeout, publishers };
+      // Items the connector refuses as being about somebody else. Queued here,
+      // counted and logged below, exactly as blocked domains are.
+      const excluded: ExcludedItem[] = [];
+      const context: ConnectorContext = {
+        source,
+        config,
+        snapshots,
+        now,
+        fetch: fetchWithTimeout,
+        publishers,
+        personConfig,
+        exclude: (item) => excluded.push(item),
+      };
       const poll: Omit<PollRow, "status" | "reason" | "latencyMs" | "finishedAt"> = {
         runId,
         dataSourceId: source.id,
@@ -296,6 +313,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         observations: 0,
         blockedDropped: 0,
         duplicatesCollapsed: 0,
+        excludedFiltered: 0,
         // Poll times are measured from the run's `now`, so a run with an
         // injected clock stays consistent with itself and reproducible.
         startedAt: new Date(now.getTime() + (Date.now() - wallClockStart)),
@@ -341,6 +359,11 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
             log({ event: "upgrade", run: runId, source: source.name, person: person.slug, signalId: collapse.upgrade.id, tier: collapse.upgrade.tier, from: collapse.into.kind === "stored" ? collapse.into.tier : null, headline: collapse.upgrade.headline, changed });
           }
         }
+        for (const item of excluded) {
+          log({ event: "exclude", run: runId, source: source.name, person: person.slug, reason: item.reason, term: item.term, headline: item.headline });
+        }
+        poll.excludedFiltered = excluded.length;
+        summary.excludedFiltered += excluded.length;
         poll.blockedDropped = admission.blocked.length;
         poll.duplicatesCollapsed = admission.collapsed.length;
         summary.blockedDropped += admission.blocked.length;
@@ -496,6 +519,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     errors: errors.length,
     blockedDropped: sourcesRun.reduce((sum, s) => sum + s.blockedDropped, 0),
     duplicatesCollapsed: sourcesRun.reduce((sum, s) => sum + s.duplicatesCollapsed, 0),
+    excludedFiltered: sourcesRun.reduce((sum, s) => sum + s.excludedFiltered, 0),
   };
   const summary: IngestSummary = {
     runId,
@@ -523,6 +547,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
       errors: totals.errors,
       blockedDropped: totals.blockedDropped,
       duplicatesCollapsed: totals.duplicatesCollapsed,
+      excludedFiltered: totals.excludedFiltered,
     });
   } catch (error) {
     summary.errors.push({ source: "run", message: `run log failed: ${errorMessage(error)}` });

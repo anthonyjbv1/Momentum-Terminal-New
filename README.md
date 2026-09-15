@@ -216,6 +216,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260915170500_phase10_twitch_apisports.sql` | Configures the existing `twitch` and `apisports` registry rows (metric declarations, poll intervals below the hour, active) and maps the already-seeded Kai Cenat and Patrick Mahomes to them plus curated RSS; seeds nineteen sports and streaming publisher domains |
 | `20260915172000_poll_interval_off_the_hour.sql` | `rss`, `youtube` and `youtube_comments` from 60 to 55 minutes: an interval that is an exact multiple of 60 always loses the hourly cron's `59 < 60` comparison, so all three had been polling every second hour |
 | `20260915181500_poll_interval_spotify.sql` | The same correction on the dormant `spotify` row, so a rebuild — or turning it back on — does not reintroduce it |
+| `20260915190000_entity_disambiguation.sql` | `person_data_sources.config` (per-subject rules for a source); `excluded_filtered` on `source_polls` and `ingest_runs`; `source_health.excluded_24h`; Drake's exclusion terms for the university, its athletics and two namesakes |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
 
@@ -995,6 +996,25 @@ The runner skips a source when `minutes since last poll < poll_interval_minutes`
 ### Credentials
 
 `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` (Helix app access token, Client Credentials — no user auth) and `APISPORTS_API_KEY`. Each connector's `available()` reports the missing variable by name, the runner marks that source inactive for the run with the reason on the poll row, and the run carries on: RSS for both subjects is unaffected, so their news baselines accumulate from day one whatever else is unset.
+
+## Entity disambiguation
+
+A person-scoped news feed searches for a NAME, and a name is not an identifier. The Drake feed returned
+
+> Michigan State Adds Non-Conference Game Against Drake
+
+which is Drake University's athletics programme, not the musician. This is worse than the junk-publisher problem Phase 8 solved: the outlet is legitimate, so the allowlist cannot catch it, and the item is a genuinely distinct story, so story dedup cannot either. It inflates `news_volume_24h` — a metric being baselined right now — and it hands the sentiment scorer text about a different entity, so a Drake University loss reads as bad news about the artist. It is structural for any subject who shares a name with another entity, which is most people.
+
+**Where the rules live.** `person_data_sources.config` — the per-SUBJECT half of a source's configuration, where `data_sources.config` is the per-SOURCE half. Which other Drake this is, is a fact about Drake and not about RSS. Adding a term is an update to one row.
+
+**Where filtering happens, and why both.**
+
+1. **At the query**, for Google News searches, which accept `-term` and `-"a phrase"`. What the feed never sends costs nothing to discard, and it leaves room in a fixed-size window for items that are actually about the subject. Anything that is not a single plain word is quoted: `-non-conference` would otherwise put a second minus inside the term.
+2. **Post-fetch**, over the headline and outlet, for everything the query misses and for feeds that are not Google News searches. This runs in `loadFeed`, ahead of the split into signals and the volume metric, because **both must see the same admitted set** — filtering only the signals would fix the Feed and quietly corrupt the baseline.
+
+**What it can and cannot do.** The production example is instructive: it carries neither "Drake University" nor "Bulldogs", and only `non-conference` gives it away. So exclusions have to cover the DISCOURSE the wrong entity lives in, not just its name. What no substring rule catches is an item naming neither — "Drake beats Bradley 70-65" would pass. `require_any` is the lever for that (an item must then carry at least one context term), deliberately left empty for every subject seeded so far: a legitimate story often carries none of the obvious context words, and refusing a real signal is worse than admitting a rare wrong one.
+
+**Visibility.** Each refusal is logged as `[ingest] {"event":"exclude","person":...,"term":...,"headline":...}` and counted onto `source_polls.excluded_filtered`, `ingest_runs.excluded_filtered` and `source_health.excluded_24h`, with an **Excluded · 24h** tile in the operator console — the same treatment blocked domains get. Over-filtering shows up as that count climbing while `signals_created` falls.
 
 ## Scope so far
 

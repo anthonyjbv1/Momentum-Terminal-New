@@ -45,7 +45,7 @@ describe("runIngestion", () => {
     expect(summary.sourcesRun).toEqual([]);
     expect(summary.sourcesSkipped).toEqual([]);
     expect(summary.errors).toEqual([]);
-    expect(summary.totals).toEqual({ sources: 0, people: 0, signalsCreated: 0, snapshotsRecorded: 0, observations: 0, errors: 0, blockedDropped: 0, duplicatesCollapsed: 0 });
+    expect(summary.totals).toEqual({ sources: 0, people: 0, signalsCreated: 0, snapshotsRecorded: 0, observations: 0, errors: 0, blockedDropped: 0, duplicatesCollapsed: 0, excludedFiltered: 0 });
     expect(summary).toMatchObject({ runId: store.runs[0].id, trigger: "manual", forced: false });
     expect(store.runs[0].result).toMatchObject({ sourcesRun: 0, errors: 0 });
     expect(store.signals).toHaveLength(0);
@@ -78,7 +78,7 @@ describe("runIngestion", () => {
     const store = createMemoryIngestStore({
       sources: [source],
       mappings: { "src-x": [{ person, externalIdentifier: "id" }] },
-      polls: [{ runId: "r0", dataSourceId: "src-x", personId: person.id, status: "ok", reason: null, latencyMs: 5, signalsCreated: 0, snapshotsRecorded: 0, observations: 0, blockedDropped: 0, duplicatesCollapsed: 0, startedAt: hour(-0.5), finishedAt: hour(-0.5) }],
+      polls: [{ runId: "r0", dataSourceId: "src-x", personId: person.id, status: "ok", reason: null, latencyMs: 5, signalsCreated: 0, snapshotsRecorded: 0, observations: 0, blockedDropped: 0, duplicatesCollapsed: 0, excludedFiltered: 0, startedAt: hour(-0.5), finishedAt: hour(-0.5) }],
     });
     const registry = buildRegistry([levelConnector("x", () => ({ followers: 100 }))]);
 
@@ -110,7 +110,7 @@ describe("runIngestion", () => {
 
     it("first run: a snapshot and a first-contact observation, no signal", async () => {
       const summary = await run(NOW);
-      expect(summary.sourcesRun).toEqual([{ name: "x", people: 1, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 1, observations: 1, errors: 0, blockedDropped: 0, duplicatesCollapsed: 0 }]);
+      expect(summary.sourcesRun).toEqual([{ name: "x", people: 1, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 1, observations: 1, errors: 0, blockedDropped: 0, duplicatesCollapsed: 0, excludedFiltered: 0 }]);
       expect(store.snapshots).toEqual([{ personId: person.id, dataSourceId: "src-x", metricKey: "followers", value: 1_000_000, recordedAt: NOW }]);
       expect(store.observations[0]).toMatchObject({ metricKey: "followers", outcome: "first_contact", value: 1_000_000, previous: null, signalId: null });
       expect(store.signals).toEqual([]);
@@ -384,7 +384,7 @@ describe("runIngestion", () => {
     const summary = await runIngestion({ store, now: NOW, registry: buildRegistry([failing]), force: true, log: quiet });
 
     expect(summary.errors).toEqual([{ source: "x", person: "drake", message: "boom" }]);
-    expect(summary.sourcesRun).toEqual([{ name: "x", people: 2, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 1, observations: 1, errors: 1, blockedDropped: 0, duplicatesCollapsed: 0 }]);
+    expect(summary.sourcesRun).toEqual([{ name: "x", people: 2, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 1, observations: 1, errors: 1, blockedDropped: 0, duplicatesCollapsed: 0, excludedFiltered: 0 }]);
     expect(store.polls.map((p) => [p.personId, p.status, p.reason])).toEqual([
       [drake.id, "error", "boom"],
       [person.id, "ok", null],
@@ -422,7 +422,7 @@ describe("runIngestion", () => {
 
       const summary = await runIngestion({ store, now: NOW, fetch, force: true, log: (line) => lines.push(line) });
 
-      expect(summary.sourcesRun).toEqual([{ name: "rss", people: 1, signalsCreated: 2, eventSignals: 2, metricSignals: 0, snapshotsRecorded: 1, observations: 1, errors: 0, blockedDropped: 1, duplicatesCollapsed: 1 }]);
+      expect(summary.sourcesRun).toEqual([{ name: "rss", people: 1, signalsCreated: 2, eventSignals: 2, metricSignals: 0, snapshotsRecorded: 1, observations: 1, errors: 0, blockedDropped: 1, duplicatesCollapsed: 1, excludedFiltered: 0 }]);
       expect(store.signals.map((s) => [s.headline, s.tier, s.rawPayload.publisher_domain, s.rawPayload.publisher_domain_from, s.rawPayload.publisher_status])).toEqual([
         ["MrBeast opens theme park in Kansas, first of its kind", 1, "billboard.com", "source", "known"],
         ["MrBeast sued over sweepstakes", 2, "complex.com", "source", "known"],
@@ -458,7 +458,7 @@ describe("runIngestion", () => {
 
       const summary = await runIngestion({ store, now: NOW, fetch, force: true, log: quiet });
 
-      expect(summary.sourcesRun).toEqual([{ name: "youtube", people: 1, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 5, observations: 5, errors: 0, blockedDropped: 0, duplicatesCollapsed: 0 }]);
+      expect(summary.sourcesRun).toEqual([{ name: "youtube", people: 1, signalsCreated: 0, eventSignals: 0, metricSignals: 0, snapshotsRecorded: 5, observations: 5, errors: 0, blockedDropped: 0, duplicatesCollapsed: 0, excludedFiltered: 0 }]);
       expect(store.snapshots.map((s) => [s.metricKey, s.value])).toEqual([
         ["subscriber_count", 516_000_000],
         ["view_count", 90_000_000_000],

@@ -16,7 +16,7 @@ const summary = (): IngestSummary => ({
   sourcesRun: [],
   sourcesSkipped: [],
   configProblems: [],
-  totals: { sources: 4, people: 5, signalsCreated: 7, snapshotsRecorded: 7, observations: 7, errors: 0, blockedDropped: 0, duplicatesCollapsed: 0 },
+  totals: { sources: 4, people: 5, signalsCreated: 7, snapshotsRecorded: 7, observations: 7, errors: 0, blockedDropped: 0, duplicatesCollapsed: 0, excludedFiltered: 0 },
   errors: [],
 });
 

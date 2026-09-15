@@ -167,3 +167,104 @@ describe("rssConnector", () => {
     await expect(rssConnector.fetchForPerson(person, "  ", context(fetch))).rejects.toThrow(/No feed configured/);
   });
 });
+
+describe("entity disambiguation", () => {
+  beforeEach(() => resetFeedCache());
+
+  /** Two real Drake stories and the Drake University one that reached production. */
+  const MIXED = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>"Drake" - Google News</title>
+    <item>
+      <title><![CDATA[Michigan State Adds Non-Conference Game Against Drake - Roundtable]]></title>
+      <link>https://news.google.com/rss/articles/uni</link>
+      <guid isPermaLink="false">uni-guid</guid>
+      <pubDate>Sat, 12 Sep 2026 10:30:00 GMT</pubDate>
+      <source url="https://roundtable.io">Roundtable</source>
+    </item>
+    <item>
+      <title><![CDATA[Drake Reveals the Only Gift He Wants for His 40th Birthday - Billboard]]></title>
+      <link>https://news.google.com/rss/articles/gift</link>
+      <guid isPermaLink="false">gift-guid</guid>
+      <pubDate>Sat, 12 Sep 2026 09:00:00 GMT</pubDate>
+      <source url="https://billboard.com">Billboard</source>
+    </item>
+    <item>
+      <title><![CDATA[Drake Bell speaks out again - Example Times]]></title>
+      <link>https://news.google.com/rss/articles/bell</link>
+      <guid isPermaLink="false">bell-guid</guid>
+      <pubDate>Sat, 12 Sep 2026 08:00:00 GMT</pubDate>
+      <source url="https://example.com">Example Times</source>
+    </item>
+  </channel>
+</rss>`;
+
+  const drakeRules = { disambiguation: { exclude_terms: ["drake university", "non-conference", "drake bell"], require_any: [] } };
+
+  /** The same context the connector normally gets, with no per-subject rules. */
+  const plainContext = (fetch: typeof globalThis.fetch) => ({
+    source: makeSource({ name: "rss" }),
+    config: {} as Record<string, never>,
+    snapshots: { latest: async () => null, record: () => undefined },
+    now: NOW,
+    fetch,
+  });
+
+  const disambiguatingContext = (fetch: typeof globalThis.fetch, excluded: unknown[]) => ({
+    source: makeSource({ name: "rss" }),
+    config: {} as Record<string, never>,
+    snapshots: { latest: async () => null, record: () => undefined },
+    now: NOW,
+    fetch,
+    personConfig: drakeRules,
+    exclude: (item: unknown) => excluded.push(item),
+  });
+
+  it("refuses the other entity's items and keeps the subject's", async () => {
+    const excluded: unknown[] = [];
+    const fetch = fakeFetchRoutes([{ match: "news.google.com/rss/search", body: MIXED }]);
+    const signals = await rssConnector.fetchForPerson(person, feedUrlFor('"Drake"'), disambiguatingContext(fetch, excluded));
+    expect(signals.map((s) => s.headline)).toEqual(["Drake Reveals the Only Gift He Wants for His 40th Birthday"]);
+    expect(excluded).toEqual([
+      { headline: "Michigan State Adds Non-Conference Game Against Drake - Roundtable", reason: "excluded_term", term: "non-conference" },
+      { headline: "Drake Bell speaks out again - Example Times", reason: "excluded_term", term: "drake bell" },
+    ]);
+  });
+
+  it("keeps the refused items out of news_volume_24h, not only out of the Feed", async () => {
+    // The whole point: a phantom unit of volume corrupts a metric that is being
+    // baselined, so filtering the signals alone would fix the Feed and quietly
+    // poison the baseline.
+    const fetch = fakeFetchRoutes([{ match: "news.google.com/rss/search", body: MIXED }]);
+    const withRules = await rssConnector.fetchMetrics!(person, feedUrlFor('"Drake"'), disambiguatingContext(fetch, []));
+    resetFeedCache();
+    const plain = await rssConnector.fetchMetrics!(person, feedUrlFor('"Drake"'), plainContext(fakeFetchRoutes([{ match: "news.google.com/rss/search", body: MIXED }])));
+    expect(plain[0].value).toBe(3);
+    expect(withRules[0].value).toBe(1);
+  });
+
+  it("pushes the exclusions into the query, and reports each refusal once per poll", async () => {
+    const excluded: unknown[] = [];
+    const fetch = fakeFetchRoutes([{ match: "news.google.com/rss/search", body: MIXED }]);
+    const ctx = disambiguatingContext(fetch, excluded);
+    await rssConnector.fetchForPerson(person, feedUrlFor('"Drake"'), ctx);
+    await rssConnector.fetchMetrics!(person, feedUrlFor('"Drake"'), ctx);
+    expect(fetch.calls).toHaveLength(1);
+    // Read the parsed parameter rather than the raw URL: URLSearchParams
+    // percent-encodes the quotes and writes spaces as "+".
+    const query = new URL(fetch.calls[0]).searchParams.get("q") ?? "";
+    expect(query).toContain('-"drake university"');
+    expect(query).toContain('-"non-conference"');
+    // Two refusals, reported once — not once per caller.
+    expect(excluded).toHaveLength(2);
+  });
+
+  it("is inert for a subject with no rules configured", async () => {
+    const fetch = fakeFetchRoutes([{ match: "news.google.com/rss/search", body: MIXED }]);
+    const signals = await rssConnector.fetchForPerson(person, feedUrlFor('"Drake"'), plainContext(fetch));
+    expect(signals).toHaveLength(3);
+    // The feed URL is untouched — no negative terms appended at all.
+    expect(fetch.calls[0]).toBe(feedUrlFor('"Drake"'));
+  });
+});

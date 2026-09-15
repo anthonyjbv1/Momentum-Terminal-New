@@ -18,6 +18,8 @@ import type { PublisherDomainRow } from "./publishers";
 export interface PersonMapping {
   person: Person;
   externalIdentifier: string;
+  /** person_data_sources.config: the per-subject half of a source's configuration. Absent is the same as none. */
+  config?: Record<string, Json | undefined>;
 }
 
 export interface SignalRow {
@@ -86,6 +88,8 @@ export interface RunResult {
   blockedDropped: number;
   /** Items collapsed into a story already kept, in the run or inside the lookback. */
   duplicatesCollapsed: number;
+  /** Items refused as being about a different entity that shares the subject's name. */
+  excludedFiltered: number;
 }
 
 export type PollStatus = "ok" | "error" | "skipped";
@@ -103,6 +107,7 @@ export interface PollRow {
   observations: number;
   blockedDropped: number;
   duplicatesCollapsed: number;
+  excludedFiltered: number;
   startedAt: Date;
   finishedAt: Date;
 }
@@ -182,13 +187,17 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
     async listMappings(dataSourceId) {
       const { data, error } = await client
         .from("person_data_sources")
-        .select("external_identifier, person:people!inner(*)")
+        .select("external_identifier, config, person:people!inner(*)")
         .eq("data_source_id", dataSourceId)
         .eq("is_active", true)
         .eq("person.is_active", true)
         .order("external_identifier");
       if (error) throw new Error(`Failed to load person mappings: ${error.message}`);
-      return data.map((row) => ({ person: row.person, externalIdentifier: row.external_identifier }));
+      return data.map((row) => ({
+        person: row.person,
+        externalIdentifier: row.external_identifier,
+        config: (row.config ?? {}) as Record<string, Json | undefined>,
+      }));
     },
 
     async latestSnapshot(personId, dataSourceId, metricKey) {
@@ -335,6 +344,7 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
           errors: result.errors,
           blocked_dropped: result.blockedDropped,
           duplicates_collapsed: result.duplicatesCollapsed,
+          excluded_filtered: result.excludedFiltered,
         })
         .eq("id", runId);
       if (error) throw new Error(`Failed to close the ingest run: ${error.message}`);
@@ -353,6 +363,7 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
         observations: poll.observations,
         blocked_dropped: poll.blockedDropped,
         duplicates_collapsed: poll.duplicatesCollapsed,
+        excluded_filtered: poll.excludedFiltered,
         started_at: poll.startedAt.toISOString(),
         finished_at: poll.finishedAt.toISOString(),
       });

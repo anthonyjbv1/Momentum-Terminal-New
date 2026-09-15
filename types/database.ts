@@ -134,6 +134,7 @@ export type Database = {
           created_at: string
           duplicates_collapsed: number
           errors: number
+          excluded_filtered: number
           finished_at: string | null
           forced: boolean
           id: string
@@ -151,6 +152,7 @@ export type Database = {
           created_at?: string
           duplicates_collapsed?: number
           errors?: number
+          excluded_filtered?: number
           finished_at?: string | null
           forced?: boolean
           id?: string
@@ -168,6 +170,7 @@ export type Database = {
           created_at?: string
           duplicates_collapsed?: number
           errors?: number
+          excluded_filtered?: number
           finished_at?: string | null
           forced?: boolean
           id?: string
@@ -453,6 +456,7 @@ export type Database = {
       }
       person_data_sources: {
         Row: {
+          config: Json | null
           data_source_id: string
           external_identifier: string
           id: string
@@ -460,6 +464,7 @@ export type Database = {
           person_id: string
         }
         Insert: {
+          config?: Json | null
           data_source_id: string
           external_identifier: string
           id?: string
@@ -467,6 +472,7 @@ export type Database = {
           person_id: string
         }
         Update: {
+          config?: Json | null
           data_source_id?: string
           external_identifier?: string
           id?: string
@@ -1119,6 +1125,7 @@ export type Database = {
           created_at: string
           data_source_id: string
           duplicates_collapsed: number
+          excluded_filtered: number
           finished_at: string
           id: string
           latency_ms: number | null
@@ -1136,6 +1143,7 @@ export type Database = {
           created_at?: string
           data_source_id: string
           duplicates_collapsed?: number
+          excluded_filtered?: number
           finished_at: string
           id?: string
           latency_ms?: number | null
@@ -1153,6 +1161,7 @@ export type Database = {
           created_at?: string
           data_source_id?: string
           duplicates_collapsed?: number
+          excluded_filtered?: number
           finished_at?: string
           id?: string
           latency_ms?: number | null
@@ -1444,6 +1453,7 @@ export type Database = {
           display_name: string | null
           error_rate_24h: number | null
           errors_24h: number | null
+          excluded_24h: number | null
           is_active: boolean | null
           last_error: string | null
           last_error_at: string | null

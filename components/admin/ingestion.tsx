@@ -24,7 +24,7 @@ const OUTCOME_TONE: Record<string, Tone> = {
 const OUTCOME_NOTE: Record<string, string> = {
   emitted: "outside the band and sufficient: this metric is producing signals",
   inside_band: "baseline is ready; the latest reading was ordinary",
-  insufficient_baseline: "still accumulating — not enough samples or not enough span",
+  insufficient_baseline: "still accumulating: fewer observations in the window than the declared minimum",
   first_contact: "first snapshot recorded; there is no prior reading to compare against",
   no_config: "polled but not declared as a metric with a baseline",
 };
@@ -65,6 +65,11 @@ export function IngestionSection({ report, now }: { report: IngestionReport; now
         <Stat label="Signals · 24h" value={num(report.sources.reduce((total, source) => total + source.signals24h, 0))} />
         <Stat label="Blocked · 24h" value={num(report.sources.reduce((total, source) => total + source.blocked24h, 0))} sub="publisher not allowed" />
         <Stat label="Collapsed · 24h" value={num(report.sources.reduce((total, source) => total + source.collapsed24h, 0))} sub="duplicate stories" />
+        <Stat
+          label="Excluded · 24h"
+          value={num(report.sources.reduce((total, source) => total + source.excluded24h, 0))}
+          sub="a different entity, same name"
+        />
         <Stat
           label="Metrics emitting"
           value={`${byOutcome.get("emitted") ?? 0} / ${report.baselines.length}`}
@@ -175,8 +180,9 @@ export function IngestionSection({ report, now }: { report: IngestionReport; now
           </Scroll>
         )}
         <p className="adm-note">
-          A metric emits only once it has both: at least its minimum samples, and a history spanning its baseline window. Counts and configuration only — no
-          metric level is read or shown here.
+          Emission is gated by SAMPLES alone: a metric is eligible once it has at least its minimum number of observations. The window does not have to be
+          filled — it decides which history counts toward that minimum, and every window here is far wider than the samples needed, so the samples column is
+          the one to watch. Counts and configuration only; no metric level is read or shown here.
         </p>
 
         <div className="adm-cols" style={{ marginTop: 16 }}>

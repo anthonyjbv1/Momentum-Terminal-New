@@ -90,6 +90,30 @@ export interface ConnectorContext {
    * domains). The runner supplies it; absent means every domain is unknown.
    */
   publishers?: PublisherPolicy;
+  /**
+   * person_data_sources.config for THIS (person, source) pair ({} when null):
+   * the per-subject half of a source's configuration, where `config` above is
+   * the per-source half. Entity disambiguation lives here, because "which other
+   * Drake is this" is a fact about Drake and not about RSS.
+   */
+  personConfig?: Record<string, Json | undefined>;
+  /**
+   * Report an item the connector refused before it became a signal — one about
+   * a different entity that happens to share the subject's name. The runner
+   * counts these onto the poll row and logs each, so over-filtering is visible
+   * rather than silent. Symmetric with `snapshots.record`: the connector
+   * queues, the runner accounts.
+   */
+  exclude?(item: ExcludedItem): void;
+}
+
+/** An item a connector refused as being about somebody else. */
+export interface ExcludedItem {
+  /** The headline as the feed carried it, so an over-filtered item is recognisable in the log. */
+  headline: string;
+  reason: "excluded_term" | "missing_context";
+  /** The term that matched; null when the item simply carried none of the required context. */
+  term: string | null;
 }
 
 /**

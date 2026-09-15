@@ -195,6 +195,7 @@ export interface SourceHealthRow {
   signals24h: number;
   blocked24h: number;
   collapsed24h: number;
+  excluded24h: number;
 }
 
 export interface BaselineRow {
@@ -257,6 +258,7 @@ export async function readIngestion(): Promise<IngestionReport> {
       signals24h: Number(row.signals_24h ?? 0),
       blocked24h: Number(row.blocked_24h ?? 0),
       collapsed24h: Number(row.collapsed_24h ?? 0),
+      excluded24h: Number(row.excluded_24h ?? 0),
     })),
     runs: (runs.data ?? []).map((run) => ({
       id: run.id,

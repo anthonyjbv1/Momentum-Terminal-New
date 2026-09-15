@@ -1,5 +1,6 @@
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
+import { applyQueryExclusions, excludeReason, hasRules, readDisambiguation, type ExclusionVerdict } from "@/lib/ingest/disambiguation";
 import { publisherDomainOf, type PublisherPolicy } from "@/lib/ingest/publishers";
 import { collapseStories, personNames, storyTokens, stripOutletSuffix } from "@/lib/ingest/stories";
 import type { Json } from "@/types/database";
@@ -238,8 +239,25 @@ export function resetFeedCache(): void {
   feedCache.clear();
 }
 
+/**
+ * Fetches, parses and DISAMBIGUATES the feed, once per poll.
+ *
+ * The filtering lives here, ahead of the split into signals and the volume
+ * metric, because both must see the same admitted set. An item about Drake
+ * University is not only a bad signal; it is also a phantom unit of
+ * news_volume_24h, and that metric is being baselined right now. Filtering in
+ * only one of the two paths would fix the Feed and quietly corrupt the
+ * baseline.
+ *
+ * Refusals are reported through `context.exclude` on the fetch that did the
+ * work; the second caller reads the cache and reports nothing, so each refused
+ * item is counted once per poll rather than twice.
+ */
 async function loadFeed(identifier: string, context: ConnectorContext): Promise<ReturnType<typeof parseFeed>> {
-  const url = feedUrlFor(identifier);
+  const rules = readDisambiguation(context.personConfig);
+  // Query level first: what the feed never sends costs nothing to discard, and
+  // it leaves room in a fixed-size window for items that are about the subject.
+  const url = applyQueryExclusions(feedUrlFor(identifier), rules);
   const key = `${url}|${context.now.toISOString()}`;
   const cached = feedCache.get(key);
   if (cached && Date.now() - cached.at < FEED_CACHE_TTL_MS) return cached.feed;
@@ -249,8 +267,28 @@ async function loadFeed(identifier: string, context: ConnectorContext): Promise<
   if (!response.ok) {
     throw new ConnectorError(`Feed responded ${response.status}`, { status: response.status, retryable: response.status === 429 || response.status >= 500 });
   }
-  const feed = parseFeed(await response.text());
+  const parsed = parseFeed(await response.text());
+
+  // Post-fetch, over the title as the feed wrote it — which on Google News
+  // still carries the outlet suffix, so an outlet's own name ("Drake
+  // Athletics") counts as evidence too.
+  const items: FeedItem[] = [];
+  const refused: Array<{ item: FeedItem; verdict: ExclusionVerdict }> = [];
+  if (hasRules(rules)) {
+    for (const item of parsed.items) {
+      const verdict = excludeReason(`${item.title} ${item.outlet ?? ""}`, rules);
+      if (verdict) refused.push({ item, verdict });
+      else items.push(item);
+    }
+  } else {
+    items.push(...parsed.items);
+  }
+  const feed = { title: parsed.title, items };
+
   feedCache.set(key, { at: Date.now(), feed });
+  for (const { item, verdict } of refused) {
+    context.exclude?.({ headline: item.title, reason: verdict.reason, term: verdict.term });
+  }
   return feed;
 }
 
