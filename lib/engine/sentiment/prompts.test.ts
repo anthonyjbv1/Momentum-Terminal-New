@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PersonMemory } from "@/lib/engine/memory/types";
 
-import { PAYLOAD_KEYS, buildSentimentUserPrompt } from "./prompts";
+import { PAYLOAD_KEYS, SENTIMENT_SYSTEM_PROMPT, buildPersonBlock, buildSentimentUserPrompt } from "./prompts";
 import type { SentimentInput } from "./types";
 
 /**
@@ -71,5 +71,46 @@ describe("the sentiment prompt", () => {
     expect(prompt).toContain('"direction":1');
     expect(prompt).not.toContain("polarity");
     expect(prompt).not.toContain("samples");
+  });
+});
+
+describe("the person block and today's date (Phase 12+)", () => {
+  const today = new Date("2026-09-16T12:00:00.000Z");
+  const withEvents: PersonMemory = {
+    ...memory,
+    recentContext: {
+      summary: "Earlier: Dramatic scandal (2026-06-12, -3.50).",
+      notable_events: [
+        { at: "2026-09-15T08:00:00Z", headline: "Record-breaking video", label: "positive", impact: 2.1, anomaly: "anomalous" },
+        { at: "2026-09-01T08:00:00Z", headline: "Weekly upload", label: "positive", impact: 0.6 },
+        { at: "2026-06-12T08:00:00Z", headline: "Dramatic scandal", label: "negative", impact: -3.5 },
+      ],
+    },
+  };
+
+  it("opens with today's date and shows each recent event with its age; an event past the horizon is not shown verbatim", () => {
+    const block = buildPersonBlock({ ...person, memory: withEvents, today, eventMaxAgeDays: 30 });
+    expect(block).toContain("Today: 2026-09-16");
+    expect(block).toContain("Recent notable events (last 30 days):");
+    expect(block).toContain("  - 2026-09-15 (1 days ago): Record-breaking video (positive, +2.10)");
+    expect(block).toContain("  - 2026-09-01 (15 days ago): Weekly upload (positive, +0.60)");
+    expect(block).not.toContain("2026-06-12 (");
+    // The scandal is still known — as history, in the summary, with its date.
+    expect(block).toContain("Recent context: Earlier: Dramatic scandal (2026-06-12, -3.50).");
+    // The system prompt tells the model what to do with the dates.
+    expect(SENTIMENT_SYSTEM_PROMPT).toContain("today's date");
+  });
+
+  it("a person whose every event has expired still gets a valid block: no events line, the summary, today's date", () => {
+    const expiredOnly: PersonMemory = { ...withEvents, recentContext: { ...withEvents.recentContext, notable_events: [withEvents.recentContext.notable_events[2]] } };
+    const block = buildPersonBlock({ ...person, memory: expiredOnly, today, eventMaxAgeDays: 30 });
+    expect(block).toContain("Today: 2026-09-16");
+    expect(block).not.toContain("Recent notable events");
+    expect(block).toContain("Recent context: Earlier: Dramatic scandal");
+    expect(block.split("\n").every((line) => line.trim().length > 0)).toBe(true);
+    // Without a date (tooling), the block keeps the old shape and hides nothing.
+    const undated = buildPersonBlock({ ...person, memory: withEvents });
+    expect(undated).not.toContain("Today:");
+    expect(undated).toContain("  - 2026-06-12: Dramatic scandal (negative, -3.50)");
   });
 });

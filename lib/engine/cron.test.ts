@@ -29,6 +29,7 @@ function tickResult(tickNumber: number, overrides: Partial<FullTickResult> = {})
       backlogBefore: 5,
       loaded: 5,
       selected: 3,
+      personOrder: ["drake", "mrbeast", "kai-cenat"],
       attempted: 2,
       llmScored: 1,
       fallbacks: 1,
@@ -51,7 +52,7 @@ function tickResult(tickNumber: number, overrides: Partial<FullTickResult> = {})
     ],
     deferred: [{ id: "c", personSlug: "kai-cenat", reason: "call_budget", detail: "per-tick call budget of 4 spent" }],
     scorer: "llm",
-    postTick: { narratives: 1, memoryUpdates: 1, memoryLlmSummaries: 0, memorySummariesDeferred: 0, errors: [] },
+    postTick: { narratives: 1, memoryUpdates: 1, memoryLlmSummaries: 0, memorySummariesDeferred: 0, memoryEventsExpired: 0, errors: [] },
     ...overrides,
   };
 }

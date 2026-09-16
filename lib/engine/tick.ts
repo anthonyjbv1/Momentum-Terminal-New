@@ -97,7 +97,10 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
   // they cost no call, contribute nothing, and are processed so they do not
   // linger. A stale backlog drains in one tick instead of moving a score.
   const expired = (signal: EngineSignal) => isExpiredSignal(signal, startedAt, config.signals);
-  const selection = selectTickSignals(context.signals, config.tick, (signal) => isFreeSignal(signal) || expired(signal));
+  const selection = selectTickSignals(context.signals, config.tick, {
+    isFree: (signal) => isFreeSignal(signal) || expired(signal),
+    lastServedAt: context.lastServedAtByPerson,
+  });
 
   // 3. Sentiment -------------------------------------------------------------
   // Routed by what the signal IS, not where it came from: a metric signal
@@ -275,6 +278,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     backlogBefore: context.backlog,
     loaded: context.signals.length,
     selected: selection.selected.length,
+    personOrder: selection.personOrder.map((id) => slugById.get(id) ?? id),
     attempted: llmScored + fallbacks,
     llmScored,
     fallbacks,

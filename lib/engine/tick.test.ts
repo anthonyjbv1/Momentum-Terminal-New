@@ -246,14 +246,15 @@ describe("Engine tick — the tick that always commits", () => {
     expect(store.processedSignals).toHaveLength(36);
     expect(store.signals.filter((s) => s.processed)).toHaveLength(36);
     expect(store.signals.filter((s) => !s.processed)).toHaveLength(282 - 36);
-    // The twelve OLDEST of each person, so the backlog drains in order.
-    expect(store.signals.filter((s) => s.processed && s.personId === "p-mrbeast").map((s) => s.id)).toEqual(signals.slice(0, 12).map((s) => s.id));
+    // The twelve NEWEST of each person (higher index = newer), so a call is spent where it moves a score.
+    expect(store.signals.filter((s) => s.processed && s.personId === "p-mrbeast").map((s) => s.id).sort()).toEqual(signals.slice(133, 145).map((s) => s.id).sort());
 
     // The summary says exactly what happened and what is left.
     expect(summary.scoring).toEqual({
       backlogBefore: 282,
       loaded: 282,
       selected: 36,
+      personOrder: ["kendrick-lamar", "drake", "mrbeast"], // nobody served yet: freshest waiting signal first
       attempted: 36,
       llmScored: 36,
       fallbacks: 0,
@@ -277,39 +278,80 @@ describe("Engine tick — the tick that always commits", () => {
       expect(Math.abs(p.forces.signals ?? 0)).toBeLessThanOrEqual(CONFIG.signals.maxAbsImpactPerTick);
     }
 
-    // The next tick takes the next chunk of each person: the backlog drains across ticks.
+    // The next tick takes the next-newest chunk of each person: the backlog drains across ticks.
     const second = await runEngineTick({ store, scorer, now: new Date(NOW.getTime() + 30_000) });
     expect(second.tickNumber).toBe(2);
     expect(second.scoring).toMatchObject({ backlogBefore: 246, selected: 36, processed: 36, backlogAfter: 210, partial: true });
-    expect(store.signals.filter((s) => s.processed && s.personId === "p-mrbeast").map((s) => s.id)).toEqual(signals.slice(0, 24).map((s) => s.id));
+    expect(store.signals.filter((s) => s.processed && s.personId === "p-mrbeast").map((s) => s.id).sort()).toEqual(signals.slice(121, 145).map((s) => s.id).sort());
+  });
+
+  it("THE ROTATION: a person with a steady stream of fresh signals cannot crowd out a person whose newest signal is hours old", async () => {
+    // Nine people: eight get a brand-new signal every tick, one has a single three-hour-old signal. Four calls per tick.
+    const streamers = Array.from({ length: 8 }, (_, i) => makePerson({ id: `p-stream-${i}`, slug: `streamer-${i}`, display_name: `Streamer ${i}` }));
+    const quiet = makePerson({ id: "p-quiet", slug: "quiet", display_name: "Quiet" });
+    const fresh = (personId: string, tick: number, at: Date): EngineSignal => ({ id: `${personId}-t${tick}`, personId, headline: `${personId} wins record award`, rawPayload: { kind: "article" }, sourceName: "rss", sourceTier: 2, occurredAt: at, createdAt: at });
+    const store = createMemoryEngineStore({
+      people: [...streamers, quiet],
+      signals: [...streamers.map((p) => fresh(p.id, 1, NOW)), { ...fresh("p-quiet", 1, new Date(NOW.getTime() - 3 * 3_600_000)), id: "quiet-only" }],
+    });
+    const { scorer } = llmScorer();
+    const sequence: string[] = [];
+    for (let tick = 1; tick <= 3; tick += 1) {
+      const now = new Date(NOW.getTime() + (tick - 1) * 30_000);
+      if (tick > 1) for (const p of streamers) store.signals.push(fresh(p.id, tick, now));
+      const summary = await runEngineTick({ store, scorer, now });
+      sequence.push(...summary.scoring.personOrder.slice(0, CONFIG.llm.callBudgetPerTick));
+      // Four calls a tick; everything past the budget was deferred, never rules-scored, never dropped.
+      expect(summary.scoring.llmCalls).toBe(CONFIG.llm.callBudgetPerTick);
+      expect(summary.scoring.fallbacks).toBe(0);
+      expect(summary.scoring.attempted + summary.scoring.deferred).toBe(summary.scoring.selected);
+      expect(summary.deferred.every((d) => d.reason === "call_budget")).toBe(true);
+    }
+    // Nine people, four slots per tick: the first nine servings are nine different people, the quiet one at slot nine
+    // (first in tick 3), and only then does anyone get a second turn, starting with the earliest served.
+    expect(new Set(sequence.slice(0, 9)).size).toBe(9);
+    expect(sequence[8]).toBe("quiet");
+    expect(sequence.slice(9)).toEqual(["streamer-0", "streamer-1", "streamer-2"]);
+    expect(store.signals.find((s) => s.id === "quiet-only")?.processed).toBe(true);
+    // One chunk per person per tick held throughout: never more people served in a tick than the budget allows,
+    // and never more than one chunk of a person's signals.
+    const personOf = (id: string) => (id === "quiet-only" ? "p-quiet" : id.replace(/-t\d+$/, ""));
+    for (const t of store.ticks) {
+      const perPerson = new Map<string, number>();
+      for (const s of t.signals) perPerson.set(personOf(s.id), (perPerson.get(personOf(s.id)) ?? 0) + 1);
+      expect(perPerson.size).toBeLessThanOrEqual(CONFIG.llm.callBudgetPerTick);
+      expect(Math.max(...perPerson.values())).toBeLessThanOrEqual(CONFIG.llm.maxSignalsPerCall);
+    }
   });
 
   it("DEFERRED stays processed = false; FAILED is processed with a rules score; the two paths are distinct", async () => {
     const store = createMemoryEngineStore(seed({ signals: backlog() }));
-    // MrBeast's call fails; the budget of 2 lets Drake through and defers Kendrick.
-    const { scorer, complete, usageLogger } = llmScorer({ failFor: (prefix) => prefix === "mb", callBudget: 2 });
+    // Nobody has been served, so the freshest waiting signal orders the people: Kendrick, Drake, MrBeast.
+    // Kendrick's call fails; the budget of 2 lets Drake through and defers MrBeast.
+    const { scorer, complete, usageLogger } = llmScorer({ failFor: (prefix) => prefix === "kl", callBudget: 2 });
 
     const summary = await runEngineTick({ store, scorer, now: NOW, config: withEngineConfig({ llm: { callBudgetPerTick: 2 } }) });
 
     expect(store.ticks).toHaveLength(1);
     expect(complete).toHaveBeenCalledTimes(2);
+    expect(summary.scoring.personOrder).toEqual(["kendrick-lamar", "drake", "mrbeast"]);
 
     // FAILED → rules-fallback, processed.
-    const mrbeast = summary.signals.filter((s) => s.personSlug === "mrbeast");
-    expect(mrbeast).toHaveLength(12);
-    expect(mrbeast.every((s) => s.scorer === "rules-fallback")).toBe(true);
-    expect(mrbeast[0].rationale).toContain("fallback: LLM call failed (timeout: timed out)");
-    expect(store.signals.filter((s) => s.personId === "p-mrbeast" && s.processed)).toHaveLength(12);
+    const kendrick = summary.signals.filter((s) => s.personSlug === "kendrick-lamar");
+    expect(kendrick).toHaveLength(12);
+    expect(kendrick.every((s) => s.scorer === "rules-fallback")).toBe(true);
+    expect(kendrick[0].rationale).toContain("fallback: LLM call failed (timeout: timed out)");
+    expect(store.signals.filter((s) => s.personId === "p-kendrick" && s.processed)).toHaveLength(12);
 
     // Scored → llm, processed.
     expect(summary.signals.filter((s) => s.personSlug === "drake" && s.scorer === "llm")).toHaveLength(12);
 
     // DEFERRED → not in the summary's signals, not in the commit, still unprocessed.
-    expect(summary.signals.some((s) => s.personSlug === "kendrick-lamar")).toBe(false);
+    expect(summary.signals.some((s) => s.personSlug === "mrbeast")).toBe(false);
     expect(summary.deferred).toHaveLength(12);
-    expect(summary.deferred.every((d) => d.personSlug === "kendrick-lamar" && d.reason === "call_budget")).toBe(true);
-    expect(store.signals.filter((s) => s.personId === "p-kendrick" && s.processed)).toHaveLength(0);
-    expect(store.ticks[0].signals.some((s) => s.id.startsWith("kl-"))).toBe(false);
+    expect(summary.deferred.every((d) => d.personSlug === "mrbeast" && d.reason === "call_budget")).toBe(true);
+    expect(store.signals.filter((s) => s.personId === "p-mrbeast" && s.processed)).toHaveLength(0);
+    expect(store.ticks[0].signals.some((s) => s.id.startsWith("mb-"))).toBe(false);
 
     expect(summary.scoring).toMatchObject({ selected: 36, attempted: 24, llmScored: 12, fallbacks: 12, deferred: 12, deferredByReason: { call_budget: 12 }, llmCalls: 2, processed: 24, backlogAfter: 258, partial: true });
     expect(summary.signalsProcessed).toBe(24);

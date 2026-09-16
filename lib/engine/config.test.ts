@@ -71,6 +71,13 @@ describe("Phase 12 invariants", () => {
     expect(gravity).toEqual({ lambdaPerHour: 0.35 });
     expect(Object.keys(DEFAULT_ENGINE_CONFIG).filter((key) => /decay|freshness|age/i.test(key))).toEqual([]);
   });
+
+  it("THREE CLOCKS: memory event expiry is its own constant, much slower than signal freshness, and neither is Gravity", () => {
+    const { memory } = DEFAULT_ENGINE_CONFIG;
+    expect(memory.maxEventAgeDays).toBe(30);
+    expect(memory.maxEventAgeDays * 24).toBeGreaterThan(signals.freshnessMaxAgeHours * 4);
+    expect(memory.maxRecentEvents).toBe(8); // the size cap is still there, beside the clock
+  });
 });
 
 /**

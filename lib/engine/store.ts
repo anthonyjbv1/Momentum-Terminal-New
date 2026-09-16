@@ -1,4 +1,5 @@
 import type { EngineConfig } from "@/lib/engine/config";
+import { isFreeSignal } from "@/lib/engine/selection";
 import type {
   EngineSignal,
   SignalActivity,
@@ -25,6 +26,24 @@ function sumBy<T>(rows: T[], key: (row: T) => string, value: (row: T) => number)
   const totals = new Map<string, number>();
   for (const row of rows) totals.set(key(row), (totals.get(key(row)) ?? 0) + value(row));
   return totals;
+}
+
+/**
+ * When each person's EVENT signals were last processed, from the processed
+ * rows in the activity window. Metric and baseline signals are excluded:
+ * they are processed on every tick for free and would make everyone look
+ * recently served. Expired event signals (processed at zero cost) do count,
+ * which is a mild imprecision after an outage and nothing in steady state.
+ */
+export function lastServedByPerson(rows: Array<{ person_id: string; processed_at: string | null; kind: string | null }>): Map<string, Date> {
+  const latest = new Map<string, Date>();
+  for (const row of rows) {
+    if (!row.processed_at || row.kind === "metric" || row.kind === "baseline") continue;
+    const at = new Date(row.processed_at);
+    const current = latest.get(row.person_id);
+    if (!current || at > current) latest.set(row.person_id, at);
+  }
+  return latest;
 }
 
 export function aggregateSignalActivity(rows: Array<{ person_id: string; sentiment_confidence: number | null }>): Map<string, SignalActivity> {
@@ -58,13 +77,14 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
           .from("signals")
           .select("id, person_id, headline, raw_payload, occurred_at, created_at, tier, source:data_sources!inner(name, tier)")
           .eq("processed", false)
-          // Oldest first, then id: one ingestion run stamps a whole batch with
-          // the same created_at, and the cap must cut it the same way every time.
-          .order("created_at")
+          // Newest first, then id: the ceiling's window must hold the signals
+          // freshness weights highest, and a batch stamped with one timestamp
+          // must be cut the same way every time.
+          .order("occurred_at", { ascending: false })
           .order("id")
           .limit(config.tick.loadCeiling),
         client.from("positions").select("person_id, amount_cents").eq("is_open", true),
-        client.from("signals").select("person_id, sentiment_confidence").eq("processed", true).gte("processed_at", depthSince),
+        client.from("signals").select("person_id, sentiment_confidence, processed_at, kind:raw_payload->>kind").eq("processed", true).gte("processed_at", depthSince),
         client.from("trade_events").select("person_id, side, amount_cents, created_at").gte("created_at", tradesSince),
         client.from("inverse_pairs").select("*"),
         client.from("engine_ticks").select("tick_number").order("tick_number", { ascending: false }).limit(1).maybeSingle(),
@@ -111,6 +131,7 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         people: people.data ?? [],
         signals: engineSignals,
         backlog: backlogCount.count ?? engineSignals.length,
+        lastServedAtByPerson: lastServedByPerson((activity.data ?? []) as Array<{ person_id: string; processed_at: string | null; kind: string | null }>),
         openCapitalCentsByPerson: sumBy(positions.data ?? [], (p) => p.person_id, (p) => Number(p.amount_cents)),
         signalActivityByPerson: aggregateSignalActivity(activity.data ?? []),
         tradeEvents,
@@ -194,12 +215,17 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
       const activeIds = new Set(people.filter((p) => p.is_active).map((p) => p.id));
       const unprocessed = signals
         .filter((s) => !s.processed && activeIds.has(s.personId))
-        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
+        .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime() || a.id.localeCompare(b.id));
       return {
         now,
         people: people.filter((p) => p.is_active).map((p) => ({ ...p })),
         signals: unprocessed.slice(0, config.tick.loadCeiling),
         backlog: unprocessed.length,
+        lastServedAtByPerson: lastServedByPerson(
+          signals
+            .filter((s) => s.processed && s.processedAt)
+            .map((s) => ({ person_id: s.personId, processed_at: s.processedAt!.toISOString(), kind: isFreeSignal(s) ? "metric" : "event" })),
+        ),
         openCapitalCentsByPerson: new Map(Object.entries(seed.openCapitalCents ?? {})),
         signalActivityByPerson: aggregateSignalActivity(
           signals

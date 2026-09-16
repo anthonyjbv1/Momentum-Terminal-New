@@ -6,6 +6,7 @@ import { createMemoryUsageLogger } from "@/lib/llm/usage";
 import { DEFAULT_ENGINE_CONFIG, withEngineConfig } from "./config";
 import { NO_DEADLINE, deadlineAfter } from "./deadline";
 import { createMemoryMemoryStore } from "./memory/store";
+import { emptyMemory } from "./memory/types";
 import { createMemoryNarrativeStore } from "./narratives";
 import { runPostTick } from "./post-tick";
 import type { TickSummary } from "./types";
@@ -19,7 +20,7 @@ const summary: TickSummary = {
   mood: 0.4,
   peopleUpdated: 2,
   signalsProcessed: 2,
-  scoring: { backlogBefore: 2, loaded: 2, selected: 2, attempted: 2, llmScored: 2, fallbacks: 0, withoutModel: 0, expired: 0, deferred: 0, deferredByReason: {}, llmCalls: 2, llmCallBudget: 4, processed: 2, backlogAfter: 0, partial: false, budgetMs: 25_000, remainingMs: 20_000 },
+  scoring: { backlogBefore: 2, loaded: 2, selected: 2, personOrder: ["drake", "mrbeast"], attempted: 2, llmScored: 2, fallbacks: 0, withoutModel: 0, expired: 0, deferred: 0, deferredByReason: {}, llmCalls: 2, llmCallBudget: 4, processed: 2, backlogAfter: 0, partial: false, budgetMs: 25_000, remainingMs: 20_000 },
   deferred: [],
   people: [
     { id: "d", slug: "drake", displayName: "Drake", revertTarget: 65, previousScore: 50, newScore: 51.24, change: 1.24, spread: 0.5, buyPrice: 51.74, sellPrice: 50.74, forces: { gravity: 0.04, signals: 1.2 }, signalsProcessed: 1 },
@@ -31,7 +32,7 @@ const summary: TickSummary = {
   ],
 };
 
-const fakeSummary = vi.fn<(request: { taskType: string; timeoutMs?: number }) => Promise<LLMResponse>>(async () => ({
+const fakeSummary = vi.fn<(request: { taskType: string; timeoutMs?: number; userPrompt: string }) => Promise<LLMResponse>>(async () => ({
   text: "Drake dropped a surprise album.",
   usage: { inputTokens: 200, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
   provider: "fake",
@@ -47,13 +48,13 @@ describe("runPostTick", () => {
 
     const result = await runPostTick(summary, { narrativeStore, memoryStore, config: DEFAULT_ENGINE_CONFIG });
 
-    expect(result).toEqual({ narratives: 1, memoryUpdates: 1, memoryLlmSummaries: 0, memorySummariesDeferred: 0, errors: [] });
+    expect(result).toEqual({ narratives: 1, memoryUpdates: 1, memoryLlmSummaries: 0, memorySummariesDeferred: 0, memoryEventsExpired: 0, errors: [] });
     expect(narrativeStore.rows[0]).toMatchObject({ personId: "d", tickNumber: 3, source: "llm" });
     const drake = memoryStore.memories.get("d")!;
     expect(drake.recentContext.notable_events).toHaveLength(1);
     expect(drake.recentContext.notable_events[0]).toMatchObject({ headline: "Drake drops surprise album", impact: 1.2, anomaly: "notable" });
     expect(drake.recentContext.last_updated_tick).toBe(3);
-    expect(memoryStore.memories.has("m")).toBe(false); // routine, low impact: not remembered
+    expect(memoryStore.memories.has("m")).toBe(false); // routine, low impact: not remembered, and nothing to expire
   });
 
   it("does nothing on a dry run", async () => {
@@ -100,8 +101,45 @@ describe("runPostTick", () => {
 
       expect(fakeSummary).not.toHaveBeenCalled();
       expect(result).toMatchObject({ narratives: 1, memoryUpdates: 1, memoryLlmSummaries: 0, memorySummariesDeferred: 1, errors: [] });
-      expect(memoryStore.memories.get("d")?.recentContext.summary).toContain("Earlier: Drake drops surprise album");
+      expect(memoryStore.memories.get("d")?.recentContext.summary).toContain("Earlier: Drake drops surprise album (2026-09-07, +1.20)");
       expect(usageLogger.rows).toHaveLength(0);
+    });
+  });
+
+  describe("memory event expiry (Phase 12+)", () => {
+    it("ages a QUIET person's memory: an event past maxEventAgeDays expires and folds into the summary with its date, without any signal for them this tick", async () => {
+      fakeSummary.mockClear();
+      const memoryStore = createMemoryMemoryStore();
+      const stale = emptyMemory("m");
+      // 40 days before the tick: past the 30-day horizon. MrBeast has only a routine signal this tick, so nothing new arrives for him.
+      stale.recentContext = { summary: "A scandal dominated the summer.", notable_events: [{ at: "2026-07-29T12:00:00.000Z", headline: "Dramatic scandal", label: "negative", impact: -3.5, anomaly: "anomalous" }] };
+      await memoryStore.saveRecentContext("m", stale.recentContext);
+      fakeSummary.mockImplementationOnce(async () => ({ text: "In late July a scandal weighed on him; nothing notable since.", usage: { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }, provider: "fake", model: "fake-model", stopReason: "end_turn", latencyMs: 1 }));
+
+      const result = await runPostTick(summary, { narrativeStore: createMemoryNarrativeStore(), memoryStore, complete: fakeSummary, deadline: NO_DEADLINE });
+
+      expect(result).toMatchObject({ memoryUpdates: 2, memoryEventsExpired: 1, memoryLlmSummaries: 1, errors: [] });
+      const mrbeast = memoryStore.memories.get("m")!;
+      expect(mrbeast.recentContext.notable_events).toEqual([]);
+      expect(mrbeast.recentContext.summary).toBe("In late July a scandal weighed on him; nothing notable since.");
+      expect(mrbeast.recentContext.last_updated_tick).toBe(3);
+      // The fold prompt dated everything and named the horizon.
+      const request = fakeSummary.mock.calls[0][0];
+      expect(request.userPrompt).toContain("Today: 2026-09-07");
+      expect(request.userPrompt).toContain("Events older than 30 days are history");
+      expect(request.userPrompt).toContain("- 2026-07-29 (40 days ago): Dramatic scandal (negative, impact -3.50)");
+      // Drake's fresh event is kept verbatim as before.
+      expect(memoryStore.memories.get("d")?.recentContext.notable_events.map((e) => e.headline)).toEqual(["Drake drops surprise album"]);
+    });
+
+    it("a person with nothing new and nothing expired is not rewritten", async () => {
+      const memoryStore = createMemoryMemoryStore();
+      const recent = emptyMemory("m");
+      recent.recentContext = { summary: "Busy week.", notable_events: [{ at: "2026-09-05T12:00:00.000Z", headline: "Big collab", label: "positive", impact: 1.4 }], updated_at: "2026-09-05T12:00:00.000Z" };
+      await memoryStore.saveRecentContext("m", recent.recentContext);
+      const result = await runPostTick(summary, { narrativeStore: createMemoryNarrativeStore(), memoryStore });
+      expect(result).toMatchObject({ memoryUpdates: 1, memoryEventsExpired: 0 }); // Drake only
+      expect(memoryStore.memories.get("m")?.recentContext.updated_at).toBe("2026-09-05T12:00:00.000Z");
     });
   });
 });

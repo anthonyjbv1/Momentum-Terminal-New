@@ -17,7 +17,7 @@ For every signal return:
 - label: "positive" if it strengthens the person's momentum, "negative" if it weakens it, "neutral" if it does not move it.
 - confidence: a number from 0 to 1 combining how sure you are of the direction and how much the signal matters for this person. Routine noise gets low confidence even when the direction is clear.
 - direction: 1 for positive, -1 for negative, 0 for neutral.
-- anomaly: "routine" (normal for this person), "notable" (worth a real move), or "anomalous" (out of pattern for this person; rare, a genuine surprise). Judge against the person's own baseline: a 2% net worth move is noise for Elon Musk but notable for Warren Buffett; a daily upload is routine for a creator, a record-breaking video is not.
+- anomaly: "routine" (normal for this person), "notable" (worth a real move), or "anomalous" (out of pattern for this person; rare, a genuine surprise). Judge against the person's own baseline: a 2% net worth move is noise for Elon Musk but notable for Warren Buffett; a daily upload is routine for a creator, a record-breaking video is not. The person block gives today's date and dated recent events: an event weeks old is context, not the current picture, and does not make a similar event today routine.
 - rationale: one short sentence.
 
 Duplicate or overlapping headlines must not be double counted: give the strongest one its due and mark the rest routine with low confidence. Baseline or status-only signals that report a number without a change are neutral.
@@ -78,14 +78,42 @@ export interface PersonPromptContext {
   slug: string;
   category: string;
   memory: PersonMemory;
+  /** The tick's date. Shown as "Today", and every recent event is shown with its age, so a dated event reads as old. */
+  today?: Date;
+  /** Events older than this are not shown verbatim: they live in the summary as history. */
+  eventMaxAgeDays?: number;
 }
 
+/**
+ * TODAY'S DATE IN THE PERSON BLOCK (Phase 12+). The recent events always
+ * carried dates, but the model was never told what day it was, so an
+ * eight-month-old event and yesterday's read the same. Now the block opens
+ * with "Today", each event carries its age, and events past the memory
+ * expiry horizon are left out (they are already folded into the summary as
+ * history). A person with nothing recent gets a block with no events line
+ * and the summary — always a valid block, never an empty prompt.
+ */
 export function buildPersonBlock(person: PersonPromptContext): string {
   const { profile, baselinePatterns, recentContext } = person.memory;
-  const events = recentContext.notable_events.slice(0, 5).map((e) => `  - ${e.at.slice(0, 10)}: ${e.headline} (${e.label}, ${e.impact >= 0 ? "+" : ""}${e.impact.toFixed(2)})`);
+  const today = person.today;
+  const ageDays = (at: string): number | null => {
+    if (!today) return null;
+    const time = Date.parse(at);
+    return Number.isFinite(time) ? (today.getTime() - time) / 86_400_000 : null;
+  };
+  const current = recentContext.notable_events.filter((e) => {
+    const age = ageDays(e.at);
+    return age === null || person.eventMaxAgeDays === undefined || age <= person.eventMaxAgeDays;
+  });
+  const events = current.slice(0, 5).map((e) => {
+    const age = ageDays(e.at);
+    const when = age === null ? e.at.slice(0, 10) : `${e.at.slice(0, 10)} (${age < 1 ? "today" : `${Math.round(age)} days ago`})`;
+    return `  - ${when}: ${e.headline} (${e.label}, ${e.impact >= 0 ? "+" : ""}${e.impact.toFixed(2)})`;
+  });
   return [
     `PERSON`,
     `Name: ${person.displayName} (slug ${person.slug}, category ${person.category})`,
+    ...(today ? [`Today: ${today.toISOString().slice(0, 10)}`] : []),
     `Role: ${profile.role ?? person.category}`,
     `Summary: ${profile.summary ?? "n/a"}`,
     `Momentum drivers: ${list(profile.momentum_drivers)}`,
@@ -95,7 +123,7 @@ export function buildPersonBlock(person: PersonPromptContext): string {
     `Notable for this person: ${list(baselinePatterns.notable)}`,
     `Noise note: ${baselinePatterns.noise_note ?? "n/a"}`,
     `Recent context: ${recentContext.summary}`,
-    ...(events.length > 0 ? ["Recent notable events:", ...events] : []),
+    ...(events.length > 0 ? [`Recent notable events${person.eventMaxAgeDays !== undefined ? ` (last ${person.eventMaxAgeDays} days)` : ""}:`, ...events] : []),
   ].join("\n");
 }
 

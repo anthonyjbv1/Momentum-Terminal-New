@@ -70,6 +70,8 @@ export interface LLMScorerDeps {
   metricScorer?: SentimentScorer;
   config?: EngineConfig["llm"];
   tickIntervalSeconds?: number;
+  /** Memory events older than this are not shown to the model verbatim (config.memory.maxEventAgeDays). */
+  memoryEventMaxAgeDays?: number;
   /** Delay before a batch is flushed, in ms. 0 = next macrotask. */
   batchDelayMs?: number;
   now?: () => number;
@@ -134,6 +136,7 @@ export class LLMScorer implements SentimentScorer {
   private readonly metricScorer: SentimentScorer;
   private readonly config: EngineConfig["llm"];
   private readonly windowMs: number;
+  private readonly memoryEventMaxAgeDays: number;
   private readonly batchDelayMs: number;
   private readonly now: () => number;
   private readonly log: (message: string, meta?: Record<string, unknown>) => void;
@@ -153,6 +156,7 @@ export class LLMScorer implements SentimentScorer {
     this.metricScorer = deps.metricScorer ?? defaultMetricScorer;
     this.config = deps.config ?? DEFAULT_ENGINE_CONFIG.llm;
     this.windowMs = (deps.tickIntervalSeconds ?? DEFAULT_ENGINE_CONFIG.tick.intervalSeconds) * 1000;
+    this.memoryEventMaxAgeDays = deps.memoryEventMaxAgeDays ?? DEFAULT_ENGINE_CONFIG.memory.maxEventAgeDays;
     this.batchDelayMs = deps.batchDelayMs ?? 0;
     this.now = deps.now ?? Date.now;
     this.log = deps.log ?? ((message, meta) => console.warn(`[llm-scorer] ${message}`, meta ?? ""));
@@ -319,7 +323,10 @@ export class LLMScorer implements SentimentScorer {
         this.complete({
           taskType: "sentiment",
           systemPrompt: SENTIMENT_SYSTEM_PROMPT,
-          userPrompt: buildSentimentUserPrompt({ displayName: person.displayName, slug: person.slug, category: person.category, memory: memoryForPrompt }, signals),
+          userPrompt: buildSentimentUserPrompt(
+            { displayName: person.displayName, slug: person.slug, category: person.category, memory: memoryForPrompt, today: new Date(this.now()), eventMaxAgeDays: this.memoryEventMaxAgeDays },
+            signals,
+          ),
           responseFormat: { type: "json", schema: SENTIMENT_RESPONSE_SCHEMA, name: "sentiment_assessment" },
           timeoutMs: this.config.timeoutMs,
         }),
@@ -438,6 +445,7 @@ export function createDefaultLLMScorer(config: EngineConfig = DEFAULT_ENGINE_CON
   return new LLMScorer({
     config: config.llm,
     tickIntervalSeconds: config.tick.intervalSeconds,
+    memoryEventMaxAgeDays: config.memory.maxEventAgeDays,
     memoryStore: () => {
       memoryStorePromise ??= Promise.all([admin(), import("@/lib/engine/memory/store")]).then(([client, mod]) =>
         mod.withMemoryCache(mod.createSupabaseMemoryStore(client), config.llm.memoryCacheTtlMs),

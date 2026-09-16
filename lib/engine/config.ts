@@ -256,8 +256,17 @@ export interface EngineConfig {
   memory: {
     /** A processed signal with |impact| >= this (or flagged notable / anomalous) is remembered. */
     notableImpactThreshold: number;
-    /** How many recent notable events are kept verbatim; older ones are folded into the summary. */
+    /** How many recent notable events are kept verbatim; older ones are folded into the summary. A size cap. */
     maxRecentEvents: number;
+    /**
+     * EVENT EXPIRY (Phase 12+). A notable event older than this leaves the
+     * verbatim list whatever the count, folded into the summary with its
+     * date as history, so one dramatic event cannot frame a quiet person
+     * for months. This is the "what is normal for this person" clock: much
+     * slower than the Signals force's freshness half-life on purpose, and
+     * a separate constant that must stay separate. TUNABLE.
+     */
+    maxEventAgeDays: number;
     /** Use the LLM to fold overflowing events into the summary (one small call); otherwise a deterministic summary. */
     llmSummaries: boolean;
   };
@@ -342,7 +351,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     memoryCacheTtlMs: 60_000,
   },
   narratives: { minAbsChange: 0.5, maxPerTick: 16 },
-  memory: { notableImpactThreshold: 0.5, maxRecentEvents: 8, llmSummaries: true },
+  memory: { notableImpactThreshold: 0.5, maxRecentEvents: 8, maxEventAgeDays: 30, llmSummaries: true },
   spread: {
     base: 0.5,
     max: 1.5,

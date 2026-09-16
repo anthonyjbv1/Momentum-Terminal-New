@@ -70,6 +70,8 @@ export interface TickContext {
   signals: EngineSignal[];
   /** How many unprocessed signals active people have in total: the backlog, whatever the ceiling let through. */
   backlog: number;
+  /** When each person's event signals were last processed (within the activity window). Drives the serving rotation. */
+  lastServedAtByPerson: Map<string, Date>;
   /** Open capital per person, in cents. */
   openCapitalCentsByPerson: Map<string, number>;
   signalActivityByPerson: Map<string, SignalActivity>;
@@ -132,6 +134,8 @@ export interface TickScoringSummary {
   loaded: number;
   /** Signals the tick took on after the per-person and per-tick bounds. */
   selected: number;
+  /** People with live event signals, by slug, in the order the tick served them (least recently served first). */
+  personOrder: string[];
   /** Signals sent to the model this tick: scored by it, or fallen back after a failed attempt. */
   attempted: number;
   llmScored: number;
