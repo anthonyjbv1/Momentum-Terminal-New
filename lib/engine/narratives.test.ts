@@ -31,7 +31,7 @@ const summary: TickSummary = {
   mood: 0.08,
   peopleUpdated: 4,
   signalsProcessed: 1,
-  scoring: { backlogBefore: 1, loaded: 1, selected: 1, attempted: 1, llmScored: 1, fallbacks: 0, withoutModel: 0, deferred: 0, deferredByReason: {}, llmCalls: 1, llmCallBudget: 4, processed: 1, backlogAfter: 0, partial: false, budgetMs: 25_000, remainingMs: 20_000 },
+  scoring: { backlogBefore: 1, loaded: 1, selected: 1, attempted: 1, llmScored: 1, fallbacks: 0, withoutModel: 0, expired: 0, deferred: 0, deferredByReason: {}, llmCalls: 1, llmCallBudget: 4, processed: 1, backlogAfter: 0, partial: false, budgetMs: 25_000, remainingMs: 20_000 },
   deferred: [],
   people: [
     person({ id: "d", slug: "drake", displayName: "Drake", previousScore: 50, newScore: 51.24, change: 1.24, forces: { gravity: 0.04, signals: 1.2 }, signalsProcessed: 1 }),
@@ -40,7 +40,7 @@ const summary: TickSummary = {
     person({ id: "e", slug: "elon-musk", displayName: "Elon Musk", previousScore: 50, newScore: 50.04, change: 0.04, forces: { gravity: 0.04 } }),
   ],
   signals: [
-    { id: "s1", personSlug: "drake", headline: "Drake drops surprise album", label: "positive", confidence: 0.8, direction: 1, impact: 1.2, scorer: "llm", anomaly: "notable", narrative: "Drake's momentum climbed on a surprise album drop, the strongest signal in weeks." },
+    { id: "s1", personSlug: "drake", headline: "Drake drops surprise album", label: "positive", confidence: 0.8, direction: 1, impact: 1.2, ageHours: 0, freshness: 1, scorer: "llm", anomaly: "notable", narrative: "Drake's momentum climbed on a surprise album drop, the strongest signal in weeks." },
   ],
 };
 
@@ -77,13 +77,13 @@ describe("narratives", () => {
       ],
       signals: [
         // One LLM batch for Drake: both signals carry the same sentence, so both produced it.
-        { id: "s1", personSlug: "drake", headline: "Drake drops surprise album", label: "positive", confidence: 0.8, direction: 1, impact: 1.2, scorer: "llm", narrative: sentence },
-        { id: "s2", personSlug: "drake", headline: "Drake tour sells out", label: "positive", confidence: 0.7, direction: 1, impact: 0.56, scorer: "llm", narrative: sentence },
+        { id: "s1", personSlug: "drake", headline: "Drake drops surprise album", label: "positive", confidence: 0.8, direction: 1, impact: 1.2, ageHours: 0, freshness: 1, scorer: "llm", narrative: sentence },
+        { id: "s2", personSlug: "drake", headline: "Drake tour sells out", label: "positive", confidence: 0.7, direction: 1, impact: 0.56, ageHours: 0, freshness: 1, scorer: "llm", narrative: sentence },
         // Pre-filtered before the LLM saw it: not part of the batch, not evidence.
-        { id: "s3", personSlug: "drake", headline: "Drake weekly streams: 480M (baseline)", label: "neutral", confidence: 0.1, direction: 0, impact: 0, scorer: "prefilter" },
+        { id: "s3", personSlug: "drake", headline: "Drake weekly streams: 480M (baseline)", label: "neutral", confidence: 0.1, direction: 0, impact: 0, ageHours: 0, freshness: 1, scorer: "prefilter" },
         // MrBeast's template sentence quotes the one signal that moved the score; the zero-impact one did not.
-        { id: "s4", personSlug: "mrbeast", headline: "MrBeast upload passes 40M views", label: "positive", confidence: 0.8, direction: 1, impact: 0.85, scorer: "rules" },
-        { id: "s5", personSlug: "mrbeast", headline: "MrBeast subscriber count: 300M (baseline)", label: "neutral", confidence: 0.2, direction: 0, impact: 0, scorer: "rules" },
+        { id: "s4", personSlug: "mrbeast", headline: "MrBeast upload passes 40M views", label: "positive", confidence: 0.8, direction: 1, impact: 0.85, ageHours: 0, freshness: 1, scorer: "rules" },
+        { id: "s5", personSlug: "mrbeast", headline: "MrBeast subscriber count: 300M (baseline)", label: "neutral", confidence: 0.2, direction: 0, impact: 0, ageHours: 0, freshness: 1, scorer: "rules" },
       ],
     };
     const rows = buildNarratives(tick, DEFAULT_ENGINE_CONFIG.narratives);

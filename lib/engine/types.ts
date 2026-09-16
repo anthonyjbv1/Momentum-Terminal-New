@@ -38,8 +38,12 @@ export interface EngineSignal {
 export interface ScoredSignal {
   signal: EngineSignal;
   sentiment: SentimentResult;
-  /** Points added to the person's score by this signal. */
+  /** Points added to the person's score by this signal, freshness included. */
   impact: number;
+  /** Hours between occurred_at and the tick. */
+  ageHours: number;
+  /** The freshness weight applied (1 for a metric signal, 0 for an expired one). */
+  freshness: number;
 }
 
 /** A Buy or Sell on the trade tape. */
@@ -133,8 +137,10 @@ export interface TickScoringSummary {
   llmScored: number;
   /** Attempted, and the attempt failed: scored by rules, processed. */
   fallbacks: number;
-  /** Scored without the model by design: metric, baseline, tiny change, or the rules scorer. */
+  /** Scored without the model by design: metric, baseline, tiny change, expired, or the rules scorer. */
   withoutModel: number;
+  /** Event signals past the freshness limit: processed with zero impact, never sent to the model. Counted inside withoutModel. */
+  expired: number;
   /** Selected but NOT attempted: left unprocessed for a later tick. */
   deferred: number;
   deferredByReason: Partial<Record<DeferralReason, number>>;
@@ -173,7 +179,10 @@ export interface TickSummary {
     confidence: number;
     direction: SentimentResult["direction"];
     impact: number;
-    /** Which scorer produced the assessment ("rules", "llm", "prefilter", "rules-fallback"). */
+    /** Hours between occurred_at and the tick, and the freshness weight the impact carries. */
+    ageHours: number;
+    freshness: number;
+    /** Which scorer produced the assessment ("rules", "llm", "prefilter", "rules-fallback", "expired"). */
     scorer?: string;
     rationale?: string;
     anomaly?: SentimentResult["anomaly"];

@@ -4,7 +4,7 @@ import { DEFAULT_ENGINE_CONFIG as CONFIG } from "./config";
 import { convictionForce, convictionImpact } from "./forces/conviction";
 import { gravityForce } from "./forces/gravity";
 import { computeMood, marketMoodForce } from "./forces/market-mood";
-import { scoreSignals, signalImpact, signalsForce, tierMultiplier } from "./forces/signals";
+import { freshnessWeight, isExpiredSignal, scoreSignals, signalFreshness, signalImpact, signalsForce, tierMultiplier } from "./forces/signals";
 import { tradingActivityForce, windowedNetFlows } from "./forces/trading-activity";
 import { inversePairAdjustments } from "./inverse-pairs";
 import type { SentimentResult } from "./sentiment/types";
@@ -47,10 +47,10 @@ describe("Signals", () => {
     expect([1, 2, 3, 4, 5, 9].map((t) => tierMultiplier(t, CONFIG.signals))).toEqual([1.5, 1.0, 0.5, 0.3, 0.3, 0.3]);
   });
 
-  it("impact = baseImpact * tier * confidence * direction", () => {
-    expect(signalImpact(signal({ sourceTier: 1 }), { label: "positive", confidence: 0.8, direction: 1 }, CONFIG.signals)).toBeCloseTo(1.5 * 1.5 * 0.8);
-    expect(signalImpact(signal({ sourceTier: 3 }), { label: "negative", confidence: 0.5, direction: -1 }, CONFIG.signals)).toBeCloseTo(-1.5 * 0.5 * 0.5);
-    expect(signalImpact(signal(), { label: "neutral", confidence: 0, direction: 0 }, CONFIG.signals)).toBe(0);
+  it("impact = baseImpact * tier * confidence * direction (× freshness, 1 for a signal of this instant)", () => {
+    expect(signalImpact(signal({ sourceTier: 1 }), { label: "positive", confidence: 0.8, direction: 1 }, CONFIG.signals, NOW)).toBeCloseTo(1.5 * 1.5 * 0.8);
+    expect(signalImpact(signal({ sourceTier: 3 }), { label: "negative", confidence: 0.5, direction: -1 }, CONFIG.signals, NOW)).toBeCloseTo(-1.5 * 0.5 * 0.5);
+    expect(signalImpact(signal(), { label: "neutral", confidence: 0, direction: 0 }, CONFIG.signals, NOW)).toBe(0);
   });
 
   it("combines a person's signals sub-linearly and caps the total", () => {
@@ -59,7 +59,7 @@ describe("Signals", () => {
       ["a", { label: "positive" as const, confidence: 1, direction: 1 as const }],
       ["b", { label: "negative" as const, confidence: 0.5, direction: -1 as const }],
     ]);
-    const scored = scoreSignals([signal({ id: "a" }), signal({ id: "b", sourceName: "rss" })], sentiments, CONFIG.signals);
+    const scored = scoreSignals([signal({ id: "a" }), signal({ id: "b", sourceName: "rss" })], sentiments, CONFIG.signals, NOW);
     const force = signalsForce(scored, CONFIG.signals);
     expect(force.details.rawImpact).toBeCloseTo(1.5 - 0.75);
     expect(force.details.volumeDivisor).toBeCloseTo(Math.SQRT2);
@@ -70,7 +70,7 @@ describe("Signals", () => {
     // Twenty tier-1 sources all positive at full confidence: 45 / sqrt(20) = 10.06, capped at 10.
     const many = Array.from({ length: 20 }, (_, i) => signal({ id: `m${i}`, sourceName: `source-${i}`, sourceTier: 1 }));
     const loud = new Map(many.map((s) => [s.id, { label: "positive" as const, confidence: 1, direction: 1 as const }]));
-    const capped = signalsForce(scoreSignals(many, loud, CONFIG.signals), CONFIG.signals);
+    const capped = signalsForce(scoreSignals(many, loud, CONFIG.signals, NOW), CONFIG.signals);
     expect(capped.details.normalizedImpact).toBeCloseTo(45 / Math.sqrt(20));
     expect(capped.impact).toBe(CONFIG.signals.maxAbsImpactPerTick);
     expect(capped.details.capped).toBe(true);
@@ -81,12 +81,12 @@ describe("Signals", () => {
     const positive = { label: "positive" as const, confidence: 1, direction: 1 as const };
     // Twelve comments (tier 4: 0.45 each) in one tick.
     const comments = Array.from({ length: 12 }, (_, i) => signal({ id: `c${i}`, sourceName: "youtube_comments", sourceTier: 4 }));
-    const flood = signalsForce(scoreSignals(comments, new Map(comments.map((s) => [s.id, positive])), CONFIG.signals), CONFIG.signals);
+    const flood = signalsForce(scoreSignals(comments, new Map(comments.map((s) => [s.id, positive])), CONFIG.signals, NOW), CONFIG.signals);
     expect(flood.details.countedSignals).toBe(3);
     expect(flood.details.droppedBySourceCap).toBe(9);
     expect(flood.impact).toBeCloseTo((3 * 0.45) / Math.sqrt(3));
     // One tier-1 metric signal at full confidence: 2.25.
-    const one = signalsForce(scoreSignals([signal({ id: "m", sourceName: "spotify", sourceTier: 1 })], new Map([["m", positive]]), CONFIG.signals), CONFIG.signals);
+    const one = signalsForce(scoreSignals([signal({ id: "m", sourceName: "spotify", sourceTier: 1 })], new Map([["m", positive]]), CONFIG.signals, NOW), CONFIG.signals);
     expect(one.impact).toBeCloseTo(2.25);
     expect(flood.impact).toBeLessThan(one.impact);
     // The strongest are the ones kept, and the details say which counted.
@@ -97,7 +97,7 @@ describe("Signals", () => {
       ["w3", { label: "positive", confidence: 0.4, direction: 1 }],
       ["strong", { label: "positive", confidence: 1, direction: 1 }],
     ]);
-    const kept = signalsForce(scoreSignals(mixed, mixedSentiments, CONFIG.signals), CONFIG.signals);
+    const kept = signalsForce(scoreSignals(mixed, mixedSentiments, CONFIG.signals, NOW), CONFIG.signals);
     const counted = (kept.details.signals as Array<{ id: string; counted: boolean }>).filter((s) => s.counted).map((s) => s.id);
     expect(counted.sort()).toEqual(["strong", "w2", "w3"]);
     // Neutral signals never dilute the sum.
@@ -107,11 +107,79 @@ describe("Signals", () => {
         [signal({ id: "m", sourceName: "spotify", sourceTier: 1 }), signal({ id: "n1" }), signal({ id: "n2" })],
         new Map<string, SentimentResult>([["m", positive], ["n1", neutral], ["n2", neutral]]),
         CONFIG.signals,
+        NOW,
       ),
       CONFIG.signals,
     );
     expect(withNeutral.impact).toBeCloseTo(2.25);
     expect(withNeutral.details.countedSignals).toBe(1);
+  });
+});
+
+describe("Signals — freshness (Phase 12)", () => {
+  const hoursAgo = (h: number) => new Date(NOW.getTime() - h * 3_600_000);
+  const positive = { label: "positive" as const, confidence: 0.8, direction: 1 as const };
+
+  it("the curve: 1 now, halving every 24 h, exactly zero at and past 7 days, never negative-aged", () => {
+    expect(CONFIG.signals.freshnessHalfLifeHours).toBe(24);
+    expect(CONFIG.signals.freshnessMaxAgeHours).toBe(168);
+    expect(freshnessWeight(0, CONFIG.signals)).toBe(1);
+    expect(freshnessWeight(24, CONFIG.signals)).toBeCloseTo(0.5);
+    expect(freshnessWeight(48, CONFIG.signals)).toBeCloseTo(0.25);
+    expect(freshnessWeight(72, CONFIG.signals)).toBeCloseTo(0.125);
+    expect(freshnessWeight(167.9, CONFIG.signals)).toBeGreaterThan(0);
+    expect(freshnessWeight(168, CONFIG.signals)).toBe(0);
+    expect(freshnessWeight(10_000, CONFIG.signals)).toBe(0);
+    // A clock that says the signal has not happened yet: full weight, not more.
+    expect(freshnessWeight(-5, CONFIG.signals)).toBe(1);
+    expect(freshnessWeight(Number.NaN, CONFIG.signals)).toBe(1);
+  });
+
+  it("weights an event signal's impact by its age: a day-old headline moves half as much, a three-day-old an eighth", () => {
+    expect(signalImpact(signal({ occurredAt: hoursAgo(24) }), positive, CONFIG.signals, NOW)).toBeCloseTo(1.5 * 1.0 * 0.8 * 0.5);
+    expect(signalImpact(signal({ occurredAt: hoursAgo(72) }), positive, CONFIG.signals, NOW)).toBeCloseTo(1.5 * 1.0 * 0.8 * 0.125);
+    expect(signalImpact(signal({ occurredAt: hoursAgo(24 * 8) }), positive, CONFIG.signals, NOW)).toBe(0);
+  });
+
+  it("NEVER ages a metric signal: its own baseline window says what is stale for it", () => {
+    const metric = signal({ occurredAt: hoursAgo(24 * 5), rawPayload: { kind: "metric", metric: "subscriber_count", polarity: 1, sigma: 2, scale: 1 } });
+    expect(signalFreshness(metric, NOW, CONFIG.signals)).toEqual({ ageHours: 120, weight: 1 });
+    expect(signalImpact(metric, positive, CONFIG.signals, NOW)).toBeCloseTo(1.5 * 1.0 * 0.8);
+    expect(isExpiredSignal(metric, NOW, CONFIG.signals)).toBe(false);
+    // The same age on an article: expired.
+    expect(isExpiredSignal(signal({ occurredAt: hoursAgo(24 * 8) }), NOW, CONFIG.signals)).toBe(true);
+    expect(isExpiredSignal(signal({ occurredAt: hoursAgo(24 * 5) }), NOW, CONFIG.signals)).toBe(false);
+  });
+
+  it("carries age and weight into the scored signal and the force's audit trail, and the source cap prefers the fresh strong one", () => {
+    const scored = scoreSignals(
+      [signal({ id: "fresh", sourceName: "rss" }), signal({ id: "stale", sourceName: "rss", occurredAt: hoursAgo(48) })],
+      new Map([
+        ["fresh", positive],
+        ["stale", positive],
+      ]),
+      CONFIG.signals,
+      NOW,
+    );
+    expect(scored[0]).toMatchObject({ ageHours: 0, freshness: 1 });
+    expect(scored[0].impact).toBeCloseTo(1.2);
+    expect(scored[1]).toMatchObject({ ageHours: 48, freshness: 0.25 });
+    expect(scored[1].impact).toBeCloseTo(0.3);
+    const force = signalsForce(scored, CONFIG.signals);
+    expect(force.details.freshnessHalfLifeHours).toBe(24);
+    const audit = force.details.signals as Array<{ id: string; ageHours: number; freshness: number; counted: boolean }>;
+    expect(audit.find((s) => s.id === "stale")).toMatchObject({ ageHours: 48, freshness: 0.25, counted: true });
+    // Four stale-to-fresh signals from one source at one confidence: the cap of three keeps the freshest.
+    const four = [0, 12, 24, 36].map((h) => signal({ id: `h${h}`, sourceName: "rss", occurredAt: hoursAgo(h) }));
+    const capped = signalsForce(scoreSignals(four, new Map(four.map((s) => [s.id, positive])), CONFIG.signals, NOW), CONFIG.signals);
+    const counted = (capped.details.signals as Array<{ id: string; counted: boolean }>).filter((s) => s.counted).map((s) => s.id);
+    expect(counted.sort()).toEqual(["h0", "h12", "h24"]);
+  });
+
+  it("does not touch Gravity: staleness in the score is Gravity's, staleness in the queue is this", () => {
+    // No second score-decay mechanism: the only decay of a score is λ = 0.35/h toward the target, unchanged.
+    expect(CONFIG.gravity).toEqual({ lambdaPerHour: 0.35 });
+    expect(gravityForce(50, 68, 1, CONFIG.gravity).impact).toBeCloseTo(18 * (1 - Math.exp(-0.35)), 6);
   });
 });
 

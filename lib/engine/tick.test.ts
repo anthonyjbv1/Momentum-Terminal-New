@@ -258,6 +258,7 @@ describe("Engine tick — the tick that always commits", () => {
       llmScored: 36,
       fallbacks: 0,
       withoutModel: 0,
+      expired: 0,
       deferred: 0,
       deferredByReason: {},
       llmCalls: 3,
@@ -348,5 +349,91 @@ describe("Engine tick — the tick that always commits", () => {
     const { scorer } = llmScorer();
     const summary = await runEngineTick({ store, scorer, now: NOW });
     expect(summary.scoring).toMatchObject({ backlogBefore: 5, selected: 5, processed: 5, deferred: 0, backlogAfter: 0, partial: false, llmCalls: 1 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FRESHNESS (Phase 12)
+// ---------------------------------------------------------------------------
+
+function article(id: string, personId: string, ageHours: number, headline = "crosses 100M monthly listeners on Spotify"): EngineSignal {
+  return {
+    id,
+    personId,
+    headline,
+    rawPayload: { kind: "article" },
+    sourceName: "rss",
+    sourceTier: 2,
+    occurredAt: new Date(NOW.getTime() - ageHours * 3_600_000),
+    createdAt: NOW,
+  };
+}
+
+describe("Engine tick — freshness", () => {
+  it("weights an event signal by the gap between occurred_at and the tick: a three-day-old headline lands at an eighth", async () => {
+    const store = createMemoryEngineStore(seed({ signals: [article("fresh", "p-drake", 0), article("stale", "p-mrbeast", 72)] }));
+    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW });
+
+    // "crosses" → positive 0.8, tier 2: 1.2 fresh; × 2^(−72/24) = 0.15 three days on.
+    expect(summary.signals.find((s) => s.id === "fresh")).toMatchObject({ impact: 1.2, ageHours: 0, freshness: 1, scorer: undefined });
+    expect(summary.signals.find((s) => s.id === "stale")).toMatchObject({ impact: 0.15, ageHours: 72, freshness: 0.125 });
+    expect(summary.people.find((p) => p.slug === "drake")?.forces.signals).toBe(1.2);
+    expect(summary.people.find((p) => p.slug === "mrbeast")?.forces.signals).toBe(0.15);
+    // Both are processed exactly once; Gravity, not this, handles the score afterwards.
+    expect(store.signals.every((s) => s.processed)).toBe(true);
+    expect(store.processedSignals.map((s) => [s.id, s.impactScore])).toEqual([
+      ["fresh", 1.2],
+      ["stale", 0.15],
+    ]);
+  });
+
+  it("an EXPIRED signal (past 7 days) is processed with zero impact and never sent to the model", async () => {
+    const store = createMemoryEngineStore(seed({ signals: [article("old", "p-drake", 24 * 8), article("new", "p-drake", 1)] }));
+    const { scorer, complete } = llmScorer();
+
+    const summary = await runEngineTick({ store, scorer, now: NOW });
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0][0].userPrompt).toContain("id=new");
+    expect(complete.mock.calls[0][0].userPrompt).not.toContain("id=old");
+    const old = summary.signals.find((s) => s.id === "old")!;
+    expect(old).toMatchObject({ scorer: "expired", label: "neutral", impact: 0, freshness: 0, ageHours: 192 });
+    expect(old.rationale).toContain("past the 7-day freshness limit");
+    expect(summary.signals.find((s) => s.id === "new")).toMatchObject({ scorer: "llm", freshness: 0.972 });
+    // Processed, both of them: the expired one does not linger in the backlog.
+    expect(store.signals.every((s) => s.processed)).toBe(true);
+    expect(store.processedSignals.find((s) => s.id === "old")).toMatchObject({ impactScore: 0, sentimentLabel: "neutral", sentimentConfidence: 0 });
+    expect(summary.scoring).toMatchObject({ selected: 2, attempted: 1, llmScored: 1, withoutModel: 1, expired: 1, processed: 2, backlogAfter: 0, partial: false });
+  });
+
+  it("a stale backlog drains in ONE tick at no cost: expired signals are free like metrics, beyond the per-person chunk", async () => {
+    const stale = Array.from({ length: 300 }, (_, i) => article(`s-${String(i).padStart(3, "0")}`, "p-mrbeast", 24 * 8 + i));
+    const store = createMemoryEngineStore(seed({ signals: stale }));
+    const { scorer, complete } = llmScorer();
+
+    const summary = await runEngineTick({ store, scorer, now: NOW });
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(summary.scoring).toMatchObject({ backlogBefore: 300, selected: 300, attempted: 0, expired: 300, llmCalls: 0, processed: 300, backlogAfter: 0, partial: false });
+    expect(store.signals.filter((s) => !s.processed)).toHaveLength(0);
+    expect(summary.people.find((p) => p.slug === "mrbeast")?.forces.signals).toBeUndefined(); // nothing moved
+  });
+
+  it("metric signals are never aged and never expire", async () => {
+    const metric: EngineSignal = {
+      id: "metric-old",
+      personId: "p-drake",
+      headline: "Drake monthly listeners +2.1σ",
+      rawPayload: { kind: "metric", metric: "monthly_listeners", polarity: 1, sigma: 2.1, scale: 1 },
+      sourceName: "spotify",
+      sourceTier: 2,
+      occurredAt: new Date(NOW.getTime() - 10 * 24 * 3_600_000),
+      createdAt: NOW,
+    };
+    const store = createMemoryEngineStore(seed({ signals: [metric] }));
+    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW });
+    // sigma 2.1 / fullConfidenceSigma 3 = confidence 0.7; tier 2: 1.5 × 1.0 × 0.7 = 1.05, no age factor.
+    expect(summary.signals[0]).toMatchObject({ id: "metric-old", scorer: "metric", freshness: 1, ageHours: 240, impact: 1.05 });
+    expect(summary.scoring.expired).toBe(0);
   });
 });

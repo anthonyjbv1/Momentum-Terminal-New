@@ -1,9 +1,12 @@
+import type Anthropic from "@anthropic-ai/sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_ENGINE_CONFIG } from "@/lib/engine/config";
 import { NO_DEADLINE, deadlineAfter } from "@/lib/engine/deadline";
 import { createMemoryMemoryStore } from "@/lib/engine/memory/store";
 import type { PersonMemory } from "@/lib/engine/memory/types";
+import { AnthropicProvider } from "@/lib/llm/providers/anthropic";
+import { routedComplete, type RoutedRequest } from "@/lib/llm/routing";
 import { LLMError, type LLMResponse } from "@/lib/llm/types";
 import { createMemoryUsageLogger } from "@/lib/llm/usage";
 import type { Json } from "@/types/database";
@@ -307,6 +310,40 @@ describe("LLMScorer — the two outcomes", () => {
     expect(scored(failed)).toMatchObject({ scorer: "rules-fallback", label: "positive" });
     expect(deferred).toMatchObject({ deferred: true, reason: "call_budget" });
     expect(scorer.stats).toMatchObject({ fallbacks: 1, deferred: 1 });
+  });
+
+  it("THE TIMEOUT THAT REACHES THE REQUEST: config.llm.timeoutMs (15 s) is the per-request timeout the SDK call gets, one attempt", async () => {
+    // The whole path, no mocks between the pieces: LLMScorer → routedComplete
+    // → AnthropicProvider.complete → client.messages.create(params, options).
+    // The provider's 30 s client default is what a request WITHOUT its own
+    // timeout would get; the scorer always passes its own.
+    const create = vi.fn<(params: { model: string; messages: Array<{ content: string }> }, options?: { timeout?: number }) => Promise<unknown>>(async (params) => {
+      const ids = [...params.messages[0].content.matchAll(/id=([\w-]+)/g)].map((m) => m[1]);
+      const signals = ids.map((id) => ({ id, label: "positive", confidence: 0.7, direction: 1, anomaly: "notable", rationale: "r" }));
+      return {
+        id: "msg_1",
+        type: "message",
+        role: "assistant",
+        model: "claude-opus-5",
+        content: [{ type: "text", text: JSON.stringify({ signals, narrative: "n" }), citations: null }],
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      };
+    });
+    const provider = new AnthropicProvider({ apiKey: "test-key", client: { messages: { create } } as unknown as Pick<Anthropic, "messages"> });
+    const complete = ((request: RoutedRequest) => routedComplete(request, { getProvider: () => provider })) as unknown as ReturnType<typeof fakeComplete>;
+    const { scorer, usageLogger } = makeScorer(complete);
+
+    const outcome = await scorer.scoreSignal(signal("s1", "p-drake", "Drake drops surprise album"), tickContext());
+
+    expect(scored(outcome)).toMatchObject({ scorer: "llm", label: "positive" });
+    expect(create).toHaveBeenCalledTimes(1);
+    const [, options] = create.mock.calls[0];
+    expect(options).toEqual({ timeout: 15_000 });
+    expect(options).toEqual({ timeout: DEFAULT_ENGINE_CONFIG.llm.timeoutMs });
+    expect(provider.settings).toEqual({ timeoutMs: 30_000, maxRetries: 0 });
+    expect(usageLogger.rows).toEqual([expect.objectContaining({ status: "completed", provider: "anthropic", model: "claude-opus-5" })]);
   });
 
   it("the rolling rate limit is a separate, process-wide safety net, and hitting it also defers", async () => {

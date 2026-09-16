@@ -105,7 +105,7 @@ describe("MetricScorer", () => {
       { id: "news", personId: "p1", headline: "y", rawPayload: null, sourceName: "rss", sourceTier: 2, occurredAt: NOW, createdAt: NOW },
       { id: "low", personId: "p1", headline: "z", rawPayload: payload(), sourceName: "scraped", sourceTier: 5, occurredAt: NOW, createdAt: NOW },
     ];
-    const scored = scoreSignals(signals, new Map([["metric", metric], ["news", headline], ["low", metric]]), CONFIG.signals);
+    const scored = scoreSignals(signals, new Map([["metric", metric], ["news", headline], ["low", metric]]), CONFIG.signals, NOW);
     // Same confidence and tier → the same impact, whatever produced it.
     expect(scored[0].impact).toBeCloseTo(scored[1].impact);
     expect(scored[0].impact).toBeCloseTo(1.5 * 1.0 * 0.5);

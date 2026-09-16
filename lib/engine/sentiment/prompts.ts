@@ -112,6 +112,16 @@ export function buildSignalsBlock(signals: SentimentInput[], occurredAt?: Map<st
   return [`SIGNALS (${signals.length})`, ...lines].join("\n");
 }
 
+/**
+ * The model is NOT shown a signal's age, on purpose (Phase 12). Staleness is
+ * weighted numerically, once, by the Signals force (2^(−age/24h), zero past
+ * seven days). Showing the date as well would invite the model to discount
+ * the same thing a second time, with an unstated curve, on a field whose
+ * quality varies by source (a feed can resurface an old item with its
+ * original date). The model's question stays "what does this mean for this
+ * person"; "when" is the Engine's. buildSignalsBlock keeps its optional
+ * occurred map for tooling, and this function deliberately never passes it.
+ */
 export function buildSentimentUserPrompt(person: PersonPromptContext, signals: SentimentInput[]): string {
   return `${buildPersonBlock(person)}\n\n${buildSignalsBlock(signals)}\n\nAssess every signal above for ${person.displayName} and respond with the JSON object only.`;
 }

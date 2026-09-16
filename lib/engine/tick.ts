@@ -3,18 +3,18 @@ import { deadlineAfter, type TickDeadline } from "@/lib/engine/deadline";
 import { convictionForce } from "@/lib/engine/forces/conviction";
 import { gravityForce } from "@/lib/engine/forces/gravity";
 import { computeMood, marketMoodForce } from "@/lib/engine/forces/market-mood";
-import { scoreSignals, signalsForce } from "@/lib/engine/forces/signals";
+import { isExpiredSignal, scoreSignals, signalAgeHours, signalsForce } from "@/lib/engine/forces/signals";
 import { tradingActivityForce } from "@/lib/engine/forces/trading-activity";
 import { inversePairAdjustments } from "@/lib/engine/inverse-pairs";
 import { clamp, round } from "@/lib/engine/math";
-import { selectTickSignals } from "@/lib/engine/selection";
+import { isFreeSignal, selectTickSignals } from "@/lib/engine/selection";
 import { getSentimentScorer } from "@/lib/engine/sentiment";
 import { TickCallBudget, type DeferralReason } from "@/lib/engine/sentiment/budget";
 import { isMetricSignal, metricScorer as defaultMetricScorer } from "@/lib/engine/sentiment/metric";
 import { isDeferred, type ScoringContext, type SentimentResult, type SentimentScorer } from "@/lib/engine/sentiment/types";
 import { buySellPrices, computeSpreads } from "@/lib/engine/spread";
 import type { EngineStore } from "@/lib/engine/store";
-import type { ForceEntry, PersonSummary, PersonTickResult, TickContext, TickPersistence, TickScoringSummary, TickSummary, TickTrigger } from "@/lib/engine/types";
+import type { EngineSignal, ForceEntry, PersonSummary, PersonTickResult, TickContext, TickPersistence, TickScoringSummary, TickSummary, TickTrigger } from "@/lib/engine/types";
 import type { Person } from "@/types";
 
 /**
@@ -93,7 +93,11 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
   const slugById = new Map(context.people.map((p) => [p.id, p.slug]));
 
   // 2. Selection --------------------------------------------------------------
-  const selection = selectTickSignals(context.signals, config.tick);
+  // Expired event signals (past the freshness limit) are free like metrics:
+  // they cost no call, contribute nothing, and are processed so they do not
+  // linger. A stale backlog drains in one tick instead of moving a score.
+  const expired = (signal: EngineSignal) => isExpiredSignal(signal, startedAt, config.signals);
+  const selection = selectTickSignals(context.signals, config.tick, (signal) => isFreeSignal(signal) || expired(signal));
 
   // 3. Sentiment -------------------------------------------------------------
   // Routed by what the signal IS, not where it came from: a metric signal
@@ -103,8 +107,21 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
   const scoring: ScoringContext = { deadline, callBudget: new TickCallBudget(config.llm.callBudgetPerTick) };
   const sentiments = new Map<string, SentimentResult>();
   const deferred: TickSummary["deferred"] = [];
+  let expiredCount = 0;
   await Promise.all(
     selection.selected.map(async (signal) => {
+      if (expired(signal)) {
+        expiredCount += 1;
+        const days = signalAgeHours(signal, startedAt) / 24;
+        sentiments.set(signal.id, {
+          label: "neutral",
+          confidence: 0,
+          direction: 0,
+          scorer: "expired",
+          rationale: `occurred ${days.toFixed(1)} days ago, past the ${config.signals.freshnessMaxAgeHours / 24}-day freshness limit: processed with zero impact, not scored`,
+        });
+        return;
+      }
       const chosen = isMetricSignal(signal.rawPayload) ? metricScorer : scorer;
       const outcome = await chosen.scoreSignal(
         {
@@ -144,7 +161,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     const previousScore = Number(person.current_score);
     const deltaHours = deltaHoursFor(person, startedAt, config);
     const gravity = roundForce(gravityForce(previousScore, Number(person.revert_target), deltaHours, config.gravity));
-    const scoredSignals = scoreSignals(signalsByPerson.get(person.id) ?? [], sentiments, config.signals);
+    const scoredSignals = scoreSignals(signalsByPerson.get(person.id) ?? [], sentiments, config.signals, startedAt);
     const signals = roundForce(signalsForce(scoredSignals, config.signals));
     const openCapital = context.openCapitalCentsByPerson.get(person.id) ?? 0;
     const concentration = Number(person.max_allocation_cents) > 0 ? openCapital / Number(person.max_allocation_cents) : 0;
@@ -262,6 +279,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     llmScored,
     fallbacks,
     withoutModel: scoredAll.length - llmScored - fallbacks,
+    expired: expiredCount,
     deferred: deferred.length,
     deferredByReason,
     llmCalls: scoring.callBudget.used,
@@ -293,6 +311,8 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       confidence: s.sentiment.confidence,
       direction: s.sentiment.direction,
       impact: round(s.impact, FORCE_DECIMALS),
+      ageHours: Math.round(s.ageHours * 10) / 10,
+      freshness: Math.round(s.freshness * 1000) / 1000,
       scorer: s.sentiment.scorer,
       rationale: s.sentiment.rationale,
       anomaly: s.sentiment.anomaly,

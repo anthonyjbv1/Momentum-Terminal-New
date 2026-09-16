@@ -41,14 +41,20 @@ export function isFreeSignal(signal: Pick<EngineSignal, "rawPayload">): boolean 
   return isMetricSignal(signal.rawPayload) || kindOf(signal.rawPayload) === "baseline";
 }
 
-export function selectTickSignals(loaded: EngineSignal[], config: EngineConfig["tick"]): TickSelection {
+/**
+ * `isFree` names the signals that cost the tick nothing and are therefore
+ * all taken: metric and baseline by default; the tick also passes expired
+ * event signals (past the freshness limit), which are processed with zero
+ * impact and no model call.
+ */
+export function selectTickSignals(loaded: EngineSignal[], config: EngineConfig["tick"], isFree: (signal: EngineSignal) => boolean = isFreeSignal): TickSelection {
   const selected: EngineSignal[] = [];
   const perPerson = new Map<string, number>();
   let eventSignals = 0;
   let freeSignals = 0;
 
   for (const signal of loaded) {
-    if (isFreeSignal(signal)) {
+    if (isFree(signal)) {
       selected.push(signal);
       freeSignals += 1;
       continue;

@@ -33,6 +33,7 @@ function tickResult(tickNumber: number, overrides: Partial<FullTickResult> = {})
       llmScored: 1,
       fallbacks: 1,
       withoutModel: 0,
+      expired: 0,
       deferred: 1,
       deferredByReason: { call_budget: 1 },
       llmCalls: 2,
@@ -45,8 +46,8 @@ function tickResult(tickNumber: number, overrides: Partial<FullTickResult> = {})
     },
     people: [],
     signals: [
-      { id: "a", personSlug: "drake", headline: "x", label: "positive", confidence: 0.8, direction: 1, impact: 1.2, scorer: "llm" },
-      { id: "b", personSlug: "mrbeast", headline: "y", label: "neutral", confidence: 0, direction: 0, impact: 0, scorer: "rules-fallback" },
+      { id: "a", personSlug: "drake", headline: "x", label: "positive", confidence: 0.8, direction: 1, impact: 1.2, ageHours: 0.5, freshness: 0.986, scorer: "llm" },
+      { id: "b", personSlug: "mrbeast", headline: "y", label: "neutral", confidence: 0, direction: 0, impact: 0, ageHours: 1, freshness: 0.972, scorer: "rules-fallback" },
     ],
     deferred: [{ id: "c", personSlug: "kai-cenat", reason: "call_budget", detail: "per-tick call budget of 4 spent" }],
     scorer: "llm",

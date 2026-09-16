@@ -1,14 +1,28 @@
 import type { EngineConfig } from "@/lib/engine/config";
 import { clamp } from "@/lib/engine/math";
+import { isMetricSignal } from "@/lib/engine/sentiment/metric";
 import type { SentimentResult } from "@/lib/engine/sentiment/types";
 import type { EngineSignal, ForceEntry, ScoredSignal } from "@/lib/engine/types";
 
 /**
  * FORCE 2 — Signals (news and metric impact).
  *
- *   impact(signal) = baseImpact * tierMultiplier(source tier) * confidence * direction
+ *   impact(signal) = baseImpact * tierMultiplier(source tier) * confidence * direction * freshness
  *   force          = the person's signals this tick, volume-normalised, capped
  *                    at ±maxAbsImpactPerTick as a brake
+ *
+ * FRESHNESS (Phase 12). The Engine used to score an eight-month-old article
+ * exactly as one published this minute: occurred_at was loaded and never
+ * read. Now an event signal's impact carries 2^(−age / halfLife), age being
+ * the gap between occurred_at and the tick, and is exactly zero from
+ * freshnessMaxAgeHours on. An expired signal contributes nothing, is never
+ * sent to the model, and is still processed, so a backlog of stale news
+ * drains at no cost instead of moving scores or lingering.
+ *
+ * Two clocks, kept apart on purpose: this weights staleness in the QUEUE,
+ * once, at the moment a signal contributes; Gravity handles staleness in the
+ * SCORE afterwards. Nothing here decays a score, and a metric signal is never
+ * aged — its own baseline window already says what is stale for it.
  *
  * PER-PERSON VOLUME NORMALISATION (Phase 7). Once several connectors feed
  * one person, the number of signals in a tick says more about the sources
@@ -39,19 +53,45 @@ export function tierMultiplier(tier: number, config: EngineConfig["signals"]): n
   return config.tierMultipliers[tier] ?? config.defaultTierMultiplier;
 }
 
-export function signalImpact(signal: EngineSignal, sentiment: SentimentResult, config: EngineConfig["signals"]): number {
+/** Hours between the signal's occurred_at and the tick. Negative when the clock says it has not happened yet. */
+export function signalAgeHours(signal: Pick<EngineSignal, "occurredAt">, now: Date): number {
+  return (now.getTime() - signal.occurredAt.getTime()) / 3_600_000;
+}
+
+/** The freshness curve: 1 at zero age, halving every halfLife, exactly 0 at and past maxAge. */
+export function freshnessWeight(ageHours: number, config: EngineConfig["signals"]): number {
+  if (!Number.isFinite(ageHours) || ageHours <= 0) return 1;
+  if (ageHours >= config.freshnessMaxAgeHours) return 0;
+  return Math.pow(2, -ageHours / config.freshnessHalfLifeHours);
+}
+
+/** Age and weight of one signal at this tick. A metric signal is never aged. */
+export function signalFreshness(signal: Pick<EngineSignal, "occurredAt" | "rawPayload">, now: Date, config: EngineConfig["signals"]): { ageHours: number; weight: number } {
+  const ageHours = signalAgeHours(signal, now);
+  return { ageHours, weight: isMetricSignal(signal.rawPayload) ? 1 : freshnessWeight(ageHours, config) };
+}
+
+/** An event signal past the freshness limit: it will contribute nothing, so it must not cost a model call either. */
+export function isExpiredSignal(signal: Pick<EngineSignal, "occurredAt" | "rawPayload">, now: Date, config: EngineConfig["signals"]): boolean {
+  return signalFreshness(signal, now, config).weight === 0;
+}
+
+export function signalImpact(signal: EngineSignal, sentiment: SentimentResult, config: EngineConfig["signals"], now: Date): number {
   const confidence = clamp(sentiment.confidence, 0, 1);
-  return config.baseImpact * tierMultiplier(signal.sourceTier, config) * confidence * sentiment.direction;
+  const { weight } = signalFreshness(signal, now, config);
+  return config.baseImpact * tierMultiplier(signal.sourceTier, config) * confidence * sentiment.direction * weight;
 }
 
 export function scoreSignals(
   signals: EngineSignal[],
   sentiments: Map<string, SentimentResult>,
   config: EngineConfig["signals"],
+  now: Date,
 ): ScoredSignal[] {
   return signals.map((signal) => {
     const sentiment = sentiments.get(signal.id) ?? { label: "neutral", confidence: 0, direction: 0 };
-    return { signal, sentiment, impact: signalImpact(signal, sentiment, config) };
+    const { ageHours, weight } = signalFreshness(signal, now, config);
+    return { signal, sentiment, impact: signalImpact(signal, sentiment, config, now), ageHours, freshness: weight };
   });
 }
 
@@ -94,6 +134,8 @@ export function signalsForce(scored: ScoredSignal[], config: EngineConfig["signa
       volumeDivisor,
       normalizedImpact: normalized,
       capped: impact !== normalized,
+      freshnessHalfLifeHours: config.freshnessHalfLifeHours,
+      freshnessMaxAgeHours: config.freshnessMaxAgeHours,
       signals: scored.map((s) => ({
         id: s.signal.id,
         source: s.signal.sourceName,
@@ -102,6 +144,8 @@ export function signalsForce(scored: ScoredSignal[], config: EngineConfig["signa
         confidence: s.sentiment.confidence,
         direction: s.sentiment.direction,
         impact: s.impact,
+        ageHours: Math.round(s.ageHours * 10) / 10,
+        freshness: Math.round(s.freshness * 1000) / 1000,
         counted: s.impact !== 0 && !droppedIds.has(s.signal.id),
         scorer: s.sentiment.scorer,
         anomaly: s.sentiment.anomaly,

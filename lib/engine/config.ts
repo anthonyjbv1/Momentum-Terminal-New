@@ -89,6 +89,21 @@ export interface EngineConfig {
      * than like independent events. 0 sums, 1 averages.
      */
     volumeExponent: number;
+    /**
+     * FRESHNESS (Phase 12). An event signal's impact is multiplied by
+     * 2^(−age / freshnessHalfLifeHours), where age is the gap between its
+     * occurred_at and the tick, and is exactly zero at and past
+     * freshnessMaxAgeHours: a signal that old contributes nothing, is never
+     * sent to the model, and is still marked processed so it cannot linger
+     * in the backlog. Metric signals are never aged: their own baseline
+     * windows say what is stale for them.
+     *
+     * This weights staleness in the QUEUE, once, at the moment the signal
+     * contributes. Staleness in the SCORE is Gravity's job and nothing here
+     * decays a score. TUNABLE.
+     */
+    freshnessHalfLifeHours: number;
+    freshnessMaxAgeHours: number;
   };
   /** The metric scorer (Phase 7): how a normalised deviation becomes confidence. */
   metrics: {
@@ -280,6 +295,8 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     maxAbsImpactPerTick: 10,
     maxPerSourcePerTick: 3,
     volumeExponent: 0.5,
+    freshnessHalfLifeHours: 24,
+    freshnessMaxAgeHours: 168,
   },
   metrics: { fullConfidenceSigma: 3, notableSigma: 2, anomalousSigma: 3 },
   marketMood: {

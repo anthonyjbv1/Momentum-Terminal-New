@@ -55,6 +55,25 @@ describe("Phase 11 invariants", () => {
 });
 
 /**
+ * FRESHNESS (Phase 12): the tunables, and the promise that they are the only
+ * age mechanism — the score's own decay is Gravity's and is untouched.
+ */
+describe("Phase 12 invariants", () => {
+  const { signals, gravity } = DEFAULT_ENGINE_CONFIG;
+
+  it("half-life 24 h, zero at 7 days, named as tunables on the Signals force", () => {
+    expect(signals.freshnessHalfLifeHours).toBe(24);
+    expect(signals.freshnessMaxAgeHours).toBe(168);
+    expect(signals.freshnessMaxAgeHours).toBeGreaterThan(signals.freshnessHalfLifeHours);
+  });
+
+  it("no second score-decay mechanism: Gravity is the only decay of a score, and its constant is unchanged", () => {
+    expect(gravity).toEqual({ lambdaPerHour: 0.35 });
+    expect(Object.keys(DEFAULT_ENGINE_CONFIG).filter((key) => /decay|freshness|age/i.test(key))).toEqual([]);
+  });
+});
+
+/**
  * The environment overrides for the controlled test: strictly parsed, opt-in,
  * and never able to move a default. The production default of the
  * Trading Activity minimum-sample guard stays 30 whatever happens here.
