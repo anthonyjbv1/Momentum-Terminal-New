@@ -1,3 +1,4 @@
+import type { DeferralReason } from "@/lib/engine/sentiment/budget";
 import type { SentimentResult } from "@/lib/engine/sentiment/types";
 import type { InversePair, Person } from "@/types";
 import type { Json } from "@/types/database";
@@ -61,7 +62,10 @@ export interface SignalActivity {
 export interface TickContext {
   now: Date;
   people: Person[];
+  /** Unprocessed signals of active people, oldest first, up to tick.loadCeiling. The tick selects from these. */
   signals: EngineSignal[];
+  /** How many unprocessed signals active people have in total: the backlog, whatever the ceiling let through. */
+  backlog: number;
   /** Open capital per person, in cents. */
   openCapitalCentsByPerson: Map<string, number>;
   signalActivityByPerson: Map<string, SignalActivity>;
@@ -112,6 +116,42 @@ export interface PersonSummary {
 /** What started the tick: a manual call to /api/engine/tick or the scheduled cron heartbeat. */
 export type TickTrigger = "manual" | "cron";
 
+/**
+ * HOW MUCH OF THE WORK THE TICK DID, and what it left behind. Persisted in
+ * engine_ticks.summary so a partial commit is visible as one, and the
+ * backlog can be watched tick by tick.
+ */
+export interface TickScoringSummary {
+  /** Unprocessed signals of active people when the tick loaded. */
+  backlogBefore: number;
+  /** Rows the tick read (bounded by tick.loadCeiling). */
+  loaded: number;
+  /** Signals the tick took on after the per-person and per-tick bounds. */
+  selected: number;
+  /** Signals sent to the model this tick: scored by it, or fallen back after a failed attempt. */
+  attempted: number;
+  llmScored: number;
+  /** Attempted, and the attempt failed: scored by rules, processed. */
+  fallbacks: number;
+  /** Scored without the model by design: metric, baseline, tiny change, or the rules scorer. */
+  withoutModel: number;
+  /** Selected but NOT attempted: left unprocessed for a later tick. */
+  deferred: number;
+  deferredByReason: Partial<Record<DeferralReason, number>>;
+  /** Model calls this tick, against the budget. */
+  llmCalls: number;
+  llmCallBudget: number;
+  /** Signals this tick commits as processed. */
+  processed: number;
+  /** Unprocessed signals left after this tick. The number to watch. */
+  backlogAfter: number;
+  /** True when the tick left signals unprocessed, by deferral or by the bounds. */
+  partial: boolean;
+  /** Wall-clock budget the tick had, and how much of it was left when scoring finished. */
+  budgetMs: number | null;
+  remainingMs: number | null;
+}
+
 export interface TickSummary {
   tickNumber: number;
   dryRun: boolean;
@@ -123,6 +163,7 @@ export interface TickSummary {
   mood: number;
   peopleUpdated: number;
   signalsProcessed: number;
+  scoring: TickScoringSummary;
   people: PersonSummary[];
   signals: Array<{
     id: string;
@@ -139,6 +180,8 @@ export interface TickSummary {
     /** The Engine's one-sentence explanation from LLM reasoning, reused by narratives. */
     narrative?: string;
   }>;
+  /** Signals the tick selected but did not attempt; they stay unprocessed. */
+  deferred: Array<{ id: string; personSlug: string; reason: DeferralReason; detail: string }>;
 }
 
 /** What the store persists atomically. */

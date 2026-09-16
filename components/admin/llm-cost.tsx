@@ -18,8 +18,15 @@ export function LlmCostSection({ report }: { report: LlmCostReport }) {
   return (
     <Panel id="llm" title="LLM cost and usage" hint="Every model call the Engine has made, priced by exact model string." right={<WindowTabs current={report.window} />}>
       <Stats>
-        <Stat label="Cost" value={usd(report.totalCostUsd)} sub={`priced calls only · ${report.window}`} />
-        <Stat label="Calls" value={num(report.totalCalls)} />
+        <Stat label="Cost" value={usd(report.totalCostUsd)} sub={`priced, completed calls only · ${report.window}`} />
+        <Stat label="Calls" value={num(report.totalCalls)} sub={`${num(report.completedCalls)} completed`} />
+        <Stat
+          label="Unsettled calls"
+          value={num(report.startedCalls)}
+          tone={report.startedCalls > 0 ? "bad" : "ok"}
+          sub={report.startedCalls > 0 ? "started, never settled: the process died inside them" : "no call was cut off in flight"}
+        />
+        <Stat label="Failed calls" value={num(report.failedCalls)} tone={report.failedCalls > 0 ? "warn" : "ok"} sub="threw: timeout or provider error" />
         <Stat
           label="Unpriced calls"
           value={num(report.unpricedCalls)}
@@ -161,6 +168,8 @@ export function LlmCostSection({ report }: { report: LlmCostReport }) {
                     <tr>
                       <th className="n">Tick</th>
                       <th className="n">Calls</th>
+                      <th className="n">Failed</th>
+                      <th className="n">Unsettled</th>
                       <th className="n">Sent</th>
                       <th className="n">Anom</th>
                       <th className="n">Narr</th>
@@ -175,6 +184,8 @@ export function LlmCostSection({ report }: { report: LlmCostReport }) {
                       <tr key={tick.tickNumber ?? "unattributed"}>
                         <td className="n">{tick.tickNumber ?? "—"}</td>
                         <td className="n">{num(tick.calls)}</td>
+                        <td className="n">{tick.failed > 0 ? <Badge tone="warn">{tick.failed}</Badge> : "0"}</td>
+                        <td className="n">{tick.started > 0 ? <Badge tone="bad">{tick.started}</Badge> : "0"}</td>
                         <td className="n">{num(tick.sentiment)}</td>
                         <td className="n">{num(tick.anomaly)}</td>
                         <td className="n">{num(tick.narrative)}</td>
@@ -193,7 +204,9 @@ export function LlmCostSection({ report }: { report: LlmCostReport }) {
 
         <p className="adm-note">
           Prices join on the exact model string (llm_model_prices.model). An unpriced call is counted and named but never costed at zero — the totals above are
-          the priced calls only.
+          the priced calls only. A call is written to the ledger <b>before</b> it is made and settled when it returns; a call still <b>unsettled</b> was billed
+          by the provider and cut off in flight — the state this console could not see during the first cron run. A <b>failed</b> call threw (a timeout, a
+          provider error) and carries its reason; it costs its input and shows no output tokens.
         </p>
       </div>
     </Panel>

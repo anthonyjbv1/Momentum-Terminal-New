@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { CRON_DEFAULTS, authorizeCronRequest, runScheduledTicks } from "./cron";
+import { CRON_DEFAULTS, authorizeCronRequest, runScheduledTicks, type TickSlot } from "./cron";
 import type { FullTickResult } from "./run-tick";
 
 /** A fake clock the scheduler and the fake ticks share. */
@@ -25,13 +25,32 @@ function tickResult(tickNumber: number, overrides: Partial<FullTickResult> = {})
     mood: 0,
     peopleUpdated: 16,
     signalsProcessed: 2,
+    scoring: {
+      backlogBefore: 5,
+      loaded: 5,
+      selected: 3,
+      attempted: 2,
+      llmScored: 1,
+      fallbacks: 1,
+      withoutModel: 0,
+      deferred: 1,
+      deferredByReason: { call_budget: 1 },
+      llmCalls: 2,
+      llmCallBudget: 4,
+      processed: 2,
+      backlogAfter: 3,
+      partial: true,
+      budgetMs: 25_000,
+      remainingMs: 20_000,
+    },
     people: [],
     signals: [
       { id: "a", personSlug: "drake", headline: "x", label: "positive", confidence: 0.8, direction: 1, impact: 1.2, scorer: "llm" },
       { id: "b", personSlug: "mrbeast", headline: "y", label: "neutral", confidence: 0, direction: 0, impact: 0, scorer: "rules-fallback" },
     ],
+    deferred: [{ id: "c", personSlug: "kai-cenat", reason: "call_budget", detail: "per-tick call budget of 4 spent" }],
     scorer: "llm",
-    postTick: { narratives: 1, memoryUpdates: 1, memoryLlmSummaries: 0, errors: [] },
+    postTick: { narratives: 1, memoryUpdates: 1, memoryLlmSummaries: 0, memorySummariesDeferred: 0, errors: [] },
     ...overrides,
   };
 }
@@ -47,7 +66,7 @@ describe("runScheduledTicks", () => {
     expect(log).toHaveBeenCalledWith("skipped (disabled)", { enabled: false });
   });
 
-  it("runs two ticks 30 seconds apart when enabled, through the injected tick path", async () => {
+  it("runs two ticks 30 seconds apart when enabled, each with its own deadline: the time left in the invocation less the commit reserve", async () => {
     const c = clock();
     const sleeps: number[] = [];
     const sleep = vi.fn(async (ms: number) => {
@@ -55,7 +74,7 @@ describe("runScheduledTicks", () => {
       c.advance(ms);
     });
     let tick = 0;
-    const runTick = vi.fn(async () => {
+    const runTick = vi.fn<(slot: TickSlot) => Promise<FullTickResult>>(async () => {
       c.advance(4_000); // each tick takes 4 s
       tick += 1;
       return tickResult(tick);
@@ -65,19 +84,40 @@ describe("runScheduledTicks", () => {
     const result = await runScheduledTicks({ enabled: true, runTick, sleep, now: c.now, log });
 
     expect(runTick).toHaveBeenCalledTimes(2);
+    // BOTH ticks get a deadline. Tick 1: 55 s − 0 − 2 s reserve. Tick 2 starts at 30 s: 55 − 30 − 2.
+    expect(runTick.mock.calls[0][0]).toEqual({ index: 0, budgetMs: 53_000 });
+    expect(runTick.mock.calls[1][0]).toEqual({ index: 1, budgetMs: 23_000 });
     expect(sleeps).toEqual([26_000]); // second tick starts 30 s after the first STARTED
     expect(result).toMatchObject({ enabled: true, status: "ran", ticksPlanned: 2, ticksRun: 2, skippedTicks: [] });
     expect(result.ticks.map((t) => t.tickNumber)).toEqual([1, 2]);
-    expect(result.ticks[0]).toMatchObject({ ok: true, durationMs: 4_000, signalsProcessed: 2, llmScored: 1, fallbacks: 1, narratives: 1 });
+    expect(result.ticks[0]).toMatchObject({ ok: true, durationMs: 4_000, budgetMs: 53_000, signalsProcessed: 2, attempted: 2, llmScored: 1, fallbacks: 1, deferred: 1, llmCalls: 2, backlogAfter: 3, partial: true, narratives: 1 });
     expect(result.durationMs).toBe(34_000);
-    expect(log).toHaveBeenCalledWith("invocation finished", expect.objectContaining({ ticksRun: 2, signalsProcessed: 4, fallbacks: 2 }));
+    expect(log).toHaveBeenCalledWith("invocation finished", expect.objectContaining({ ticksRun: 2, signalsProcessed: 4, attempted: 4, fallbacks: 2, deferred: 2, llmCalls: 4, backlogAfter: 3 }));
   });
 
-  it("skips the second tick when the first ran too long for the time budget", async () => {
+  it("still runs the second tick after a slow first one, with whatever budget is left", async () => {
+    const c = clock();
+    const sleep = vi.fn(async (ms: number) => c.advance(ms));
+    let tick = 0;
+    const runTick = vi.fn<(slot: TickSlot) => Promise<FullTickResult>>(async () => {
+      c.advance(tick === 0 ? 35_000 : 1_000); // the first tick overran its own budget (a slow database, say)
+      tick += 1;
+      return tickResult(tick);
+    });
+
+    const result = await runScheduledTicks({ enabled: true, runTick, sleep, now: c.now, log: vi.fn() });
+
+    expect(runTick).toHaveBeenCalledTimes(2);
+    expect(sleep).not.toHaveBeenCalled(); // the 30 s slot had already passed
+    expect(runTick.mock.calls[1][0]).toEqual({ index: 1, budgetMs: 18_000 }); // 55 − 35 − 2: bounded, so it still commits
+    expect(result.ticksRun).toBe(2);
+  });
+
+  it("skips the second tick only when the time left is too little to be worth a tick", async () => {
     const c = clock();
     const sleep = vi.fn(async (ms: number) => c.advance(ms));
     const runTick = vi.fn(async () => {
-      c.advance(35_000); // slow first tick
+      c.advance(52_000); // a runaway first tick
       return tickResult(1);
     });
     const log = vi.fn();
@@ -85,9 +125,8 @@ describe("runScheduledTicks", () => {
     const result = await runScheduledTicks({ enabled: true, runTick, sleep, now: c.now, log });
 
     expect(runTick).toHaveBeenCalledTimes(1);
-    expect(sleep).not.toHaveBeenCalled();
     expect(result.ticksRun).toBe(1);
-    expect(result.skippedTicks).toEqual([{ index: 1, reason: expect.stringContaining("not enough time budget") }]);
+    expect(result.skippedTicks).toEqual([{ index: 1, reason: expect.stringContaining("not enough time budget: 1s left of 55s") }]);
     expect(log).toHaveBeenCalledWith("tick skipped", expect.objectContaining({ index: 1 }));
   });
 
@@ -95,7 +134,7 @@ describe("runScheduledTicks", () => {
     const c = clock();
     const sleep = vi.fn(async (ms: number) => c.advance(ms));
     const runTick = vi
-      .fn<() => Promise<FullTickResult>>()
+      .fn<(slot: TickSlot) => Promise<FullTickResult>>()
       .mockImplementationOnce(async () => {
         c.advance(2_000);
         throw new Error("database unreachable");
@@ -108,7 +147,7 @@ describe("runScheduledTicks", () => {
     const result = await runScheduledTicks({ enabled: true, runTick, sleep, now: c.now, log: vi.fn() });
 
     expect(runTick).toHaveBeenCalledTimes(2);
-    expect(result.ticks[0]).toMatchObject({ ok: false, error: "database unreachable" });
+    expect(result.ticks[0]).toMatchObject({ ok: false, error: "database unreachable", budgetMs: 53_000 });
     expect(result.ticks[1]).toMatchObject({ ok: true, tickNumber: 7 });
     expect(result.ticksRun).toBe(1);
   });
@@ -121,8 +160,10 @@ describe("runScheduledTicks", () => {
     expect(result.ticksPlanned).toBe(1);
   });
 
-  it("uses a 55-second budget under the route's 60-second maxDuration", () => {
-    expect(CRON_DEFAULTS).toEqual({ ticksPerInvocation: 2, spacingMs: 30_000, budgetMs: 55_000, minTickEstimateMs: 5_000 });
+  it("uses a 55-second budget under the route's 60-second maxDuration, and a second tick always fits when the first behaved", () => {
+    expect(CRON_DEFAULTS).toEqual({ ticksPerInvocation: 2, spacingMs: 30_000, budgetMs: 55_000, commitReserveMs: 2_000, minTickBudgetMs: 5_000 });
+    expect(CRON_DEFAULTS.budgetMs).toBeLessThan(60_000);
+    expect(CRON_DEFAULTS.spacingMs + CRON_DEFAULTS.minTickBudgetMs + CRON_DEFAULTS.commitReserveMs).toBeLessThanOrEqual(CRON_DEFAULTS.budgetMs);
   });
 });
 

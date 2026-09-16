@@ -256,6 +256,7 @@ export type Database = {
           cache_creation_input_tokens: number
           cache_read_input_tokens: number
           created_at: string
+          error: string | null
           id: string
           input_tokens: number
           latency_ms: number | null
@@ -263,6 +264,8 @@ export type Database = {
           output_tokens: number
           person_id: string | null
           provider: string
+          started_at: string | null
+          status: string
           task_type: string
           tick_number: number | null
         }
@@ -270,6 +273,7 @@ export type Database = {
           cache_creation_input_tokens?: number
           cache_read_input_tokens?: number
           created_at?: string
+          error?: string | null
           id?: string
           input_tokens?: number
           latency_ms?: number | null
@@ -277,6 +281,8 @@ export type Database = {
           output_tokens?: number
           person_id?: string | null
           provider: string
+          started_at?: string | null
+          status?: string
           task_type: string
           tick_number?: number | null
         }
@@ -284,6 +290,7 @@ export type Database = {
           cache_creation_input_tokens?: number
           cache_read_input_tokens?: number
           created_at?: string
+          error?: string | null
           id?: string
           input_tokens?: number
           latency_ms?: number | null
@@ -291,6 +298,8 @@ export type Database = {
           output_tokens?: number
           person_id?: string | null
           provider?: string
+          started_at?: string | null
+          status?: string
           task_type?: string
           tick_number?: number | null
         }
@@ -1410,7 +1419,9 @@ export type Database = {
           cache_creation_input_tokens: number | null
           cache_read_input_tokens: number | null
           calls: number | null
+          completed_calls: number | null
           cost_usd: number | null
+          failed_calls: number | null
           first_call_at: string | null
           input_tokens: number | null
           last_call_at: string | null
@@ -1418,6 +1429,7 @@ export type Database = {
           narrative_calls: number | null
           output_tokens: number | null
           sentiment_calls: number | null
+          started_calls: number | null
           tick_number: number | null
           unpriced_calls: number | null
         }

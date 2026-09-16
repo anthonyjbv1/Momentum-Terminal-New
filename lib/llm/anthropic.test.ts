@@ -61,6 +61,14 @@ describe("AnthropicProvider", () => {
     });
   });
 
+  it("constructs the SDK client with ONE ATTEMPT per call: no retries, so a timeout costs one timeout", () => {
+    // The retry was the hidden multiplier of the first cron run: a 20 s
+    // timeout plus one SDK retry held a pool slot for 40 s inside a 55 s
+    // budget. The next tick is the retry.
+    expect(new AnthropicProvider({ apiKey: "test-key" }).settings).toEqual({ timeoutMs: 30_000, maxRetries: 0 });
+    expect(new AnthropicProvider({ apiKey: "test-key", maxRetries: 2, timeoutMs: 5_000 }).settings).toEqual({ timeoutMs: 5_000, maxRetries: 2 });
+  });
+
   it("passes temperature and skips effort on models that support / reject them", async () => {
     const client: FakeClient = { messages: { create: vi.fn(async () => message("hi")) } };
     await provider(client).complete({ systemPrompt: "s", userPrompt: "u", model: "claude-haiku-4-5", temperature: 0.2, effort: "low" });

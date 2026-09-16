@@ -14,8 +14,9 @@ import { getCronSecretOrNull, getEngineSecretOrNull, isEngineCronEnabled } from 
  *   2. The caller must be Vercel Cron (Authorization: Bearer CRON_SECRET) or
  *      hold ENGINE_SECRET.
  *   3. Two ticks, 30 seconds apart, through the same runFullTick() path the
- *      manual /api/engine/tick route uses — within a 55-second budget so the
- *      invocation never outruns maxDuration.
+ *      manual /api/engine/tick route uses — each under its own deadline
+ *      inside a 55-second budget, so the invocation never outruns
+ *      maxDuration and every tick that starts commits.
  */
 
 export const runtime = "nodejs";
@@ -24,9 +25,10 @@ export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   const enabled = isEngineCronEnabled();
+  const runTick = (slot: { budgetMs: number }) => runFullTick({ trigger: "cron", budgetMs: slot.budgetMs });
 
   if (!enabled) {
-    const result = await runScheduledTicks({ enabled: false, runTick: () => runFullTick({ trigger: "cron" }) });
+    const result = await runScheduledTicks({ enabled: false, runTick });
     return NextResponse.json(result);
   }
 
@@ -35,6 +37,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: auth.message }, { status: auth.status });
   }
 
-  const result = await runScheduledTicks({ enabled: true, runTick: () => runFullTick({ trigger: "cron" }) });
+  const result = await runScheduledTicks({ enabled: true, runTick });
   return NextResponse.json(result, { status: result.ticks.some((t) => !t.ok) ? 500 : 200 });
 }

@@ -18,6 +18,13 @@ export const ANTHROPIC_PROVIDER_NAME = "anthropic";
 export const ANTHROPIC_DEFAULT_MODEL = "claude-opus-5";
 const DEFAULT_MAX_TOKENS = 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
+/**
+ * ONE ATTEMPT PER CALL. The SDK retries a timed-out request by default, so a
+ * 20-second timeout could occupy a pool slot for 40 seconds inside a tick
+ * that had 55 — the hidden multiplier of the first cron run. Every call this
+ * application makes happens inside a tick, and the next tick is the retry.
+ */
+export const DEFAULT_MAX_RETRIES = 0;
 
 /** Models that still accept sampling parameters. Newer models reject `temperature` with a 400. */
 const SAMPLING_SUPPORTED = /^claude-(haiku-4-5|sonnet-4-6|opus-4-6|opus-4-5|sonnet-4-5)/;
@@ -47,8 +54,13 @@ export class AnthropicProvider implements LLMProvider {
     this.apiKey = options.apiKey ?? process.env.ANTHROPIC_API_KEY;
     this.defaultModel = options.defaultModel ?? process.env.LLM_MODEL?.trim() ?? ANTHROPIC_DEFAULT_MODEL;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.maxRetries = options.maxRetries ?? 1;
+    this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.client = options.client ?? null;
+  }
+
+  /** The client settings this adapter constructs the SDK with. */
+  get settings(): { timeoutMs: number; maxRetries: number } {
+    return { timeoutMs: this.timeoutMs, maxRetries: this.maxRetries };
   }
 
   private getClient(): Pick<Anthropic, "messages"> {

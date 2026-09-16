@@ -1,6 +1,58 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_ENGINE_CONFIG, describeEngineOverrides, engineConfigFromEnv, parsePositiveInteger } from "./config";
+import { CRON_DEFAULTS } from "./cron";
+import { CALLS_PER_PERSON_PER_TICK } from "./sentiment/budget";
+import { CALL_OVERHEAD_MS } from "./sentiment/llm";
+
+/**
+ * THE TICK THAT ALWAYS COMMITS: the numbers that make it true, pinned.
+ *
+ * These are relations, not tunings. Each one is a line of the failure
+ * analysis of the first cron run (a ~65 s tick killed at 60 s every minute,
+ * committed never), and loosening any of them re-opens that failure.
+ */
+describe("Phase 11 invariants", () => {
+  const { tick, llm } = DEFAULT_ENGINE_CONFIG;
+
+  it("ONE CHUNK PER PERSON PER TICK: the per-person selection bound is exactly one call's worth, and a person gets one call", () => {
+    expect(CALLS_PER_PERSON_PER_TICK).toBe(1);
+    expect(tick.maxEventSignalsPerPersonPerTick).toBe(llm.maxSignalsPerCall);
+    expect(tick.maxEventSignalsPerPersonPerTick).toBe(12);
+  });
+
+  it("the event load is one wave of the pool: callBudgetPerTick × maxSignalsPerCall, with the budget equal to the concurrency", () => {
+    expect(tick.maxEventSignalsPerTick).toBe(llm.callBudgetPerTick * llm.maxSignalsPerCall);
+    expect(llm.callBudgetPerTick).toBe(llm.maxConcurrentCalls);
+    expect(tick.maxEventSignalsPerTick).toBe(48);
+    expect(llm.callBudgetPerTick).toBe(4);
+  });
+
+  it("the per-tick budget is a count, distinct from the rolling rate limit; the old name is gone", () => {
+    expect("maxCallsPerTick" in llm).toBe(false);
+    expect("maxSignalsPerTick" in tick).toBe(false);
+    expect(llm.rollingWindowMaxCalls).toBe(20);
+    expect(llm.rollingWindowMaxCalls).toBeGreaterThan(llm.callBudgetPerTick);
+  });
+
+  it("one attempt of 15 s per call, and a call can always start at the top of a 25 s tick", () => {
+    expect(llm.timeoutMs).toBe(15_000);
+    expect(tick.budgetMs).toBe(25_000);
+    expect(llm.timeoutMs + CALL_OVERHEAD_MS).toBeLessThan(tick.budgetMs);
+  });
+
+  it("two ticks fit the cron invocation: the second slot, at 30 s, holds a full tick less the commit reserve", () => {
+    const secondSlot = CRON_DEFAULTS.budgetMs - CRON_DEFAULTS.spacingMs - CRON_DEFAULTS.commitReserveMs;
+    expect(secondSlot).toBeGreaterThanOrEqual(CRON_DEFAULTS.minTickBudgetMs);
+    expect(secondSlot).toBeGreaterThan(llm.timeoutMs + CALL_OVERHEAD_MS); // a call can still start in the second tick
+    expect(CRON_DEFAULTS.spacingMs + tick.budgetMs).toBeLessThan(60_000); // and the second tick's own budget ends under maxDuration
+  });
+
+  it("reads past one subject's backlog: the load ceiling is far above the event bound", () => {
+    expect(tick.loadCeiling).toBe(500);
+    expect(tick.loadCeiling).toBeGreaterThanOrEqual(tick.maxEventSignalsPerTick * 10);
+  });
+});
 
 /**
  * The environment overrides for the controlled test: strictly parsed, opt-in,

@@ -40,6 +40,7 @@ export function EngineSection({ report, now }: { report: EngineReport; now: numb
       <Stats>
         <Stat label="Engine cron" value={report.engineCronEnabled ? "ON" : "OFF"} tone={report.engineCronEnabled ? "ok" : "plain"} sub="ENGINE_CRON_ENABLED" />
         <Stat label="Ingestion cron" value={report.ingestCronEnabled ? "ON" : "OFF"} tone={report.ingestCronEnabled ? "ok" : "plain"} sub="INGEST_CRON_ENABLED" />
+        <Stat label="Backlog" value={num(report.backlog)} tone={report.backlog > 0 ? "warn" : "ok"} sub="unprocessed signals, what the next tick sees" />
         <Stat label="Ticks" value={num(report.tickCount)} sub={report.lastTickNumber === null ? "none yet" : `last #${report.lastTickNumber}`} />
         <Stat label="Last tick" value={age(report.lastTickAt, now)} sub={stamp(report.lastTickAt)} />
         <Stat label="Tick latency" value={ms(report.avgTickMs)} sub={`mean of the last ${report.recentTicks.length || 0}`} />
@@ -96,7 +97,13 @@ export function EngineSection({ report, now }: { report: EngineReport; now: numb
                       <th className="n">Took</th>
                       <th className="n">Mood</th>
                       <th className="n">People</th>
-                      <th className="n">Signals</th>
+                      <th className="n">Processed</th>
+                      <th className="n">Attempted</th>
+                      <th className="n">Deferred</th>
+                      <th className="n">Fell back</th>
+                      <th className="n">Calls</th>
+                      <th className="n">Backlog after</th>
+                      <th>Commit</th>
                       <th className="wrap">What moved</th>
                     </tr>
                   </thead>
@@ -109,6 +116,12 @@ export function EngineSection({ report, now }: { report: EngineReport; now: numb
                         <td className="n">{tick.mood === null ? "—" : tick.mood.toFixed(2)}</td>
                         <td className="n">{num(tick.peopleUpdated)}</td>
                         <td className="n">{num(tick.signalsProcessed)}</td>
+                        <td className="n">{tick.work ? num(tick.work.attempted) : "—"}</td>
+                        <td className="n">{tick.work ? tick.work.deferred > 0 ? <Badge tone="warn">{tick.work.deferred}</Badge> : "0" : "—"}</td>
+                        <td className="n">{tick.work ? tick.work.fallbacks > 0 ? <Badge tone="warn">{tick.work.fallbacks}</Badge> : "0" : "—"}</td>
+                        <td className="n">{tick.work ? num(tick.work.llmCalls) : "—"}</td>
+                        <td className="n">{tick.work ? num(tick.work.backlogAfter) : "—"}</td>
+                        <td>{tick.work ? <Badge tone={tick.work.partial ? "info" : "ok"}>{tick.work.partial ? "partial" : "full"}</Badge> : "—"}</td>
                         <td className="wrap">
                           {tick.movers.length === 0
                             ? "—"
@@ -120,6 +133,11 @@ export function EngineSection({ report, now }: { report: EngineReport; now: numb
                 </table>
               </Scroll>
             )}
+            <p className="adm-note">
+              Every tick that starts commits. <b>Attempted</b> went to the model (scored by it, or <b>fell back</b> to rules when the call failed);
+              <b> deferred</b> was never attempted — the deadline, the per-tick call budget or the one-chunk-per-person rule held it back — and stays
+              unprocessed for a later tick. A <b>partial</b> commit is a tick that left signals behind; the backlog after it is what the next tick sees.
+            </p>
           </div>
 
           <div>

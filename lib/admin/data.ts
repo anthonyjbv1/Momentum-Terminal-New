@@ -74,14 +74,37 @@ export interface CostRow {
 
 export interface LlmCostReport {
   window: Window;
+  /** Every attempt: completed, failed and still-started rows alike. */
   totalCalls: number;
+  completedCalls: number;
+  /** Calls that threw (a timeout, a provider error). Billed for their input; previously invisible. */
+  failedCalls: number;
+  /**
+   * Calls written before they were made and never settled. A row stays here
+   * only when the process died with the call in flight — billed, and before
+   * Phase 11 never recorded. Anything above zero is the failure mode showing.
+   */
+  startedCalls: number;
   totalCostUsd: number;
-  /** Calls whose model string matched no price row. Never folded into the total: unknown is not zero. */
+  /** Completed calls whose model string matched no price row. Never folded into the total: unknown is not zero. */
   unpricedCalls: number;
   unpricedModels: string[];
   byModel: CostRow[];
   byTask: CostRow[];
-  perTick: Array<{ tickNumber: number | null; calls: number; costUsd: number | null; unpricedCalls: number; sentiment: number; anomaly: number; narrative: number; memory: number; lastCallAt: string | null }>;
+  perTick: Array<{
+    tickNumber: number | null;
+    calls: number;
+    completed: number;
+    failed: number;
+    started: number;
+    costUsd: number | null;
+    unpricedCalls: number;
+    sentiment: number;
+    anomaly: number;
+    narrative: number;
+    memory: number;
+    lastCallAt: string | null;
+  }>;
   /** Daily cost, oldest first, for the trend. */
   trend: Array<{ day: string; calls: number; costUsd: number }>;
 }
@@ -92,7 +115,7 @@ export async function readLlmCost(window: Window): Promise<LlmCostReport> {
 
   let usageQuery = client
     .from("llm_usage")
-    .select("model, task_type, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, created_at")
+    .select("model, task_type, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, created_at, status")
     .order("created_at", { ascending: false })
     .limit(USAGE_ROW_CAP);
   if (since) usageQuery = usageQuery.gte("created_at", since.toISOString());
@@ -108,7 +131,10 @@ export async function readLlmCost(window: Window): Promise<LlmCostReport> {
 
   // Prices match the model string EXACTLY, the same rule llm_cost_per_tick uses.
   const priceOf = new Map((prices.data ?? []).map((p) => [p.model, p]));
-  const rows = usage.data ?? [];
+  const attempts = usage.data ?? [];
+  // Only a completed call has tokens and an echoed model string; the other
+  // two states are counted, never costed or matched against a price row.
+  const rows = attempts.filter((row) => row.status === "completed");
 
   const cost = (row: (typeof rows)[number]): number | null => {
     const price = priceOf.get(row.model);
@@ -142,17 +168,20 @@ export async function readLlmCost(window: Window): Promise<LlmCostReport> {
 
   const unpricedModels = [...new Set(rows.filter((row) => !priceOf.has(row.model)).map((row) => row.model))].sort();
   const byDay = new Map<string, { day: string; calls: number; costUsd: number }>();
-  for (const row of rows) {
+  for (const row of attempts) {
     const day = row.created_at.slice(0, 10);
     const bucket = byDay.get(day) ?? { day, calls: 0, costUsd: 0 };
     bucket.calls += 1;
-    bucket.costUsd += cost(row) ?? 0;
+    bucket.costUsd += row.status === "completed" ? (cost(row) ?? 0) : 0;
     byDay.set(day, bucket);
   }
 
   return {
     window,
-    totalCalls: rows.length,
+    totalCalls: attempts.length,
+    completedCalls: rows.length,
+    failedCalls: attempts.filter((row) => row.status === "failed").length,
+    startedCalls: attempts.filter((row) => row.status === "started").length,
     totalCostUsd: sum(rows.map((row) => cost(row) ?? 0)),
     unpricedCalls: rows.filter((row) => !priceOf.has(row.model)).length,
     unpricedModels,
@@ -161,6 +190,9 @@ export async function readLlmCost(window: Window): Promise<LlmCostReport> {
     perTick: (perTick.data ?? []).map((tick) => ({
       tickNumber: tick.tick_number === null ? null : Number(tick.tick_number),
       calls: Number(tick.calls ?? 0),
+      completed: Number(tick.completed_calls ?? 0),
+      failed: Number(tick.failed_calls ?? 0),
+      started: Number(tick.started_calls ?? 0),
       costUsd: tick.cost_usd === null ? null : Number(tick.cost_usd),
       unpricedCalls: Number(tick.unpriced_calls ?? 0),
       sentiment: Number(tick.sentiment_calls ?? 0),
@@ -305,6 +337,18 @@ export async function readIngestion(): Promise<IngestionReport> {
 // c) Engine state
 // ---------------------------------------------------------------------------
 
+/** What one tick did with its work, read back from engine_ticks.summary.scoring (null on a tick written before Phase 11). */
+export interface TickWork {
+  selected: number;
+  attempted: number;
+  deferred: number;
+  fallbacks: number;
+  llmCalls: number;
+  backlogAfter: number;
+  /** The tick left signals unprocessed, by deferral or by the per-tick bounds. It committed anyway. */
+  partial: boolean;
+}
+
 export interface EngineReport {
   /** The two schedules, separately gated, never conflated. */
   engineCronEnabled: boolean;
@@ -313,20 +357,53 @@ export interface EngineReport {
   lastTickAt: string | null;
   lastTickNumber: number | null;
   avgTickMs: number | null;
-  recentTicks: Array<{ tickNumber: number; startedAt: string; durationMs: number | null; mood: number | null; peopleUpdated: number; signalsProcessed: number; movers: Array<{ slug: string; change: number }> }>;
+  /** Unprocessed signals of active people right now: what the next tick will see. THE number to watch. */
+  backlog: number;
+  recentTicks: Array<{
+    tickNumber: number;
+    startedAt: string;
+    durationMs: number | null;
+    mood: number | null;
+    peopleUpdated: number;
+    signalsProcessed: number;
+    work: TickWork | null;
+    movers: Array<{ slug: string; change: number }>;
+  }>;
   scores: Array<{ slug: string; displayName: string; score: number; revertTarget: number; lastTickAt: string | null }>;
+}
+
+function readTickWork(summary: unknown): TickWork | null {
+  const scoring = (summary as { scoring?: Record<string, unknown> } | null)?.scoring;
+  if (!scoring || typeof scoring !== "object") return null;
+  const n = (key: string) => (typeof scoring[key] === "number" ? (scoring[key] as number) : 0);
+  return {
+    selected: n("selected"),
+    attempted: n("attempted"),
+    deferred: n("deferred"),
+    fallbacks: n("fallbacks"),
+    llmCalls: n("llmCalls"),
+    backlogAfter: n("backlogAfter"),
+    partial: scoring.partial === true,
+  };
 }
 
 export async function readEngine(): Promise<EngineReport> {
   const client = await adminClient();
   const [ticks, people, count] = await Promise.all([
     client.from("engine_ticks").select("*").order("tick_number", { ascending: false }).limit(RECENT_LIMIT),
-    client.from("people").select("slug, display_name, current_score, revert_target, last_tick_at").eq("is_active", true).order("current_score", { ascending: false }).order("slug"),
+    client.from("people").select("id, slug, display_name, current_score, revert_target, last_tick_at").eq("is_active", true).order("current_score", { ascending: false }).order("slug"),
     client.from("engine_ticks").select("tick_number", { count: "exact", head: true }),
   ]);
   for (const [label, result] of Object.entries({ ticks, people, count })) {
     if (result.error) throw new Error(`${label}: ${result.error.message}`);
   }
+  // The same count the tick itself takes at load: unprocessed signals of active people.
+  const backlog = await client
+    .from("signals")
+    .select("id", { count: "exact", head: true })
+    .eq("processed", false)
+    .in("person_id", (people.data ?? []).map((person) => person.id));
+  if (backlog.error) throw new Error(`backlog: ${backlog.error.message}`);
 
   const rows = ticks.data ?? [];
   const durations = rows.map((tick) => (tick.finished_at && tick.started_at ? new Date(tick.finished_at).getTime() - new Date(tick.started_at).getTime() : null)).filter((ms): ms is number => ms !== null);
@@ -338,6 +415,7 @@ export async function readEngine(): Promise<EngineReport> {
     lastTickAt: rows[0]?.started_at ?? null,
     lastTickNumber: rows[0] ? Number(rows[0].tick_number) : null,
     avgTickMs: durations.length > 0 ? Math.round(sum(durations) / durations.length) : null,
+    backlog: backlog.count ?? 0,
     recentTicks: rows.map((tick) => {
       const summary = (tick.summary ?? null) as { people?: Array<{ slug?: string; change?: number }> } | null;
       const movers = (summary?.people ?? [])
@@ -351,6 +429,7 @@ export async function readEngine(): Promise<EngineReport> {
         mood: tick.mood === null ? null : Number(tick.mood),
         peopleUpdated: Number(tick.people_updated ?? 0),
         signalsProcessed: Number(tick.signals_processed ?? 0),
+        work: readTickWork(tick.summary),
         movers,
       };
     }),

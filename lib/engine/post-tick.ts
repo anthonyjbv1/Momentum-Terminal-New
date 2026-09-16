@@ -1,18 +1,26 @@
 import { DEFAULT_ENGINE_CONFIG, type EngineConfig } from "@/lib/engine/config";
+import { NO_DEADLINE, type TickDeadline } from "@/lib/engine/deadline";
 import type { MemoryStore } from "@/lib/engine/memory/store";
 import type { MemoryNotableEvent } from "@/lib/engine/memory/types";
 import { refreshRecentContext } from "@/lib/engine/memory/update";
 import { buildNarratives, type NarrativeStore } from "@/lib/engine/narratives";
+import { CALL_OVERHEAD_MS } from "@/lib/engine/sentiment/llm";
 import type { TickSummary } from "@/lib/engine/types";
-import type { RoutedRequest } from "@/lib/llm/routing";
+import { resolveRoute, type RoutedRequest } from "@/lib/llm/routing";
 import type { LLMResponse } from "@/lib/llm/types";
-import { usageFromResponse, type LLMUsageLogger } from "@/lib/llm/usage";
+import { recordedCall, type LLMUsageLogger } from "@/lib/llm/usage";
 
 /**
  * Runs after a tick has been persisted: writes narratives for meaningful
  * moves and evolves per-entity memory from this tick's notable signals.
  * Failures here are reported, never thrown — the tick itself already
  * succeeded.
+ *
+ * The tick's deadline reaches here too. Narratives are pure and always
+ * written; a memory summary is the one model call this step can make, and
+ * it is started only if it can finish before the deadline — otherwise the
+ * deterministic summary is used, which is what happens on any LLM failure
+ * anyway. Nothing after the commit may push the invocation past its budget.
  */
 
 export interface PostTickDeps {
@@ -24,12 +32,16 @@ export interface PostTickDeps {
   config?: EngineConfig;
   now?: Date;
   log?: (message: string) => void;
+  /** The tick's deadline; memory summaries that cannot finish before it are not started. */
+  deadline?: TickDeadline;
 }
 
 export interface PostTickSummary {
   narratives: number;
   memoryUpdates: number;
   memoryLlmSummaries: number;
+  /** Memory summaries that fell back to deterministic text because the deadline left no room for a call. */
+  memorySummariesDeferred: number;
   errors: string[];
 }
 
@@ -37,7 +49,8 @@ export async function runPostTick(summary: TickSummary, deps: PostTickDeps): Pro
   const config = deps.config ?? DEFAULT_ENGINE_CONFIG;
   const now = deps.now ?? new Date(summary.finishedAt);
   const log = deps.log ?? ((message: string) => console.warn(`[post-tick] ${message}`));
-  const result: PostTickSummary = { narratives: 0, memoryUpdates: 0, memoryLlmSummaries: 0, errors: [] };
+  const deadline = deps.deadline ?? NO_DEADLINE;
+  const result: PostTickSummary = { narratives: 0, memoryUpdates: 0, memoryLlmSummaries: 0, memorySummariesDeferred: 0, errors: [] };
 
   if (summary.dryRun) return result;
 
@@ -77,13 +90,25 @@ export async function runPostTick(summary: TickSummary, deps: PostTickDeps): Pro
         const memory = memories.get(personId);
         if (!memory) continue;
         try {
+          // The same start gate as a scoring call: a summary call is only
+          // started if it can finish inside the tick's budget.
+          const canCall = config.memory.llmSummaries && deps.complete !== undefined && deadline.canStart(config.llm.timeoutMs + CALL_OVERHEAD_MS);
+          if (config.memory.llmSummaries && deps.complete !== undefined && !canCall) result.memorySummariesDeferred += 1;
+          const complete = deps.complete;
           const refreshed = await refreshRecentContext(
             memory,
             events,
-            { maxEvents: config.memory.maxRecentEvents, tickNumber: summary.tickNumber, now, llmSummaries: config.memory.llmSummaries, personName: displayName },
+            { maxEvents: config.memory.maxRecentEvents, tickNumber: summary.tickNumber, now, llmSummaries: canCall, personName: displayName },
             {
-              complete: deps.complete,
-              onUsage: (response) => deps.usageLogger?.log(usageFromResponse(response, { taskType: "memory", personId, tickNumber: summary.tickNumber })),
+              complete:
+                complete === undefined
+                  ? undefined
+                  : (request) => {
+                      const route = resolveRoute("memory");
+                      const attempt = { provider: route.providerName, model: route.model ?? "provider-default", taskType: "memory" as const, personId, tickNumber: summary.tickNumber };
+                      const call = () => complete({ ...request, timeoutMs: config.llm.timeoutMs });
+                      return deps.usageLogger ? recordedCall(deps.usageLogger, attempt, call) : call();
+                    },
               log,
             },
           );

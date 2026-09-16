@@ -62,7 +62,7 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
           // the same created_at, and the cap must cut it the same way every time.
           .order("created_at")
           .order("id")
-          .limit(config.tick.maxSignalsPerTick),
+          .limit(config.tick.loadCeiling),
         client.from("positions").select("person_id, amount_cents").eq("is_open", true),
         client.from("signals").select("person_id, sentiment_confidence").eq("processed", true).gte("processed_at", depthSince),
         client.from("trade_events").select("person_id, side, amount_cents, created_at").gte("created_at", tradesSince),
@@ -75,6 +75,16 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
       }
 
       const activeIds = new Set((people.data ?? []).map((p) => p.id));
+
+      // The backlog: every unprocessed signal of an active person, not just
+      // the ceiling's worth. A count, so the tick can report what it left.
+      const backlogCount = await client
+        .from("signals")
+        .select("id", { count: "exact", head: true })
+        .eq("processed", false)
+        .in("person_id", [...activeIds]);
+      if (backlogCount.error) throw new Error(`Engine failed to load backlog: ${backlogCount.error.message}`);
+
       const engineSignals: EngineSignal[] = (signals.data ?? [])
         .filter((row) => activeIds.has(row.person_id))
         .map((row) => ({
@@ -100,6 +110,7 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         now,
         people: people.data ?? [],
         signals: engineSignals,
+        backlog: backlogCount.count ?? engineSignals.length,
         openCapitalCentsByPerson: sumBy(positions.data ?? [], (p) => p.person_id, (p) => Number(p.amount_cents)),
         signalActivityByPerson: aggregateSignalActivity(activity.data ?? []),
         tradeEvents,
@@ -181,13 +192,14 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
     async loadTickContext(now, config) {
       const depthSince = now.getTime() - config.spread.depthWindowHours * 3600 * 1000;
       const activeIds = new Set(people.filter((p) => p.is_active).map((p) => p.id));
+      const unprocessed = signals
+        .filter((s) => !s.processed && activeIds.has(s.personId))
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
       return {
         now,
         people: people.filter((p) => p.is_active).map((p) => ({ ...p })),
-        signals: signals
-          .filter((s) => !s.processed && activeIds.has(s.personId))
-          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))
-          .slice(0, config.tick.maxSignalsPerTick),
+        signals: unprocessed.slice(0, config.tick.loadCeiling),
+        backlog: unprocessed.length,
         openCapitalCentsByPerson: new Map(Object.entries(seed.openCapitalCents ?? {})),
         signalActivityByPerson: aggregateSignalActivity(
           signals

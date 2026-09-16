@@ -1,14 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_ENGINE_CONFIG } from "@/lib/engine/config";
+import { NO_DEADLINE, deadlineAfter } from "@/lib/engine/deadline";
 import { createMemoryMemoryStore } from "@/lib/engine/memory/store";
 import type { PersonMemory } from "@/lib/engine/memory/types";
 import { LLMError, type LLMResponse } from "@/lib/llm/types";
 import { createMemoryUsageLogger } from "@/lib/llm/usage";
 import type { Json } from "@/types/database";
 
-import { LLMScorer, type LLMScorerPerson } from "./llm";
-import type { SentimentInput } from "./types";
+import { TickCallBudget } from "./budget";
+import { CALL_OVERHEAD_MS, LLMScorer, type LLMScorerPerson } from "./llm";
+import { isDeferred, type ScoringContext, type ScoringOutcome, type SentimentInput, type SentimentResult } from "./types";
 
 const PEOPLE: Record<string, LLMScorerPerson> = {
   "p-drake": { id: "p-drake", slug: "drake", displayName: "Drake", category: "musician" },
@@ -28,6 +30,12 @@ function memory(personId: string, summary: string, noise: string): PersonMemory 
 
 function signal(id: string, personId: string, headline: string, rawPayload: Json | null = null): SentimentInput {
   return { id, headline, rawPayload, personId, sourceName: "spotify", sourceTier: 2 };
+}
+
+/** A scored outcome, or the test fails: the signal was attempted. */
+function scored(outcome: ScoringOutcome): SentimentResult {
+  if (isDeferred(outcome)) throw new Error(`expected a scored signal, got a deferral: ${outcome.reason} (${outcome.detail})`);
+  return outcome;
 }
 
 type Assessment = { label?: string; confidence?: number; anomaly?: string };
@@ -72,16 +80,23 @@ function makeScorer(complete: ReturnType<typeof fakeComplete>, overrides: Partia
   return { scorer, memoryStore, usageLogger, log };
 }
 
+/** A tick's context: a deadline and a fresh budget. */
+function tickContext(budget = DEFAULT_ENGINE_CONFIG.llm.callBudgetPerTick, deadline = NO_DEADLINE): ScoringContext {
+  return { deadline, callBudget: new TickCallBudget(budget) };
+}
+
 describe("LLMScorer", () => {
   it("batches a tick's signals into one LLM call per person, with that person's memory in the prompt", async () => {
     const complete = fakeComplete();
     const { scorer, memoryStore, usageLogger } = makeScorer(complete);
 
-    const results = await Promise.all([
-      scorer.scoreSignal(signal("s1", "p-drake", "Drake drops surprise album")),
-      scorer.scoreSignal(signal("s2", "p-drake", "Drake announces world tour")),
-      scorer.scoreSignal(signal("s3", "p-buffett", "Berkshire sells Apple stake")),
-    ]);
+    const results = (
+      await Promise.all([
+        scorer.scoreSignal(signal("s1", "p-drake", "Drake drops surprise album")),
+        scorer.scoreSignal(signal("s2", "p-drake", "Drake announces world tour")),
+        scorer.scoreSignal(signal("s3", "p-buffett", "Berkshire sells Apple stake")),
+      ])
+    ).map(scored);
 
     expect(complete).toHaveBeenCalledTimes(2);
     expect(memoryStore.loadCalls).toBe(1);
@@ -106,8 +121,8 @@ describe("LLMScorer", () => {
     const complete = fakeComplete();
     const { scorer } = makeScorer(complete);
 
-    const baseline = await scorer.scoreSignal(signal("b1", "p-mrbeast", "MrBeast stands at 516M subscribers on YouTube", { kind: "baseline" }));
-    const tiny = await scorer.scoreSignal(signal("c1", "p-mrbeast", "MrBeast gains 100K YouTube subscribers (+0.02%) since last check", { kind: "change", relativeChange: 0.0002 }));
+    const baseline = scored(await scorer.scoreSignal(signal("b1", "p-mrbeast", "MrBeast stands at 516M subscribers on YouTube", { kind: "baseline" })));
+    const tiny = scored(await scorer.scoreSignal(signal("c1", "p-mrbeast", "MrBeast gains 100K YouTube subscribers (+0.02%) since last check", { kind: "change", relativeChange: 0.0002 })));
 
     expect(complete).not.toHaveBeenCalled();
     expect(baseline).toMatchObject({ label: "neutral", direction: 0, confidence: 0, scorer: "prefilter" });
@@ -119,11 +134,13 @@ describe("LLMScorer", () => {
   it("folds the anomaly assessment into confidence", async () => {
     const complete = fakeComplete((id) => (id === "r" ? { anomaly: "routine" } : id === "a" ? { anomaly: "anomalous" } : { label: "neutral", anomaly: "routine" }));
     const { scorer } = makeScorer(complete);
-    const [routine, anomalous, neutral] = await Promise.all([
-      scorer.scoreSignal(signal("r", "p-drake", "Drake posts weekly stats")),
-      scorer.scoreSignal(signal("a", "p-drake", "Drake retires from music")),
-      scorer.scoreSignal(signal("n", "p-drake", "Drake seen at a game")),
-    ]);
+    const [routine, anomalous, neutral] = (
+      await Promise.all([
+        scorer.scoreSignal(signal("r", "p-drake", "Drake posts weekly stats")),
+        scorer.scoreSignal(signal("a", "p-drake", "Drake retires from music")),
+        scorer.scoreSignal(signal("n", "p-drake", "Drake seen at a game")),
+      ])
+    ).map(scored);
     expect(routine.confidence).toBeCloseTo(0.45); // 0.9 * 0.5
     expect(anomalous.confidence).toBe(1); // 0.9 * 1.2 capped
     expect(neutral).toMatchObject({ label: "neutral", direction: 0, confidence: 0 });
@@ -133,29 +150,15 @@ describe("LLMScorer", () => {
     const complete = vi.fn(async () => {
       throw new LLMError("boom", { kind: "timeout", provider: "fake", retryable: true });
     });
-    const { scorer, log } = makeScorer(complete as unknown as ReturnType<typeof fakeComplete>);
+    const { scorer, log, usageLogger } = makeScorer(complete as unknown as ReturnType<typeof fakeComplete>);
 
-    const result = await scorer.scoreSignal(signal("s1", "p-drake", "Drake crosses 100M monthly listeners on Spotify"));
+    const result = scored(await scorer.scoreSignal(signal("s1", "p-drake", "Drake crosses 100M monthly listeners on Spotify")));
     expect(result).toMatchObject({ label: "positive", direction: 1, confidence: 0.8, scorer: "rules-fallback" });
     expect(result.rationale).toContain("fallback: LLM call failed (timeout: boom)");
     expect(log).toHaveBeenCalledWith(expect.stringContaining("falling back to the rules scorer"), expect.anything());
     expect(scorer.stats.fallbacks).toBe(1);
-  });
-
-  it("enforces the per-tick call cap and routes the overflow to the rules scorer", async () => {
-    const complete = fakeComplete();
-    const { scorer } = makeScorer(complete, { config: { ...DEFAULT_ENGINE_CONFIG.llm, maxCallsPerTick: 1 } });
-
-    const results = await Promise.all([
-      scorer.scoreSignal(signal("s1", "p-drake", "Drake drops surprise album")),
-      scorer.scoreSignal(signal("s2", "p-buffett", "Berkshire sells Apple stake")),
-      scorer.scoreSignal(signal("s3", "p-mrbeast", "MrBeast crosses 600M subscribers")),
-    ]);
-
-    expect(complete).toHaveBeenCalledTimes(1);
-    expect(results.filter((r) => r.scorer === "llm")).toHaveLength(1);
-    expect(results.filter((r) => r.scorer === "rules-fallback")).toHaveLength(2);
-    expect(scorer.stats.capped).toBe(2);
+    // The attempt is on the ledger as failed, with the reason: it was billed and previously invisible.
+    expect(usageLogger.rows).toEqual([expect.objectContaining({ taskType: "sentiment", personId: "p-drake", status: "failed", error: "timeout: boom" })]);
   });
 
   it("falls back for malformed responses and for signals the model left out", async () => {
@@ -169,7 +172,7 @@ describe("LLMScorer", () => {
       latencyMs: 1,
     }));
     const { scorer: a } = makeScorer(malformed as unknown as ReturnType<typeof fakeComplete>);
-    expect((await a.scoreSignal(signal("s1", "p-drake", "Drake wins award"))).scorer).toBe("rules-fallback");
+    expect(scored(await a.scoreSignal(signal("s1", "p-drake", "Drake wins award"))).scorer).toBe("rules-fallback");
 
     const partial = fakeComplete();
     const { scorer: b } = makeScorer(partial);
@@ -179,12 +182,142 @@ describe("LLMScorer", () => {
       void request;
       return { text: "", structuredData: { signals, narrative: "n" }, usage: { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }, provider: "fake", model: "fake", stopReason: "end_turn", latencyMs: 1 };
     });
-    const [kept, dropped] = await Promise.all([
-      b.scoreSignal(signal("s1", "p-drake", "Drake wins award")),
-      b.scoreSignal(signal("s2", "p-drake", "Drake loses lawsuit")),
-    ]);
+    const [kept, dropped] = (
+      await Promise.all([b.scoreSignal(signal("s1", "p-drake", "Drake wins award")), b.scoreSignal(signal("s2", "p-drake", "Drake loses lawsuit"))])
+    ).map(scored);
     expect(kept.scorer).toBe("llm");
     expect(dropped.scorer).toBe("rules-fallback");
     expect(dropped.label).toBe("negative");
+  });
+
+  it("writes the ledger in two halves: a started row before the call, settled with usage after it", async () => {
+    const complete = fakeComplete();
+    const { scorer, usageLogger } = makeScorer(complete);
+    await scorer.scoreSignal(signal("s1", "p-drake", "Drake drops surprise album"), tickContext());
+    expect(usageLogger.rows).toHaveLength(1);
+    expect(usageLogger.rows[0]).toMatchObject({ status: "completed", taskType: "sentiment", personId: "p-drake", model: "fake-model", inputTokens: 900, outputTokens: 120 });
+  });
+});
+
+describe("LLMScorer — the two outcomes", () => {
+  it("DEFERS chunks beyond the per-tick call budget instead of scoring them by rules: they stay unprocessed", async () => {
+    const complete = fakeComplete();
+    const { scorer, usageLogger } = makeScorer(complete);
+    const context = tickContext(1);
+
+    const outcomes = await Promise.all([
+      scorer.scoreSignal(signal("s1", "p-drake", "Drake drops surprise album"), context),
+      scorer.scoreSignal(signal("s2", "p-buffett", "Berkshire sells Apple stake"), context),
+      scorer.scoreSignal(signal("s3", "p-mrbeast", "MrBeast crosses 600M subscribers"), context),
+    ]);
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(outcomes.filter((o) => !isDeferred(o) && o.scorer === "llm")).toHaveLength(1);
+    const deferred = outcomes.filter(isDeferred);
+    expect(deferred).toHaveLength(2);
+    expect(deferred.every((d) => d.reason === "call_budget")).toBe(true);
+    expect(deferred[0].detail).toContain("per-tick call budget of 1 spent");
+    // Nothing was scored by rules: a deferral is not a fallback.
+    expect(outcomes.some((o) => !isDeferred(o) && o.scorer === "rules-fallback")).toBe(false);
+    expect(scorer.stats).toMatchObject({ llmCalls: 1, deferred: 2, fallbacks: 0 });
+    expect(context.callBudget.used).toBe(1);
+    // A deferred chunk never touches the ledger: no money was spent on it.
+    expect(usageLogger.rows).toHaveLength(1);
+  });
+
+  it("the budget is a per-tick COUNT: a new context is a new budget, whatever the clock says", async () => {
+    const complete = fakeComplete();
+    const { scorer } = makeScorer(complete);
+    const first = await scorer.scoreSignal(signal("s1", "p-drake", "Drake drops surprise album"), tickContext(1));
+    const second = await scorer.scoreSignal(signal("s2", "p-drake", "Drake announces world tour"), tickContext(1));
+    expect(isDeferred(first)).toBe(false);
+    expect(isDeferred(second)).toBe(false);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("ONE CHUNK PER PERSON PER TICK: a person's second chunk is deferred even with budget to spare", async () => {
+    const complete = fakeComplete();
+    const { scorer } = makeScorer(complete);
+    const context = tickContext(20);
+    const outcomes = await Promise.all(Array.from({ length: 30 }, (_, i) => scorer.scoreSignal(signal(`mb-${i}`, "p-mrbeast", `MrBeast headline ${i}`), context)));
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(outcomes.filter((o) => !isDeferred(o))).toHaveLength(DEFAULT_ENGINE_CONFIG.llm.maxSignalsPerCall);
+    const deferred = outcomes.filter(isDeferred);
+    expect(deferred).toHaveLength(30 - DEFAULT_ENGINE_CONFIG.llm.maxSignalsPerCall);
+    expect(deferred.every((d) => d.reason === "person_cap")).toBe(true);
+    expect(context.callBudget.used).toBe(1);
+  });
+
+  it("NO CHUNK STARTS AFTER deadline − (timeoutMs + overhead): later chunks are deferred, never aborted", async () => {
+    const c = { now: 1_000_000 };
+    const complete = fakeComplete();
+    // Each call takes five seconds of the fake clock.
+    complete.mockImplementation(async (request: { userPrompt: string }) => {
+      c.now += 5_000;
+      const ids = [...request.userPrompt.matchAll(/id=([\w-]+)/g)].map((m) => m[1]);
+      const signals = ids.map((id) => ({ id, label: "positive", confidence: 0.9, direction: 1, anomaly: "notable", rationale: "r" }));
+      return { text: "", structuredData: { signals }, usage: { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }, provider: "fake", model: "fake", stopReason: "end_turn", latencyMs: 1 };
+    });
+    const timeoutMs = 15_000;
+    const { scorer, log } = makeScorer(complete, { config: { ...DEFAULT_ENGINE_CONFIG.llm, timeoutMs, maxConcurrentCalls: 1 }, now: () => c.now });
+    // 25 s of budget: a 15 s call (+1 s overhead) may start until t = 9 s.
+    const context = tickContext(10, deadlineAfter(25_000, () => c.now));
+
+    const outcomes = await Promise.all([
+      scorer.scoreSignal(signal("s1", "p-drake", "Drake drops surprise album"), context), // starts at t=0, ends t=5
+      scorer.scoreSignal(signal("s2", "p-buffett", "Berkshire sells Apple stake"), context), // starts at t=5, ends t=10
+      scorer.scoreSignal(signal("s3", "p-mrbeast", "MrBeast crosses 600M subscribers"), context), // t=10: 10 + 16 > 25, deferred
+    ]);
+
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(isDeferred(outcomes[0])).toBe(false);
+    expect(isDeferred(outcomes[1])).toBe(false);
+    expect(outcomes[2]).toMatchObject({ deferred: true, reason: "deadline" });
+    expect((outcomes[2] as { detail: string }).detail).toContain(`a call may take ${(timeoutMs + CALL_OVERHEAD_MS) / 1000}s`);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("deferring 1 signal(s) to a later tick: deadline"), expect.objectContaining({ reason: "deadline" }));
+    // The budget was not touched by the deferred chunk.
+    expect(context.callBudget.used).toBe(2);
+  });
+
+  it("an expired deadline defers everything before a single call is made", async () => {
+    const complete = fakeComplete();
+    const { scorer, usageLogger } = makeScorer(complete);
+    const context = tickContext(4, deadlineAfter(0));
+    const outcomes = await Promise.all([
+      scorer.scoreSignal(signal("s1", "p-drake", "Drake drops surprise album"), context),
+      scorer.scoreSignal(signal("s2", "p-buffett", "Berkshire sells Apple stake"), context),
+    ]);
+    expect(complete).not.toHaveBeenCalled();
+    expect(outcomes.every((o) => isDeferred(o) && o.reason === "deadline")).toBe(true);
+    expect(usageLogger.rows).toHaveLength(0);
+  });
+
+  it("FAILED and DEFERRED are different outcomes: a failed attempt is a rules score, a deferral is not a score at all", async () => {
+    const complete = vi.fn(async () => {
+      throw new LLMError("upstream 500", { kind: "server", provider: "fake", retryable: true });
+    });
+    const { scorer } = makeScorer(complete as unknown as ReturnType<typeof fakeComplete>);
+    const context = tickContext(1);
+    const [failed, deferred] = await Promise.all([
+      scorer.scoreSignal(signal("s1", "p-drake", "Drake crosses 100M monthly listeners on Spotify"), context),
+      scorer.scoreSignal(signal("s2", "p-buffett", "Berkshire sells Apple stake"), context),
+    ]);
+    expect(isDeferred(failed)).toBe(false);
+    expect(scored(failed)).toMatchObject({ scorer: "rules-fallback", label: "positive" });
+    expect(deferred).toMatchObject({ deferred: true, reason: "call_budget" });
+    expect(scorer.stats).toMatchObject({ fallbacks: 1, deferred: 1 });
+  });
+
+  it("the rolling rate limit is a separate, process-wide safety net, and hitting it also defers", async () => {
+    const complete = fakeComplete();
+    const { scorer } = makeScorer(complete, { config: { ...DEFAULT_ENGINE_CONFIG.llm, rollingWindowMaxCalls: 1 } });
+    const context = tickContext(4);
+    const outcomes = await Promise.all([
+      scorer.scoreSignal(signal("s1", "p-drake", "Drake drops surprise album"), context),
+      scorer.scoreSignal(signal("s2", "p-buffett", "Berkshire sells Apple stake"), context),
+    ]);
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(outcomes.filter(isDeferred)).toEqual([expect.objectContaining({ reason: "rate_limit" })]);
   });
 });

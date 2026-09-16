@@ -13,14 +13,44 @@
 
 export interface EngineConfig {
   tick: {
-    /** Target cadence of the Engine, in seconds. Not scheduled yet (manual trigger only). */
+    /** Target cadence of the Engine, in seconds. */
     intervalSeconds: number;
     /** deltaHours used by Gravity when a person has never been ticked (no last_tick_at). */
     firstTickDeltaHours: number;
     /** Upper bound on deltaHours so a long pause does not snap scores to target in one tick. */
     maxDeltaHours: number;
-    /** Most unprocessed signals loaded per tick. */
-    maxSignalsPerTick: number;
+    /**
+     * WALL-CLOCK BUDGET OF ONE TICK, in milliseconds, from the moment it
+     * starts to the moment its scoring must be finished. The commit follows
+     * immediately. Two ticks run per one-minute cron invocation inside a
+     * 55-second budget under the route's 60-second maxDuration, so each tick
+     * gets roughly half of that. The deadline gates STARTS (no model call
+     * begins after budgetMs − llm.timeoutMs); nothing is aborted, and what
+     * could not start is deferred to the next tick.
+     */
+    budgetMs: number;
+    /**
+     * Unprocessed rows READ per tick, oldest first. This is a read ceiling,
+     * not the amount of work: the selection below decides what is scored.
+     * It has to see past one subject's backlog to reach the others', which is
+     * why it is much larger than the event bound.
+     */
+    loadCeiling: number;
+    /**
+     * EVENT SIGNALS SCORED PER TICK, the load in LLM shape:
+     * llm.callBudgetPerTick × llm.maxSignalsPerCall, one wave of the pool.
+     * Metric and baseline signals are free (they never reach the model) and
+     * are not counted against it. Whatever is not selected simply stays
+     * unprocessed for the next tick.
+     */
+    maxEventSignalsPerTick: number;
+    /**
+     * ONE CHUNK PER PERSON PER TICK: at most llm.maxSignalsPerCall event
+     * signals of one person are selected in a tick, so a single subject's
+     * backlog cannot own the whole tick. A requirement, not a tuning (see
+     * sentiment/budget.ts); pinned by config.test.ts.
+     */
+    maxEventSignalsPerPersonPerTick: number;
   };
   score: {
     floor: number;
@@ -167,11 +197,27 @@ export interface EngineConfig {
   };
   /** LLM reasoning layer (Phase 4): cost controls and anomaly folding. */
   llm: {
-    /** Hard cap on LLM calls per tick (rolling tick-interval window). Beyond it, signals use the rules scorer. */
-    maxCallsPerTick: number;
+    /**
+     * PER-TICK CALL BUDGET: a plain count of model calls one tick may make,
+     * owned by the tick (sentiment/budget.ts). Chunks beyond it are DEFERRED
+     * to the next tick, not scored by rules. Distinct from the rolling rate
+     * limit below, which is what the old "maxCallsPerTick" actually was.
+     */
+    callBudgetPerTick: number;
+    /**
+     * ROLLING RATE LIMIT: at most this many calls per tick interval across
+     * the whole process, whatever tick they belong to. A safety net against
+     * a caller hammering the manual route, never the per-tick budget: it
+     * rolls with the clock, so it cannot bound one tick's work.
+     */
+    rollingWindowMaxCalls: number;
     /** How many per-person calls run concurrently. */
     maxConcurrentCalls: number;
-    /** Per-call timeout. On timeout the signals fall back to the rules scorer. */
+    /**
+     * Per-call timeout, ONE ATTEMPT. The adapter does not retry inside a
+     * tick: the next tick, thirty seconds later, is the retry, and it costs
+     * one attempt rather than two. A timed-out chunk falls back to rules.
+     */
     timeoutMs: number;
     /** Most signals about one person reasoned together in a single call. */
     maxSignalsPerCall: number;
@@ -220,7 +266,10 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     intervalSeconds: 30,
     firstTickDeltaHours: 30 / 3600,
     maxDeltaHours: 24,
-    maxSignalsPerTick: 500,
+    budgetMs: 25_000,
+    loadCeiling: 500,
+    maxEventSignalsPerTick: 48,
+    maxEventSignalsPerPersonPerTick: 12,
   },
   score: { floor: 35, ceiling: 100, decimals: 2 },
   gravity: { lambdaPerHour: 0.35 },
@@ -264,9 +313,10 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   },
   inversePairs: { defaultDampening: 0.4 },
   llm: {
-    maxCallsPerTick: 20,
+    callBudgetPerTick: 4,
+    rollingWindowMaxCalls: 20,
     maxConcurrentCalls: 4,
-    timeoutMs: 20_000,
+    timeoutMs: 15_000,
     maxSignalsPerCall: 12,
     routineConfidenceMultiplier: 0.5,
     notableConfidenceMultiplier: 1.0,

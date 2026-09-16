@@ -1,11 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { makePerson } from "@/lib/__tests__/fixtures";
+import { LLMError, type LLMResponse } from "@/lib/llm/types";
+import { createMemoryUsageLogger } from "@/lib/llm/usage";
 
 import { DEFAULT_ENGINE_CONFIG as CONFIG, withEngineConfig } from "./config";
+import { deadlineAfter } from "./deadline";
+import { LLMScorer } from "./sentiment/llm";
 import { rulesBasedScorer } from "./sentiment/rules";
 import { createMemoryEngineStore, type MemoryEngineSeed } from "./store";
 import { runEngineTick } from "./tick";
+import type { EngineSignal } from "./types";
 
 const NOW = new Date("2026-09-07T12:00:00.000Z");
 
@@ -190,5 +195,158 @@ describe("Engine tick", () => {
     const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW });
     expect(summary.tickNumber).toBe(5);
     await expect(store.applyTick({ ...store.ticks[0], expectedTickNumber: 5 })).rejects.toThrow(/stale tick/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE TICK THAT ALWAYS COMMITS (Phase 11)
+// ---------------------------------------------------------------------------
+
+/** The production backlog shape at the time of the failure, on the three test people. */
+function backlog(): EngineSignal[] {
+  const make = (id: string, personId: string, minutesAgo: number): EngineSignal => {
+    const at = new Date(NOW.getTime() - minutesAgo * 60_000);
+    return { id, personId, headline: `${id} wins record award`, rawPayload: { kind: "article" }, sourceName: "rss", sourceTier: 2, occurredAt: at, createdAt: at };
+  };
+  return [
+    ...Array.from({ length: 145 }, (_, i) => make(`mb-${String(i).padStart(3, "0")}`, "p-mrbeast", 3000 - i)),
+    ...Array.from({ length: 82 }, (_, i) => make(`dr-${String(i).padStart(3, "0")}`, "p-drake", 2900 - i)),
+    ...Array.from({ length: 55 }, (_, i) => make(`kl-${String(i).padStart(3, "0")}`, "p-kendrick", 2800 - i)),
+  ];
+}
+
+/** An LLM scorer over a fake provider that answers every id in the prompt. */
+function llmScorer(options: { failFor?: (personId: string) => boolean; callBudget?: number } = {}) {
+  const usageLogger = createMemoryUsageLogger();
+  const complete = vi.fn(async (request: { userPrompt: string }): Promise<LLMResponse> => {
+    if (options.failFor && [...request.userPrompt.matchAll(/id=([\w-]+)/g)].some((m) => options.failFor!(m[1].slice(0, 2)))) {
+      throw new LLMError("timed out", { kind: "timeout", provider: "fake", retryable: true });
+    }
+    const ids = [...request.userPrompt.matchAll(/id=([\w-]+)/g)].map((m) => m[1]);
+    const signals = ids.map((id) => ({ id, label: "positive", confidence: 0.6, anomaly: "notable", rationale: "fake" }));
+    return { text: "", structuredData: { signals, narrative: "Up on news." }, usage: { inputTokens: 2000, outputTokens: 700, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }, provider: "fake", model: "fake-model", stopReason: "end_turn", latencyMs: 5 };
+  });
+  const scorer = new LLMScorer({ complete, usageLogger, batchDelayMs: 0, log: vi.fn(), config: { ...CONFIG.llm, callBudgetPerTick: options.callBudget ?? CONFIG.llm.callBudgetPerTick } });
+  return { scorer, complete, usageLogger };
+}
+
+describe("Engine tick — the tick that always commits", () => {
+  it("a 282-signal backlog: the tick COMMITS one chunk per person and leaves the rest unprocessed for the next tick", async () => {
+    const signals = backlog();
+    const store = createMemoryEngineStore(seed({ signals }));
+    const { scorer, complete } = llmScorer();
+
+    const summary = await runEngineTick({ store, scorer, now: NOW, config: withEngineConfig({ llm: { callBudgetPerTick: 4 } }) });
+
+    // Committed: one tick, 36 signals (12 × 3 people), every one via the model, in exactly three calls.
+    expect(store.ticks).toHaveLength(1);
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect(summary.signalsProcessed).toBe(36);
+    expect(summary.signals.every((s) => s.scorer === "llm")).toBe(true);
+    expect(store.processedSignals).toHaveLength(36);
+    expect(store.signals.filter((s) => s.processed)).toHaveLength(36);
+    expect(store.signals.filter((s) => !s.processed)).toHaveLength(282 - 36);
+    // The twelve OLDEST of each person, so the backlog drains in order.
+    expect(store.signals.filter((s) => s.processed && s.personId === "p-mrbeast").map((s) => s.id)).toEqual(signals.slice(0, 12).map((s) => s.id));
+
+    // The summary says exactly what happened and what is left.
+    expect(summary.scoring).toEqual({
+      backlogBefore: 282,
+      loaded: 282,
+      selected: 36,
+      attempted: 36,
+      llmScored: 36,
+      fallbacks: 0,
+      withoutModel: 0,
+      deferred: 0,
+      deferredByReason: {},
+      llmCalls: 3,
+      llmCallBudget: 4,
+      processed: 36,
+      backlogAfter: 246,
+      partial: true,
+      budgetMs: expect.any(Number),
+      remainingMs: expect.any(Number),
+    });
+    expect(summary.deferred).toEqual([]);
+
+    // Gravity moved everyone, and the Signals force is braked at ±10 per person.
+    for (const p of summary.people) {
+      expect(p.forces.gravity).toBeGreaterThan(0);
+      expect(Math.abs(p.forces.signals ?? 0)).toBeLessThanOrEqual(CONFIG.signals.maxAbsImpactPerTick);
+    }
+
+    // The next tick takes the next chunk of each person: the backlog drains across ticks.
+    const second = await runEngineTick({ store, scorer, now: new Date(NOW.getTime() + 30_000) });
+    expect(second.tickNumber).toBe(2);
+    expect(second.scoring).toMatchObject({ backlogBefore: 246, selected: 36, processed: 36, backlogAfter: 210, partial: true });
+    expect(store.signals.filter((s) => s.processed && s.personId === "p-mrbeast").map((s) => s.id)).toEqual(signals.slice(0, 24).map((s) => s.id));
+  });
+
+  it("DEFERRED stays processed = false; FAILED is processed with a rules score; the two paths are distinct", async () => {
+    const store = createMemoryEngineStore(seed({ signals: backlog() }));
+    // MrBeast's call fails; the budget of 2 lets Drake through and defers Kendrick.
+    const { scorer, complete, usageLogger } = llmScorer({ failFor: (prefix) => prefix === "mb", callBudget: 2 });
+
+    const summary = await runEngineTick({ store, scorer, now: NOW, config: withEngineConfig({ llm: { callBudgetPerTick: 2 } }) });
+
+    expect(store.ticks).toHaveLength(1);
+    expect(complete).toHaveBeenCalledTimes(2);
+
+    // FAILED → rules-fallback, processed.
+    const mrbeast = summary.signals.filter((s) => s.personSlug === "mrbeast");
+    expect(mrbeast).toHaveLength(12);
+    expect(mrbeast.every((s) => s.scorer === "rules-fallback")).toBe(true);
+    expect(mrbeast[0].rationale).toContain("fallback: LLM call failed (timeout: timed out)");
+    expect(store.signals.filter((s) => s.personId === "p-mrbeast" && s.processed)).toHaveLength(12);
+
+    // Scored → llm, processed.
+    expect(summary.signals.filter((s) => s.personSlug === "drake" && s.scorer === "llm")).toHaveLength(12);
+
+    // DEFERRED → not in the summary's signals, not in the commit, still unprocessed.
+    expect(summary.signals.some((s) => s.personSlug === "kendrick-lamar")).toBe(false);
+    expect(summary.deferred).toHaveLength(12);
+    expect(summary.deferred.every((d) => d.personSlug === "kendrick-lamar" && d.reason === "call_budget")).toBe(true);
+    expect(store.signals.filter((s) => s.personId === "p-kendrick" && s.processed)).toHaveLength(0);
+    expect(store.ticks[0].signals.some((s) => s.id.startsWith("kl-"))).toBe(false);
+
+    expect(summary.scoring).toMatchObject({ selected: 36, attempted: 24, llmScored: 12, fallbacks: 12, deferred: 12, deferredByReason: { call_budget: 12 }, llmCalls: 2, processed: 24, backlogAfter: 258, partial: true });
+    expect(summary.signalsProcessed).toBe(24);
+    // Both attempts are on the ledger; the deferred chunk is not.
+    expect(usageLogger.rows.map((r) => r.status).sort()).toEqual(["completed", "failed"]);
+  });
+
+  it("with the deadline already reached, no model call starts, and the tick STILL COMMITS: Gravity for everyone, the free signals scored", async () => {
+    const metric: EngineSignal = {
+      id: "metric-1",
+      personId: "p-drake",
+      headline: "Drake monthly listeners +2.1σ",
+      rawPayload: { kind: "metric", metric: "monthly_listeners", polarity: 1, sigma: 2.1, scale: 1 },
+      sourceName: "spotify",
+      sourceTier: 2,
+      occurredAt: NOW,
+      createdAt: NOW,
+    };
+    const store = createMemoryEngineStore(seed({ signals: [...backlog(), metric] }));
+    const { scorer, complete } = llmScorer();
+
+    const summary = await runEngineTick({ store, scorer, now: NOW, deadline: deadlineAfter(0) });
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(store.ticks).toHaveLength(1);
+    expect(store.scoreHistory.map((h) => h.tickNumber)).toEqual([1, 1, 1]);
+    expect(store.scoreEvents.filter((e) => e.force === "gravity")).toHaveLength(3);
+    expect(summary.people.every((p) => p.forces.gravity !== undefined && p.forces.gravity > 0)).toBe(true);
+    // The metric signal never needs the model, so it is scored and processed even now.
+    expect(summary.signals).toEqual([expect.objectContaining({ id: "metric-1", scorer: "metric", label: "positive" })]);
+    expect(summary.scoring).toMatchObject({ selected: 37, attempted: 0, withoutModel: 1, deferred: 36, deferredByReason: { deadline: 36 }, llmCalls: 0, processed: 1, backlogAfter: 282, partial: true, remainingMs: 0 });
+    expect(store.signals.filter((s) => s.processed).map((s) => s.id)).toEqual(["metric-1"]);
+  });
+
+  it("a tick with nothing to defer reports itself as complete", async () => {
+    const store = createMemoryEngineStore(seed({ signals: backlog().slice(0, 5) }));
+    const { scorer } = llmScorer();
+    const summary = await runEngineTick({ store, scorer, now: NOW });
+    expect(summary.scoring).toMatchObject({ backlogBefore: 5, selected: 5, processed: 5, deferred: 0, backlogAfter: 0, partial: false, llmCalls: 1 });
   });
 });

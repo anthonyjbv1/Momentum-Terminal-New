@@ -31,6 +31,8 @@ const summary: TickSummary = {
   mood: 0.08,
   peopleUpdated: 4,
   signalsProcessed: 1,
+  scoring: { backlogBefore: 1, loaded: 1, selected: 1, attempted: 1, llmScored: 1, fallbacks: 0, withoutModel: 0, deferred: 0, deferredByReason: {}, llmCalls: 1, llmCallBudget: 4, processed: 1, backlogAfter: 0, partial: false, budgetMs: 25_000, remainingMs: 20_000 },
+  deferred: [],
   people: [
     person({ id: "d", slug: "drake", displayName: "Drake", previousScore: 50, newScore: 51.24, change: 1.24, forces: { gravity: 0.04, signals: 1.2 }, signalsProcessed: 1 }),
     person({ id: "k", slug: "kendrick-lamar", displayName: "Kendrick Lamar", previousScore: 50, newScore: 49.35, change: -0.65, forces: { gravity: 0.04, market_mood: 0.02, inverse_pair: -0.71 } }),

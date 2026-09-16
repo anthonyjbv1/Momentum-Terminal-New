@@ -306,7 +306,7 @@ The registry as shipped: MrBeast ↔ `youtube`, `youtube_comments` (`UCX6OQ3Dkcs
 `SentimentScorer` (`lib/engine/sentiment/types.ts`) has one method: `scoreSignal({ id, personId, headline, rawPayload, sourceName, sourceTier }) → { label, confidence, direction, anomaly?, rationale?, narrative? }`. The Engine only ever calls that method. `getSentimentScorer()` picks the implementation from the `SCORER` env var:
 
 - `llm` (default) — `LLMScorer`, the Phase 4 reasoning layer described below.
-- `rules` — `RulesBasedScorer`, the Phase 3 keyword scorer. Setting `SCORER=rules` switches back instantly; it is also what the LLM scorer falls back to per signal whenever the provider errors, times out, refuses, returns something unparseable, or the per-tick call cap is hit.
+- `rules` — `RulesBasedScorer`, the Phase 3 keyword scorer. Setting `SCORER=rules` switches back instantly; it is also what the LLM scorer falls back to per signal whenever an attempted call errors, times out, refuses or returns something unparseable. A chunk the tick could not attempt at all (deadline, call budget) is not scored by rules: it is deferred to the next tick (see *The tick that always commits*).
 
 ### The five forces (first pass, per person)
 
@@ -384,15 +384,29 @@ select tick_number, mood, people_updated, signals_processed from public.engine_t
 
 `LLMScorer` (`lib/engine/sentiment/llm.ts`) implements `SentimentScorer`, so the Engine calls it exactly as it called the rules scorer. Internally, the `scoreSignal` calls a tick makes are coalesced into **one LLM call per person**, with that person's memory in the prompt. The model returns, per signal, `label`, `confidence`, `direction`, an `anomaly` assessment (`routine` / `notable` / `anomalous` for this person) and a rationale, plus one narrative sentence for the person. Anomaly is folded into confidence (routine × 0.5, notable × 1.0, anomalous × 1.2 capped at 1), so a routine daily upload moves a score far less than a genuine surprise.
 
-Cost controls (all in `DEFAULT_ENGINE_CONFIG.llm`):
+Cost controls (in `DEFAULT_ENGINE_CONFIG.llm` and `.tick`):
 
-- **Pre-filter**: baseline signals (`kind: "baseline"`), empty headlines and tiny `change` signals (below `minRelativeChangeForLlm`) never reach the LLM.
+- **Pre-filter**: baseline signals (`kind: "baseline"`), metric signals, empty headlines and tiny `change` signals (below `minRelativeChangeForLlm`) never reach the LLM.
 - **Memory cache**: a person's memory is read once per batch and cached for `memoryCacheTtlMs`.
-- **Batching**: up to `maxSignalsPerCall` signals about one person are reasoned together in one call.
-- **Hard cap**: at most `maxCallsPerTick` calls per tick interval; beyond it, signals use the rules scorer.
-- **Usage ledger**: every call writes `llm_usage` (provider, model, task, input / output / cache tokens, latency, person).
+- **Batching**: up to `maxSignalsPerCall` (12) signals about one person are reasoned together in one call, and a person gets **one call per tick** (`CALLS_PER_PERSON_PER_TICK` in `sentiment/budget.ts`, a rule rather than a knob: see below).
+- **Per-tick call budget**: `callBudgetPerTick` (4) model calls per tick, a plain count owned by the tick. Chunks beyond it are *deferred* to the next tick, not scored by rules. This is distinct from `rollingWindowMaxCalls` (20 per tick interval, process-wide), a rate limit that cannot bound one tick's work; the old `maxCallsPerTick` was that rolling window under the wrong name, and never engaged.
+- **One attempt per call**: `timeoutMs` is 15 s and the Anthropic adapter is built with `maxRetries: 0`. The SDK's default retry turned a 20 s timeout into a 40 s pool-slot occupation; the next tick, thirty seconds later, is the retry.
+- **Usage ledger, in two halves**: every call writes `llm_usage` *before* it is made (`status: started`) and settles the row when it returns (`completed`, with tokens and latency) or throws (`failed`, with the reason). A row that stays `started` is a call the process died inside — billed by the provider and, before Phase 11, never recorded. `llm_cost_per_tick` carries `completed_calls`, `failed_calls` and `started_calls`, and prices completed calls only.
 
 Resilience: any provider error, timeout, refusal, malformed response or omitted signal makes the affected signals fall back to the rules scorer (result `scorer: "rules-fallback"`, reason in the rationale) and logs the fallback. The tick never fails because the LLM had a hiccup.
+
+### The tick that always commits (Phase 11)
+
+The first cron run failed every minute for ten minutes and committed nothing: the tick loaded the entire backlog (282 signals, 26 model calls), scored it with no deadline, and was killed at the route's 60-second `maxDuration` before its single commit, then paid for the same calls again a minute later. Phase 11 makes the opposite a structural property: **a tick that starts commits**, whatever the scorer managed. A tick that does less but always commits beats one that does everything and sometimes dies.
+
+- **Deadline** (`tick.budgetMs`, 25 s; `lib/engine/deadline.ts`). One instant per tick, started before the store is even read, handed to the scorer and to the post-tick step. It gates *starts*: no model call begins unless it can finish before the deadline (`deadline − timeoutMs − CALL_OVERHEAD_MS`). Nothing is ever aborted, because aborting a non-streaming request recovers none of its cost. The cron hands every tick its own slice, the time left in the invocation less a 2 s commit reserve, so the second tick of a minute gets 23 s and neither can outlive the invocation.
+- **Two outcomes** (`ScoringOutcome` in `sentiment/types.ts`). A chunk that was *attempted* and failed falls back to rules — a real answer, the signal is processed. A chunk that was *never attempted* (deadline, budget, person rule, rate limit) comes back as `DeferredSignal`: the tick leaves it out of the forces, the summary's signals and the commit, so it stays `processed = false` and a later tick scores it at one attempt's cost. `apply_engine_tick` already marks processed only the ids it is given, so this needed no migration.
+- **Load in LLM shape** (`lib/engine/selection.ts`). The store reads the backlog oldest-first up to `tick.loadCeiling` (500) and the tick selects: every metric and baseline signal (free), then event signals at most `tick.maxEventSignalsPerPersonPerTick` (12, one chunk) per person and `tick.maxEventSignalsPerTick` (48, one wave of the pool) in total. What is not selected stays unprocessed and the next tick sees it again; a backlog drains across ticks.
+- **One chunk per person per tick.** In the failed run one subject held half the backlog, and his thirteen contiguous chunks owned all four pool slots for the entire life of every invocation. The selection bound and the call budget both enforce the rule, and `config.test.ts` / `budget.test.ts` pin it. It is a requirement of the Engine, not a tuning.
+- **Gravity every tick.** The forces run for every person whatever the scorer did, so a tick with every model call deferred still moves every score toward its target and commits.
+- **Observability.** `TickSummary.scoring` (persisted in `engine_ticks.summary`) records `backlogBefore`, `selected`, `attempted`, `llmScored`, `fallbacks`, `withoutModel`, `deferred` (with reasons), `llmCalls`, `processed`, `backlogAfter`, `partial` and the time left when scoring finished; the cron logs the same per tick. The admin console's Engine panel shows the live backlog (the number to watch when the cron is re-enabled) and, per tick, attempted / deferred / fell back / calls / backlog after / full-vs-partial; its LLM panel shows unsettled and failed calls.
+
+There is **no freshness weighting** on a signal's age anywhere in the Engine: `impact = baseImpact × tierMultiplier × confidence × direction` (`forces/signals.ts`), `occurred_at` is loaded and never read by a force, and the model is not shown the date either (`buildSentimentUserPrompt` does not pass one). A months-old article scores exactly as today's would. Whether that is acceptable for the backlog waiting when the cron is re-enabled is a decision recorded outside this file.
 
 ### Narratives
 
@@ -448,13 +462,15 @@ The Engine can tick on its own every 30 seconds, but the switch ships **OFF**.
 
 ### Cadence: two ticks per one-minute invocation
 
-Vercel Cron cannot fire more often than once a minute, so each invocation runs **two** ticks: the first immediately, the second 30 seconds after the first *started* (not after it finished, so the cadence stays anchored to the minute). Per-tick fields in the log and the response include `tickNumber`, `signalsProcessed`, `llmScored`, `fallbacks`, `narratives` and `durationMs`.
+Vercel Cron cannot fire more often than once a minute, so each invocation runs **two** ticks: the first immediately, the second 30 seconds after the first *started* (not after it finished, so the cadence stays anchored to the minute). Per-tick fields in the log and the response include `tickNumber`, `budgetMs`, `signalsProcessed`, `attempted`, `llmScored`, `fallbacks`, `deferred`, `llmCalls`, `backlogAfter`, `partial`, `narratives` and `durationMs`.
 
-The route declares `maxDuration = 60` and the scheduler works inside a **55-second budget**. Before the second tick it estimates how long that tick will take (the first tick's duration, floored at 5 s) and, if `start offset + estimate` would exceed the budget, it skips the second tick with a `tick skipped` log line and `skippedTicks: [{ index: 1, reason }]` in the response. So a slow tick (a big batch of LLM calls, a slow provider) degrades the cadence to 60 s for that minute rather than risking a function timeout that could leave the invocation half-logged. A tick that throws is logged as `tick failed`, the next tick in the invocation is still attempted, and the response status is `500` so Vercel's cron dashboard shows the failure. Overlap between invocations is harmless: `apply_engine_tick` refuses a tick computed against a stale `tick_number`.
+The route declares `maxDuration = 60` and the scheduler works inside a **55-second budget**, and **every tick is handed its own deadline**: the time left in the invocation when it starts, less a 2 s reserve for the commit and post-tick that follow scoring (`runTick({ index, budgetMs })` → `runFullTick({ budgetMs })`, capped by `tick.budgetMs`). The first tick therefore scores under 25 s and the second, starting at 30 s, under 23 s; each bounds itself (no model call starts that cannot finish in time), so neither can outlive the invocation. The second tick is skipped only when fewer than `minTickBudgetMs` (5 s) remain — a runaway first tick — with a `tick skipped` log line and `skippedTicks: [{ index: 1, reason }]` in the response. A tick that throws is logged as `tick failed`, the next tick in the invocation is still attempted, and the response status is `500` so Vercel's cron dashboard shows the failure. Overlap between invocations is harmless: `apply_engine_tick` refuses a tick computed against a stale `tick_number`.
 
-Every invocation writes JSON lines to the function log with `"source":"engine-cron"`: `skipped (disabled)`, `tick ran`, `tick failed`, `tick skipped` and a final `invocation finished` line with `ticksPlanned`, `ticksRun`, `signalsProcessed`, `fallbacks`, `failures`, `skippedTicks` and `durationMs`.
+Before Phase 11 the budget was checked only before the second tick, and the first ran with no deadline at all; a first tick that took ~65 s was killed at 60 s every minute, having committed nothing.
 
-The numbers live in `CRON_DEFAULTS` (`lib/engine/cron.ts`): `ticksPerInvocation: 2`, `spacingMs: 30000`, `budgetMs: 55000`, `minTickEstimateMs: 5000`. Setting `ticksPerInvocation` to `1` gives a plain 60-second heartbeat.
+Every invocation writes JSON lines to the function log with `"source":"engine-cron"`: `skipped (disabled)`, `tick ran`, `tick failed`, `tick skipped` and a final `invocation finished` line with `ticksPlanned`, `ticksRun`, `signalsProcessed`, `attempted`, `fallbacks`, `deferred`, `llmCalls`, `backlogAfter`, `failures`, `skippedTicks` and `durationMs`.
+
+The numbers live in `CRON_DEFAULTS` (`lib/engine/cron.ts`): `ticksPerInvocation: 2`, `spacingMs: 30000`, `budgetMs: 55000`, `commitReserveMs: 2000`, `minTickBudgetMs: 5000`. Setting `ticksPerInvocation` to `1` gives a plain 60-second heartbeat.
 
 ### Enabling it later
 
@@ -468,7 +484,7 @@ Nothing ticks until you do all of this in the Vercel project:
 
 To pause: set `ENGINE_CRON_ENABLED` back to `false` (or delete it) and redeploy. The cron keeps firing but every call returns `skipped (disabled)` in a few milliseconds.
 
-Plan note: per-minute cron schedules require a Vercel **Pro** plan (Hobby is limited to daily jobs and would silently run the job once a day). On Pro, `maxDuration` on the cron route could be raised above 60 if ticks ever need more room.
+Plan note: per-minute cron schedules require a Vercel **Pro** plan (Hobby is limited to daily jobs and would silently run the job once a day). `maxDuration` stays at 60 on purpose: a tick bounds its own work to its deadline, so more room is not what a backlog needs.
 
 Locally, the same endpoint is testable without any cron: with `ENGINE_CRON_ENABLED` unset, `curl http://localhost:3000/api/engine/cron` returns the skipped payload; with `ENGINE_CRON_ENABLED=true` in `.env.local`, `curl -H "x-engine-secret: $ENGINE_SECRET" http://localhost:3000/api/engine/cron` runs two real ticks 30 seconds apart.
 
@@ -1023,6 +1039,7 @@ which is Drake University's athletics programme, not the musician. This is worse
 - **Phase 3**: swappable sentiment scoring (rules-based), the five forces, inverse pairs, LMSR spread with Buy/Sell prices, the atomic tick with history and per-force audit trail, the tick endpoint.
 - **Phase 4**: provider-agnostic LLM abstraction with an Anthropic adapter and three stubs, model routing, per-entity memory with seeded baselines and cheap evolution, the `LLMScorer` with anomaly awareness and rules fallback, usage logging with a per-tick call cap, narratives for meaningful moves.
 - **Engine cron**: the 30-second heartbeat via Vercel Cron (two ticks per one-minute invocation with a time budget), one shared `runFullTick()` path, gated by `ENGINE_CRON_ENABLED`, which ships as `false`.
+- **Phase 11**: the tick that always commits — a start-gated deadline per tick, deferral (unattempted signals stay unprocessed) distinct from fallback (failed attempts score by rules), the load bounded in LLM shape with one chunk per person per tick, one attempt per call, a real per-tick call budget, the usage ledger written before each call, and the backlog visible tick by tick in the admin console.
 - **Phase 5**: behavioral logging foundation: `session_id` and recommender-shaped indexes on `behavioral_events`, the canonical event vocabulary with per-type metadata contracts, server-side and browser logging services (validated, silent on failure, batched, session-grouped), and the service-role-only query layer.
 - **Phase 6a**: the design token system, the core component library, the persistent shell (banner with the 30-second countdown, bottom tabs, desktop two-panel layout) and the route skeleton with styled placeholders.
 - **Phase 6b**: Home wired to live data: the person card and ranked row, top movers, category filtering, sparklines, the desktop feed rail, and the behavioural logging that records impressions and dwell.
