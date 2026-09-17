@@ -475,6 +475,7 @@ export type Database = {
       person_data_sources: {
         Row: {
           config: Json | null
+          created_at: string
           data_source_id: string
           external_identifier: string
           id: string
@@ -483,6 +484,7 @@ export type Database = {
         }
         Insert: {
           config?: Json | null
+          created_at?: string
           data_source_id: string
           external_identifier: string
           id?: string
@@ -491,6 +493,7 @@ export type Database = {
         }
         Update: {
           config?: Json | null
+          created_at?: string
           data_source_id?: string
           external_identifier?: string
           id?: string
@@ -1707,6 +1710,15 @@ export type Database = {
           open: number
           samples: number
           score: number
+        }[]
+      }
+      person_signal_volume: {
+        Args: { p_days?: number }
+        Returns: {
+          current_24h: number
+          daily: number[]
+          person_id: string
+          tracked_since: string
         }[]
       }
       place_order: {

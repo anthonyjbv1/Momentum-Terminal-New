@@ -73,6 +73,38 @@ describe("runIngestion", () => {
     ]);
   });
 
+  it("polls a source's people `poll_concurrency` at a time (Phase 15), sequentially by default, and every one of them exactly once", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const slow: DataConnector = {
+      name: "slow",
+      async fetchForPerson() {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight -= 1;
+        return [];
+      },
+    };
+    const people = Array.from({ length: 6 }, (_, i) => makePerson({ id: `p-${i}`, slug: `person-${i}` }));
+    const run = async (config: Json | null, override?: number) => {
+      peak = 0;
+      const store = createMemoryIngestStore({
+        sources: [makeSource({ id: "src-slow", name: "slow", is_active: true, config })],
+        mappings: { "src-slow": people.map((person) => ({ person, externalIdentifier: person.slug })) },
+      });
+      const summary = await runIngestion({ store, now: NOW, registry: buildRegistry([slow]), log: quiet, pollConcurrency: override });
+      expect(summary.sourcesRun[0]).toMatchObject({ name: "slow", people: 6, errors: 0 });
+      expect(store.polls.filter((p) => p.personId !== null).map((p) => p.personId).sort()).toEqual(people.map((p) => p.id).sort());
+      return peak;
+    };
+    expect(await run(null)).toBe(1);
+    expect(await run({ poll_concurrency: 4 })).toBe(4);
+    expect(await run({ poll_concurrency: 50 })).toBe(6); // bounded by the people, and by MAX_POLL_CONCURRENCY (8)
+    expect(await run({ poll_concurrency: 0 })).toBe(1);
+    expect(await run({ poll_concurrency: 4 }, 2)).toBe(2); // the option overrides the row
+  });
+
   it("respects the poll interval unless forced", async () => {
     const source = makeSource({ id: "src-x", name: "x", poll_interval_minutes: 60, is_active: true });
     const store = createMemoryIngestStore({

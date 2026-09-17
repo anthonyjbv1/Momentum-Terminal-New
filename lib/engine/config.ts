@@ -189,6 +189,33 @@ export interface EngineConfig {
      * Event signals are never folded.
      */
     oneReadingPerMetricMoment: boolean;
+    /**
+     * PER-PERSON VOLUME NORMALISATION, the trailing kind (Phase 15). Every
+     * event signal's impact is multiplied by referenceSignalsPerDay divided
+     * by the person's own typical event signals per day (the mean of their
+     * daily counts on complete days since their newest source mapping was
+     * created, over windowDays), bounded to [minWeight, maxWeight]. A person
+     * at the reference volume reads exactly as before; one covered five
+     * times as much reads each item at a fifth; one covered a quarter as
+     * much reads each item at up to maxWeight. Until minSamples complete
+     * days exist the weight is 1. The shared baseline utility supplies the
+     * mean, and its sigma of the trailing-24h count is carried into the
+     * force's details as "how unusual today's volume is for this person".
+     * Metric signals are never weighted: they carry their own baseline.
+     * TUNABLE: referenceSignalsPerDay sets the absolute scale of the force
+     * for a typical subject and is the first constant to revisit once every
+     * subject has a baseline.
+     */
+    volume: {
+      referenceSignalsPerDay: number;
+      windowDays: number;
+      minSamples: number;
+      /** Floor on the daily-count standard deviation, in signals per day. */
+      sdFloor: number;
+      thresholdStdDevs: number;
+      minWeight: number;
+      maxWeight: number;
+    };
   };
   /** The metric scorer (Phase 7): how a normalised deviation becomes confidence. */
   metrics: {
@@ -393,6 +420,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     freshnessHalfLifeHours: 24,
     freshnessMaxAgeHours: 168,
     oneReadingPerMetricMoment: true,
+    volume: { referenceSignalsPerDay: 20, windowDays: 14, minSamples: 7, sdFloor: 2, thresholdStdDevs: 1, minWeight: 0.1, maxWeight: 2 },
   },
   metrics: { fullConfidenceSigma: 3, notableSigma: 2, anomalousSigma: 3 },
   marketMood: {

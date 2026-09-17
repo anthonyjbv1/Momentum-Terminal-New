@@ -260,17 +260,32 @@ describe("the registry", () => {
     `);
     // Exhaustive on purpose: a mapping that appears without being named here is
     // a person being polled that nobody decided to poll.
+    // Phase 15: the twelve who had no source read the two news doors, and only those.
+    const news = (slug: string, name: string) => [
+      { slug, source: "publisher_rss", identifier: name },
+      { slug, source: "rss", identifier: expect.stringContaining(`news.google.com/rss/search?q=%22${name.replace(/ /g, "+")}%22`) },
+    ];
     expect(mappings).toEqual([
+      ...news("adin-ross", "Adin Ross"),
+      ...news("anthony-baptiste", "Anthony Baptiste"),
       // Phase 13: every subject also reads the publisher feed catalogue, under
       // their primary match term; the Google News search stays as the fallback.
       { slug: "drake", source: "publisher_rss", identifier: "Drake" },
       { slug: "drake", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Drake%22") },
       { slug: "drake", source: "spotify", identifier: "3TVXtAsR1Inumwj472S9r4" },
+      ...news("elon-musk", "Elon Musk"),
+      ...news("jeff-bezos", "Jeff Bezos"),
+      ...news("jensen-huang", "Jensen Huang"),
       // Phase 10: a creator whose primary platform is Twitch, and an athlete on
       // a weekly schedule — two data shapes the first two subjects do not have.
       { slug: "kai-cenat", source: "publisher_rss", identifier: "Kai Cenat" },
       { slug: "kai-cenat", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Kai+Cenat%22") },
       { slug: "kai-cenat", source: "twitch", identifier: "kaicenat" },
+      ...news("kendrick-lamar", "Kendrick Lamar"),
+      ...news("larry-ellison", "Larry Ellison"),
+      ...news("larry-page", "Larry Page"),
+      ...news("mark-zuckerberg", "Mark Zuckerberg"),
+      ...news("michael-dell", "Michael Dell"),
       { slug: "mrbeast", source: "publisher_rss", identifier: "MrBeast" },
       { slug: "mrbeast", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22MrBeast%22") },
       { slug: "mrbeast", source: "youtube", identifier: "UCX6OQ3DkcsbYNE6H8uQQuVA" },
@@ -278,6 +293,8 @@ describe("the registry", () => {
       { slug: "patrick-mahomes", source: "apisports", identifier: "1197" },
       { slug: "patrick-mahomes", source: "publisher_rss", identifier: "Patrick Mahomes" },
       { slug: "patrick-mahomes", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Patrick+Mahomes%22") },
+      ...news("sergey-brin", "Sergey Brin"),
+      ...news("warren-buffett", "Warren Buffett"),
     ]);
   });
 

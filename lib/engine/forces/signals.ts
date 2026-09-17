@@ -2,14 +2,23 @@ import type { EngineConfig } from "@/lib/engine/config";
 import { clamp } from "@/lib/engine/math";
 import { isMetricSignal } from "@/lib/engine/sentiment/metric";
 import type { SentimentResult } from "@/lib/engine/sentiment/types";
+import { UNWEIGHTED, describeVolume, type VolumeWeight } from "@/lib/engine/signal-volume";
 import type { EngineSignal, ForceEntry, ScoredSignal } from "@/lib/engine/types";
 
 /**
  * FORCE 2 — Signals (news and metric impact).
  *
- *   impact(signal) = baseImpact * tierMultiplier(source tier) * confidence * direction * freshness
+ *   impact(signal) = baseImpact * tierMultiplier(source tier) * confidence * direction * freshness * volumeWeight
  *   force          = the person's signals this tick, volume-normalised, capped
  *                    at ±maxAbsImpactPerTick as a brake
+ *
+ * VOLUME WEIGHT (Phase 15). Every event signal's impact carries the person's
+ * volume weight: referenceSignalsPerDay over their own typical event signals
+ * per day, bounded (lib/engine/signal-volume.ts). A person's ordinary day
+ * then moves their score by an ordinary amount whoever they are, and a day
+ * of three times their usual coverage reads as three times that: a big news
+ * day for them. The weight is exactly 1 until their baseline is sufficient,
+ * and never applies to a metric signal.
  *
  * FRESHNESS (Phase 12). The Engine used to score an eight-month-old article
  * exactly as one published this minute: occurred_at was loaded and never
@@ -89,10 +98,15 @@ export function isExpiredSignal(signal: Pick<EngineSignal, "occurredAt" | "rawPa
   return signalFreshness(signal, now, config).weight === 0;
 }
 
-export function signalImpact(signal: EngineSignal, sentiment: SentimentResult, config: EngineConfig["signals"], now: Date): number {
+/** The volume weight a signal carries: the person's, for an event signal; exactly 1 for a metric signal. */
+export function signalVolumeWeight(signal: Pick<EngineSignal, "rawPayload">, volumeWeight: number): number {
+  return isMetricSignal(signal.rawPayload) ? 1 : volumeWeight;
+}
+
+export function signalImpact(signal: EngineSignal, sentiment: SentimentResult, config: EngineConfig["signals"], now: Date, volumeWeight = 1): number {
   const confidence = clamp(sentiment.confidence, 0, 1);
-  const { weight } = signalFreshness(signal, now, config);
-  return config.baseImpact * tierMultiplier(signal.sourceTier, config) * confidence * sentiment.direction * weight;
+  const { weight: freshness } = signalFreshness(signal, now, config);
+  return config.baseImpact * tierMultiplier(signal.sourceTier, config) * confidence * sentiment.direction * freshness * signalVolumeWeight(signal, volumeWeight);
 }
 
 export function scoreSignals(
@@ -100,11 +114,12 @@ export function scoreSignals(
   sentiments: Map<string, SentimentResult>,
   config: EngineConfig["signals"],
   now: Date,
+  volumeWeight = 1,
 ): ScoredSignal[] {
   return signals.map((signal) => {
     const sentiment = sentiments.get(signal.id) ?? { label: "neutral", confidence: 0, direction: 0 };
     const { ageHours, weight } = signalFreshness(signal, now, config);
-    return { signal, sentiment, impact: signalImpact(signal, sentiment, config, now), ageHours, freshness: weight };
+    return { signal, sentiment, impact: signalImpact(signal, sentiment, config, now, volumeWeight), ageHours, freshness: weight, volumeWeight: signalVolumeWeight(signal, volumeWeight) };
   });
 }
 
@@ -167,7 +182,7 @@ export function foldMetricMoments(scored: ScoredSignal[]): { folded: ScoredSigna
   return { folded, moments, foldedInto };
 }
 
-export function signalsForce(scored: ScoredSignal[], config: EngineConfig["signals"]): ForceEntry {
+export function signalsForce(scored: ScoredSignal[], config: EngineConfig["signals"], volume: VolumeWeight = UNWEIGHTED): ForceEntry {
   const { folded, moments, foldedInto } = config.oneReadingPerMetricMoment ? foldMetricMoments(scored) : { folded: scored, moments: [], foldedInto: new Map<string, string>() };
   const { kept, dropped } = capPerSource(folded, config.maxPerSourcePerTick);
   const droppedIds = new Set(dropped.map((s) => s.signal.id));
@@ -194,6 +209,9 @@ export function signalsForce(scored: ScoredSignal[], config: EngineConfig["signa
       capped: impact !== normalized,
       freshnessHalfLifeHours: config.freshnessHalfLifeHours,
       freshnessMaxAgeHours: config.freshnessMaxAgeHours,
+      // The person's volume weight this tick and the baseline behind it (Phase 15); null when their volume is unknown.
+      volumeWeight: volume.weight,
+      volume: describeVolume(volume),
       signals: scored.map((s) => ({
         id: s.signal.id,
         source: s.signal.sourceName,
@@ -204,6 +222,7 @@ export function signalsForce(scored: ScoredSignal[], config: EngineConfig["signa
         impact: s.impact,
         ageHours: Math.round(s.ageHours * 10) / 10,
         freshness: Math.round(s.freshness * 1000) / 1000,
+        volumeWeight: s.volumeWeight,
         counted: s.impact !== 0 && !droppedIds.has(s.signal.id) && !foldedInto.has(s.signal.id),
         // A member folded into a moment names the reading it joined; the reading names what it contributed.
         ...(foldedInto.has(s.signal.id) ? { foldedInto: foldedInto.get(s.signal.id) } : {}),

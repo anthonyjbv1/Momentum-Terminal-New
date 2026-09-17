@@ -116,6 +116,35 @@ describe("Signals", () => {
   });
 });
 
+describe("Signals — the person's volume weight (Phase 15)", () => {
+  const positive = { label: "positive" as const, confidence: 0.8, direction: 1 as const };
+
+  it("multiplies an event signal's impact by the person's weight, and never a metric signal's", () => {
+    expect(signalImpact(signal(), positive, CONFIG.signals, NOW, 0.5)).toBeCloseTo(1.2 * 0.5);
+    expect(signalImpact(signal(), positive, CONFIG.signals, NOW, 2)).toBeCloseTo(2.4);
+    expect(signalImpact(signal(), positive, CONFIG.signals, NOW)).toBeCloseTo(1.2);
+    const metric = signal({ rawPayload: { kind: "metric", metric: "subscriber_count", polarity: 1, sigma: 2, scale: 1 } });
+    expect(signalImpact(metric, positive, CONFIG.signals, NOW, 0.1)).toBeCloseTo(1.2);
+    const scored = scoreSignals([signal({ id: "e" }), { ...metric, id: "m" }], new Map([["e", positive], ["m", positive]]), CONFIG.signals, NOW, 0.25);
+    expect(scored.map((s) => [s.signal.id, s.impact, s.volumeWeight])).toEqual([
+      ["e", expect.closeTo(0.3, 6), 0.25],
+      ["m", expect.closeTo(1.2, 6), 1],
+    ]);
+  });
+
+  it("carries the weight and the baseline into the force's details, and the force is what it was at weight 1", () => {
+    const scored = scoreSignals([signal({ id: "a" })], new Map([["a", positive]]), CONFIG.signals, NOW);
+    const plain = signalsForce(scored, CONFIG.signals);
+    expect(plain.impact).toBeCloseTo(1.2);
+    expect(plain.details).toMatchObject({ volumeWeight: 1, volume: null });
+    const reading = { samples: 7, minSamples: 7, sufficient: true, mean: 40, sd: 0, sdFloor: 2, sdApplied: 2, deviation: 0, sigma: 0, threshold: 1, band: "inside" as const, atBaseline: true };
+    const weighted = signalsForce(scoreSignals([signal({ id: "a" })], new Map([["a", positive]]), CONFIG.signals, NOW, 0.5), CONFIG.signals, { weight: 0.5, reading, current: 40 });
+    expect(weighted.impact).toBeCloseTo(0.6);
+    expect(weighted.details).toMatchObject({ volumeWeight: 0.5, volume: { weight: 0.5, sufficient: true, samples: 7, meanPerDay: 40, sigma: 0 } });
+    expect((weighted.details.signals as Array<{ volumeWeight: number }>)[0].volumeWeight).toBe(0.5);
+  });
+});
+
 describe("Signals — freshness (Phase 12)", () => {
   const hoursAgo = (h: number) => new Date(NOW.getTime() - h * 3_600_000);
   const positive = { label: "positive" as const, confidence: 0.8, direction: 1 as const };

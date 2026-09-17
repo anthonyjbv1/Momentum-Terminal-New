@@ -82,6 +82,23 @@ export interface IngestOptions {
   budgetMs?: number;
   /** Wall clock, injectable for tests. */
   clock?: () => number;
+  /**
+   * How many of a source's people are polled at once (Phase 15). Overrides
+   * the source row's `poll_concurrency`; the code default is 1, sequential,
+   * which sixteen Google News fetches at two seconds each would not fit in
+   * the scheduled run's budget. Bounded to [1, MAX_POLL_CONCURRENCY].
+   */
+  pollConcurrency?: number;
+}
+
+/** The most people one source polls at once, whatever the configuration says: a courtesy to the hosts as much as a bound on the function. */
+export const MAX_POLL_CONCURRENCY = 8;
+
+/** The source row's poll_concurrency (a positive integer), else the runner's default of 1, bounded. */
+export function pollConcurrencyFor(config: Record<string, Json | undefined>, override?: number): number {
+  const candidate = override ?? config.poll_concurrency;
+  const value = typeof candidate === "number" && Number.isFinite(candidate) ? Math.floor(candidate) : 1;
+  return Math.max(1, Math.min(MAX_POLL_CONCURRENCY, value));
 }
 
 export interface SourceRunSummary {
@@ -196,6 +213,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     log = defaultLog,
     budgetMs,
     clock = Date.now,
+    pollConcurrency,
   } = options;
   const wallClockStart = clock();
   const requested = options.sources && options.sources.length > 0 ? [...options.sources] : null;
@@ -338,16 +356,25 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     // found is written back onto its row once the source has been polled, with
     // how many of its items named a subject. Read by the connectors that share
     // feeds; the others never ask for it.
-    const catalogue: { entries: FeedCatalogEntry[] | null } = { entries: null };
+    // The listing is shared as a promise, so people polled at once cannot each read it.
+    const catalogue: { entries: FeedCatalogEntry[] | null; pending: Promise<FeedCatalogEntry[]> | null } = { entries: null, pending: null };
     const feedReports = new Map<string, FeedHealthReport>();
     const feedMatches = new Map<string, number>();
     const feeds: FeedCatalog = {
-      list: async () => (catalogue.entries ??= await store.listFeeds()),
+      list: () =>
+        (catalogue.pending ??= store.listFeeds().then((entries) => {
+          catalogue.entries = entries;
+          return entries;
+        })),
       report: (health) => feedReports.set(health.id, health),
       matched: (feedId, count) => feedMatches.set(feedId, (feedMatches.get(feedId) ?? 0) + count),
     };
 
-    for (const { person, externalIdentifier, config: personConfig } of mappings) {
+    // One person's poll, start to finish. Run `concurrency` at a time below:
+    // every step here is the person's own (their fetch, their admission,
+    // their snapshots, their poll row); the source-level counters are plain
+    // additions, and the catalogue is fetched once whoever asks first.
+    const pollMapping = async ({ person, externalIdentifier, config: personConfig }: (typeof mappings)[number]): Promise<void> => {
       if (outOfBudget()) {
         // Recorded per person, so the console shows who waited and why; the
         // source's last successful poll is whoever went before, so the source
@@ -355,7 +382,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         const reason = budgetReason();
         log({ event: "poll", run: runId, source: source.name, person: person.slug, status: "skipped", reason });
         await store.recordPoll({ runId, dataSourceId: source.id, personId: person.id, status: "skipped", reason, latencyMs: null, signalsCreated: 0, snapshotsRecorded: 0, observations: 0, blockedDropped: 0, duplicatesCollapsed: 0, excludedFiltered: 0, startedAt: new Date(now.getTime() + elapsedMs()), finishedAt: new Date(now.getTime() + elapsedMs()) });
-        continue;
+        return;
       }
       const pollStarted = clock();
       const pendingSnapshots: SnapshotRow[] = [];
@@ -599,7 +626,18 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
       } catch (error) {
         errors.push({ source: source.name, person: person.slug, message: `poll log failed: ${errorMessage(error)}` });
       }
-    }
+    };
+
+    // The people, `concurrency` at a time in mapping order: each worker takes
+    // the next person off the queue as it finishes, so a slow host delays
+    // one lane rather than everyone behind it.
+    const queue = [...mappings];
+    const concurrency = pollConcurrencyFor(config, pollConcurrency);
+    await Promise.all(
+      Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+        for (let next = queue.shift(); next !== undefined; next = queue.shift()) await pollMapping(next);
+      }),
+    );
 
     // Feed health, once per source: every fetch the catalogue saw this run,
     // logged and written back. A feed that keeps failing carries its streak so

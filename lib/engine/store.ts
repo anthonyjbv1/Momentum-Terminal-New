@@ -1,5 +1,6 @@
 import type { EngineConfig } from "@/lib/engine/config";
 import { isFreeSignal } from "@/lib/engine/selection";
+import { readSignalVolumeRow, type PersonSignalVolume, type PersonSignalVolumeRow } from "@/lib/engine/signal-volume";
 import type {
   EngineSignal,
   SignalActivity,
@@ -71,7 +72,7 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
       const depthSince = new Date(now.getTime() - config.spread.depthWindowHours * 3600 * 1000).toISOString();
       const tradesSince = new Date(now.getTime() - config.tradingActivity.baselineHours * 3600 * 1000).toISOString();
 
-      const [people, signals, positions, activity, trades, pairs, lastTick] = await Promise.all([
+      const [people, signals, positions, activity, trades, pairs, lastTick, volume] = await Promise.all([
         client.from("people").select("*").eq("is_active", true).order("slug"),
         client
           .from("signals")
@@ -88,9 +89,11 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         client.from("trade_events").select("person_id, side, amount_cents, created_at").gte("created_at", tradesSince),
         client.from("inverse_pairs").select("*"),
         client.from("engine_ticks").select("tick_number").order("tick_number", { ascending: false }).limit(1).maybeSingle(),
+        // Each person's event-signal volume, for the per-person weight (Phase 15).
+        client.rpc("person_signal_volume", { p_days: config.signals.volume.windowDays }),
       ]);
 
-      for (const [label, result] of Object.entries({ people, signals, positions, activity, trades, pairs, lastTick })) {
+      for (const [label, result] of Object.entries({ people, signals, positions, activity, trades, pairs, lastTick, volume })) {
         if (result.error) throw new Error(`Engine failed to load ${label}: ${result.error.message}`);
       }
 
@@ -134,6 +137,7 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         lastServedAtByPerson: lastServedByPerson((activity.data ?? []) as Array<{ person_id: string; processed_at: string | null; kind: string | null }>),
         openCapitalCentsByPerson: sumBy(positions.data ?? [], (p) => p.person_id, (p) => Number(p.amount_cents)),
         signalActivityByPerson: aggregateSignalActivity(activity.data ?? []),
+        signalVolumeByPerson: new Map(((volume.data ?? []) as PersonSignalVolumeRow[]).map(readSignalVolumeRow)),
         tradeEvents,
         inversePairs: pairs.data ?? [],
         lastTickNumber: lastTick.data ? Number(lastTick.data.tick_number) : 0,
@@ -182,6 +186,8 @@ export interface MemoryEngineSeed {
   tradeEvents?: TradeEvent[];
   inversePairs?: InversePair[];
   lastTickNumber?: number;
+  /** personId -> event-signal volume (Phase 15). Absent people carry no weight (1). */
+  signalVolume?: Record<string, PersonSignalVolume>;
 }
 
 export interface MemoryEngineStore extends EngineStore {
@@ -232,6 +238,7 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
             .filter((s) => s.processed && s.processedAt && s.processedAt.getTime() >= depthSince)
             .map((s) => ({ person_id: s.personId, sentiment_confidence: s.sentimentConfidence ?? null })),
         ),
+        signalVolumeByPerson: new Map(Object.entries(seed.signalVolume ?? {})),
         tradeEvents: [...(seed.tradeEvents ?? [])],
         inversePairs: [...(seed.inversePairs ?? [])],
         lastTickNumber,

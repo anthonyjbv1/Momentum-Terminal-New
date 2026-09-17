@@ -9,6 +9,7 @@ import { inversePairAdjustments } from "@/lib/engine/inverse-pairs";
 import { clamp, round } from "@/lib/engine/math";
 import { isFreeSignal, selectTickSignals } from "@/lib/engine/selection";
 import { getSentimentScorer } from "@/lib/engine/sentiment";
+import { volumeWeight } from "@/lib/engine/signal-volume";
 import { DORMANT_TARGET_DRIFT, advanceTargetDrift, effectiveTarget, readTargetDriftState, type TargetDriftState } from "@/lib/engine/target-drift";
 import { TickCallBudget, type DeferralReason } from "@/lib/engine/sentiment/budget";
 import { isMetricSignal, metricScorer as defaultMetricScorer } from "@/lib/engine/sentiment/metric";
@@ -166,8 +167,10 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
   const partial = context.people.map((person) => {
     const previousScore = Number(person.current_score);
     const deltaHours = deltaHoursFor(person, startedAt, config);
-    const scoredSignals = scoreSignals(signalsByPerson.get(person.id) ?? [], sentiments, config.signals, startedAt);
-    const signals = roundForce(signalsForce(scoredSignals, config.signals));
+    // The person's volume weight (Phase 15): 1 until their own baseline is sufficient.
+    const volume = volumeWeight(context.signalVolumeByPerson.get(person.id), config.signals.volume);
+    const scoredSignals = scoreSignals(signalsByPerson.get(person.id) ?? [], sentiments, config.signals, startedAt, volume.weight);
+    const signals = roundForce(signalsForce(scoredSignals, config.signals, volume));
     // The target: the seed, plus the drift's offset when the drift is on.
     // Off, the dormant state is written back so nothing accumulates unseen.
     const seedTarget = Number(person.revert_target);
@@ -336,6 +339,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       impact: round(s.impact, FORCE_DECIMALS),
       ageHours: Math.round(s.ageHours * 10) / 10,
       freshness: Math.round(s.freshness * 1000) / 1000,
+      volumeWeight: s.volumeWeight,
       scorer: s.sentiment.scorer,
       rationale: s.sentiment.rationale,
       anomaly: s.sentiment.anomaly,

@@ -1,5 +1,6 @@
 import type { DeferralReason } from "@/lib/engine/sentiment/budget";
 import type { SentimentResult } from "@/lib/engine/sentiment/types";
+import type { PersonSignalVolume } from "@/lib/engine/signal-volume";
 import type { TargetDriftState } from "@/lib/engine/target-drift";
 import type { InversePair, Person } from "@/types";
 import type { Json } from "@/types/database";
@@ -45,6 +46,8 @@ export interface ScoredSignal {
   ageHours: number;
   /** The freshness weight applied (1 for a metric signal, 0 for an expired one). */
   freshness: number;
+  /** The person's volume weight applied (Phase 15): 1 for a metric signal, and 1 until the person's baseline is sufficient. */
+  volumeWeight: number;
 }
 
 /** A Buy or Sell on the trade tape. */
@@ -76,6 +79,8 @@ export interface TickContext {
   /** Open capital per person, in cents. */
   openCapitalCentsByPerson: Map<string, number>;
   signalActivityByPerson: Map<string, SignalActivity>;
+  /** Each active person's event-signal volume: the trailing 24 hours and the complete days since their newest mapping (Phase 15). */
+  signalVolumeByPerson: Map<string, PersonSignalVolume>;
   /** Trade events inside the Trading Activity history window. */
   tradeEvents: TradeEvent[];
   inversePairs: InversePair[];
@@ -194,6 +199,8 @@ export interface TickSummary {
     /** Hours between occurred_at and the tick, and the freshness weight the impact carries. */
     ageHours: number;
     freshness: number;
+    /** The person's volume weight the impact carries (Phase 15); 1 for a metric signal. Absent on summaries written before Phase 15. */
+    volumeWeight?: number;
     /** Which scorer produced the assessment ("rules", "llm", "prefilter", "rules-fallback", "expired"). */
     scorer?: string;
     rationale?: string;

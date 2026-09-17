@@ -215,6 +215,48 @@ describe("Engine tick", () => {
 });
 
 // ---------------------------------------------------------------------------
+// THE PERSON'S VOLUME WEIGHT (Phase 15)
+// ---------------------------------------------------------------------------
+
+describe("Engine tick — the person's volume weight", () => {
+  const praise = (id: string, personId: string): EngineSignal => ({ id, personId, headline: "crosses 100M monthly listeners on Spotify", rawPayload: { kind: "article" }, sourceName: "rss", sourceTier: 2, occurredAt: NOW, createdAt: NOW });
+  const week = (perDay: number) => Array.from({ length: 7 }, () => perDay);
+
+  it("weights each person's event signals by the reference over their own typical day, and leaves the unmeasured and the thin at 1", async () => {
+    const store = createMemoryEngineStore(
+      seed({
+        signals: [praise("d1", "p-drake"), praise("k1", "p-kendrick"), praise("m1", "p-mrbeast")],
+        signalVolume: {
+          "p-drake": { trackedSince: NOW, current24h: 10, daily: week(10) }, // half the reference: double
+          "p-mrbeast": { trackedSince: NOW, current24h: 80, daily: week(80) }, // four times: a quarter
+          "p-kendrick": { trackedSince: NOW, current24h: 80, daily: [80, 80, 80] }, // three days: not yet
+        },
+      }),
+    );
+    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config: withEngineConfig({ marketMood: { fraction: 0 }, inversePairs: { defaultDampening: 0 } }) });
+    const by = (slug: string) => summary.people.find((p) => p.slug === slug)!;
+    expect(by("drake").forces.signals).toBeCloseTo(2.4);
+    expect(by("mrbeast").forces.signals).toBeCloseTo(0.3);
+    expect(by("kendrick-lamar").forces.signals).toBeCloseTo(1.2);
+    expect(summary.signals.map((s) => [s.id, s.volumeWeight, s.impact])).toEqual([
+      ["d1", 2, 2.4],
+      ["k1", 1, 1.2],
+      ["m1", 0.25, 0.3],
+    ]);
+    // The stored impact is the weighted one, so the Feed, memory and narratives see what moved the score.
+    expect(store.processedSignals.map((s) => [s.id, s.impactScore])).toEqual([
+      ["d1", 2.4],
+      ["k1", 1.2],
+      ["m1", 0.3],
+    ]);
+    const event = store.scoreEvents.find((e) => e.personId === "p-mrbeast" && e.force === "signals")!;
+    expect(event.details).toMatchObject({ volumeWeight: 0.25, volume: { sufficient: true, samples: 7, meanPerDay: 80 } });
+    const thin = store.scoreEvents.find((e) => e.personId === "p-kendrick" && e.force === "signals")!;
+    expect(thin.details).toMatchObject({ volumeWeight: 1, volume: { sufficient: false, samples: 3 } });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // THE DRIFTING TARGET (Phase 14)
 // ---------------------------------------------------------------------------
 
