@@ -18,6 +18,7 @@ const summary = (): IngestSummary => ({
   configProblems: [],
   totals: { sources: 4, people: 5, signalsCreated: 7, snapshotsRecorded: 7, observations: 7, errors: 0, blockedDropped: 0, duplicatesCollapsed: 0, excludedFiltered: 0 },
   errors: [],
+  budget: { ms: 35_000, exhausted: false },
 });
 
 const quiet = () => undefined;
@@ -78,6 +79,15 @@ describe("runScheduledIngestion", () => {
     // window by the next fire and blocks no scheduled poll at all.
     expect(INGEST_CRON_DEFAULTS.staleAfterMinutes).toBeGreaterThan(1);
     expect(INGEST_CRON_DEFAULTS.staleAfterMinutes).toBeLessThan(15);
+  });
+
+  it("closes the run inside the platform's 60-second kill: the budget plus the longest poll it can still start fits", () => {
+    // The poll in flight when the budget runs out may take one connector
+    // timeout, or the publisher catalogue's fetch budget (15 s) plus one feed
+    // timeout (6 s), whichever is longer; the close still has to happen after.
+    const longestPollMs = Math.max(INGEST_CRON_DEFAULTS.fetchTimeoutMs, 15_000 + 6_000);
+    expect(INGEST_CRON_DEFAULTS.runBudgetMs + longestPollMs).toBeLessThan(58_000);
+    expect(INGEST_CRON_DEFAULTS.runBudgetMs).toBeGreaterThanOrEqual(30_000);
   });
 });
 

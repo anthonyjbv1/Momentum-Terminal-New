@@ -136,3 +136,86 @@ describe("the feed catalogue", () => {
     expect(store.feedHealth).toEqual([]);
   });
 });
+
+describe("the run budget", () => {
+  /** A connector whose poll costs a fixed amount of the injected clock. */
+  function slowConnector(name: string, costMs: number, clock: { now: number }): DataConnector {
+    return {
+      name,
+      async fetchForPerson(_person, identifier) {
+        clock.now += costMs;
+        return [{ headline: `${name} item for ${identifier}`, dedupeKey: `${name}:${identifier}`, occurredAt: NOW, rawPayload: { kind: "article" } }];
+      },
+    };
+  }
+
+  it("stops starting polls once the budget is spent, records what waited as skipped, and still closes the run", async () => {
+    const clock = { now: NOW.getTime() };
+    const store = createMemoryIngestStore({
+      sources: [makeSource({ id: "src-a", name: "a", is_active: true }), makeSource({ id: "src-b", name: "b", is_active: true }), makeSource({ id: "src-c", name: "c", is_active: true })],
+      mappings: {
+        "src-a": [{ person, externalIdentifier: "one" }, { person: makePerson({ id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", slug: "drake", display_name: "Drake" }), externalIdentifier: "two" }],
+        "src-b": [{ person, externalIdentifier: "one" }],
+        "src-c": [{ person, externalIdentifier: "one" }],
+      },
+    });
+    const lines: IngestLogLine[] = [];
+    const registry = buildRegistry([slowConnector("a", 20_000, clock), slowConnector("b", 20_000, clock), slowConnector("c", 20_000, clock)]);
+    const summary = await runIngestion({ store, now: NOW, registry, force: true, log: (line) => lines.push(line), budgetMs: 35_000, clock: () => clock.now });
+
+    // a/one (20 s) and a/two (40 s) ran — the second started at 20 s, inside the budget; b and c did not start.
+    expect(store.signals.map((s) => s.dedupeKey)).toEqual(["a:one", "a:two"]);
+    expect(summary.budget).toEqual({ ms: 35_000, exhausted: true });
+    expect(summary.sourcesSkipped).toEqual([
+      { name: "b", reason: expect.stringMatching(/^run budget of 35000 ms exhausted after 40000 ms/) },
+      { name: "c", reason: expect.stringMatching(/^run budget of 35000 ms exhausted/) },
+    ]);
+    expect(store.polls.map((p) => [p.dataSourceId, p.status])).toEqual([
+      ["src-a", "ok"],
+      ["src-a", "ok"],
+      ["src-b", "skipped"],
+      ["src-c", "skipped"],
+    ]);
+    // Closed, with its ledger: what a killed function never writes.
+    expect(store.runs[0].result).toMatchObject({ sourcesRun: 1, signalsCreated: 2 });
+    expect(summary.durationMs).toBe(40_000);
+    expect(lines.find((l) => l.event === "run")).toMatchObject({ budgetMs: 35_000, budgetExhausted: true });
+  });
+
+  it("skips the people who waited inside a source, per person, and the source is due again on the next fire", async () => {
+    const clock = { now: NOW.getTime() };
+    const other = makePerson({ id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", slug: "drake", display_name: "Drake" });
+    const store = createMemoryIngestStore({
+      sources: [makeSource({ id: "src-a", name: "a", is_active: true, poll_interval_minutes: 10 })],
+      mappings: { "src-a": [{ person, externalIdentifier: "one" }, { person: other, externalIdentifier: "two" }] },
+    });
+    const registry = buildRegistry([slowConnector("a", 30_000, clock)]);
+    const summary = await runIngestion({ store, now: NOW, registry, force: true, log: quiet, budgetMs: 25_000, clock: () => clock.now });
+    expect(summary.budget.exhausted).toBe(true);
+    expect(store.polls.map((p) => [p.personId, p.status])).toEqual([
+      [person.id, "ok"],
+      [other.id, "skipped"],
+    ]);
+    expect(store.polls[1].reason).toMatch(/run budget of 25000 ms exhausted after 30000 ms/);
+    // The source's last successful poll is the first person's, so fifteen minutes on it is due and the queue resumes.
+    const later = new Date(NOW.getTime() + 15 * 60_000);
+    const next = await runIngestion({ store, now: later, registry: buildRegistry([slowConnector("a", 1_000, clock)]), log: quiet, budgetMs: 25_000, clock: () => clock.now });
+    expect(next.sourcesSkipped).toEqual([]);
+    expect(next.budget.exhausted).toBe(false);
+  });
+
+  it("polls the source that has waited longest first, so the hourly ones are not queued behind the quarter-hourly ones", async () => {
+    const store = createMemoryIngestStore({
+      sources: [makeSource({ id: "src-fast", name: "fast", is_active: true, poll_interval_minutes: 10 }), makeSource({ id: "src-slow", name: "slow", is_active: true, poll_interval_minutes: 55 })],
+      mappings: { "src-fast": [{ person, externalIdentifier: "f" }], "src-slow": [{ person, externalIdentifier: "s" }] },
+      polls: [
+        { runId: "old", dataSourceId: "src-fast", personId: person.id, status: "ok", reason: null, latencyMs: 1, signalsCreated: 0, snapshotsRecorded: 0, observations: 0, blockedDropped: 0, duplicatesCollapsed: 0, excludedFiltered: 0, startedAt: hour(-0.25), finishedAt: hour(-0.25) },
+        { runId: "old", dataSourceId: "src-slow", personId: person.id, status: "ok", reason: null, latencyMs: 1, signalsCreated: 0, snapshotsRecorded: 0, observations: 0, blockedDropped: 0, duplicatesCollapsed: 0, excludedFiltered: 0, startedAt: hour(-1), finishedAt: hour(-1) },
+      ],
+    });
+    const clock = { now: NOW.getTime() };
+    const summary = await runIngestion({ store, now: NOW, registry: buildRegistry([slowConnector("fast", 1_000, clock), slowConnector("slow", 1_000, clock)]), log: quiet, clock: () => clock.now });
+    expect(summary.sourcesRun.map((s) => s.name)).toEqual(["slow", "fast"]);
+    expect(store.polls.slice(2).map((p) => p.dataSourceId)).toEqual(["src-slow", "src-fast"]);
+  });
+});

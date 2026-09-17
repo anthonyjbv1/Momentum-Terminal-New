@@ -1734,6 +1734,7 @@ export type Database = {
         Args: { p_key: string; p_limit: number; p_window_seconds: number }
         Returns: Json
       }
+      record_feed_health: { Args: { rows: Json }; Returns: number }
       record_narratives: { Args: { p_narratives: Json }; Returns: number }
       record_portfolio_snapshot: {
         Args: {

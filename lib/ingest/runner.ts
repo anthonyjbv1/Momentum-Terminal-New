@@ -71,6 +71,17 @@ export interface IngestOptions {
   trigger?: IngestTrigger;
   /** Structured log sink. Defaults to console.info with an [ingest] prefix. */
   log?: (line: IngestLogLine) => void;
+  /**
+   * Wall-clock budget for the whole run, in milliseconds. Once it is spent, the
+   * sources and people not yet polled are recorded as skipped and the run is
+   * CLOSED with what it has — the same rule the Engine's tick follows. Without
+   * it a slow minute at the database runs the scheduled function into the
+   * platform's kill, which loses the run's ledger and every remaining source.
+   * Absent means unbounded (the manual endpoint).
+   */
+  budgetMs?: number;
+  /** Wall clock, injectable for tests. */
+  clock?: () => number;
 }
 
 export interface SourceRunSummary {
@@ -121,6 +132,8 @@ export interface IngestSummary {
     excludedFiltered: number;
   };
   errors: IngestError[];
+  /** The wall-clock budget the run was given, and whether it ran out before every due source was polled. */
+  budget: { ms: number | null; exhausted: boolean };
 }
 
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -181,9 +194,20 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     force = false,
     trigger = "manual",
     log = defaultLog,
+    budgetMs,
+    clock = Date.now,
   } = options;
-  const wallClockStart = Date.now();
+  const wallClockStart = clock();
   const requested = options.sources && options.sources.length > 0 ? [...options.sources] : null;
+  const elapsedMs = () => clock() - wallClockStart;
+  let budgetExhausted = false;
+  /** True once the budget is spent; sticky, so nothing new starts after the first refusal. */
+  const outOfBudget = () => {
+    if (budgetExhausted) return true;
+    if (budgetMs !== undefined && elapsedMs() >= budgetMs) budgetExhausted = true;
+    return budgetExhausted;
+  };
+  const budgetReason = () => `run budget of ${budgetMs} ms exhausted after ${elapsedMs()} ms; polled on the next fire`;
 
   const fetchWithTimeout: typeof fetch = (input, init) =>
     baseFetch(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(timeoutMs) });
@@ -229,6 +253,13 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     activeSources = activeSources.filter((source) => wanted.has(source.name));
   }
 
+  // Least recently polled first, then by name. Under a budget the order is
+  // what decides who waits, and a source that has waited longest (the hourly
+  // ones, on the fire that makes them due) must not queue behind the ones
+  // polled a quarter of an hour ago. The same read serves the interval check.
+  const lastPolled = new Map(await Promise.all(activeSources.map(async (source) => [source.id, await store.lastSuccessfulPollAt(source.id)] as const)));
+  activeSources = [...activeSources].sort((a, b) => (lastPolled.get(a.id)?.getTime() ?? 0) - (lastPolled.get(b.id)?.getTime() ?? 0) || a.name.localeCompare(b.name));
+
   for (const source of activeSources) {
     const connector = registry.get(source.name);
     if (!connector) {
@@ -243,7 +274,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     }
 
     if (!force) {
-      const last = await store.lastSuccessfulPollAt(source.id);
+      const last = lastPolled.get(source.id) ?? null;
       if (last) {
         const minutesAgo = (now.getTime() - last.getTime()) / 60_000;
         if (minutesAgo < source.poll_interval_minutes) {
@@ -251,6 +282,11 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
           continue;
         }
       }
+    }
+
+    if (outOfBudget()) {
+      await skipSource(source, budgetReason());
+      continue;
     }
 
     let mappings;
@@ -312,7 +348,16 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     };
 
     for (const { person, externalIdentifier, config: personConfig } of mappings) {
-      const pollStarted = Date.now();
+      if (outOfBudget()) {
+        // Recorded per person, so the console shows who waited and why; the
+        // source's last successful poll is whoever went before, so the source
+        // is due again on the next fire and the queue resumes there.
+        const reason = budgetReason();
+        log({ event: "poll", run: runId, source: source.name, person: person.slug, status: "skipped", reason });
+        await store.recordPoll({ runId, dataSourceId: source.id, personId: person.id, status: "skipped", reason, latencyMs: null, signalsCreated: 0, snapshotsRecorded: 0, observations: 0, blockedDropped: 0, duplicatesCollapsed: 0, excludedFiltered: 0, startedAt: new Date(now.getTime() + elapsedMs()), finishedAt: new Date(now.getTime() + elapsedMs()) });
+        continue;
+      }
+      const pollStarted = clock();
       const pendingSnapshots: SnapshotRow[] = [];
       const snapshots: SnapshotStore = {
         latest: (metricKey) => store.latestSnapshot(person.id, source.id, metricKey),
@@ -345,7 +390,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         excludedFiltered: 0,
         // Poll times are measured from the run's `now`, so a run with an
         // injected clock stays consistent with itself and reproducible.
-        startedAt: new Date(now.getTime() + (Date.now() - wallClockStart)),
+        startedAt: new Date(now.getTime() + elapsedMs()),
       };
       let status: PollStatus = "ok";
       let reason: string | null = null;
@@ -546,7 +591,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         errors.push({ source: source.name, person: person.slug, message: reason });
       }
 
-      const latencyMs = Date.now() - pollStarted;
+      const latencyMs = clock() - pollStarted;
       const finishedAt = new Date(poll.startedAt.getTime() + latencyMs);
       log({ event: "poll", run: runId, source: source.name, person: person.slug, status, reason, latencyMs, signals: poll.signalsCreated, snapshots: poll.snapshotsRecorded, observations: poll.observations });
       try {
@@ -603,7 +648,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     sourcesRun.push(summary);
   }
 
-  const durationMs = Math.max(0, Date.now() - wallClockStart);
+  const durationMs = Math.max(0, elapsedMs());
   const finishedAt = new Date(now.getTime() + durationMs);
   const totals = {
     sources: sourcesRun.length,
@@ -628,9 +673,10 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     configProblems,
     totals,
     errors,
+    budget: { ms: budgetMs ?? null, exhausted: budgetExhausted },
   };
 
-  log({ event: "run", run: runId, trigger, forced: force, durationMs, ...totals, skipped: sourcesSkipped.length });
+  log({ event: "run", run: runId, trigger, forced: force, durationMs, ...totals, skipped: sourcesSkipped.length, budgetMs: budgetMs ?? null, budgetExhausted });
   try {
     await store.finishRun(runId, {
       finishedAt,

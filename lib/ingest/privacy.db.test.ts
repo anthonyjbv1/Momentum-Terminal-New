@@ -327,8 +327,32 @@ describe("the registry", () => {
       expect(["feed", "discover"], `${feed.url}: mode`).toContain(feed.mode);
       expect(feed.url).toMatch(/^https:\/\//);
     }
-    // A discovery row is a page to search, and there are known ones: the outlets that retired RSS are measured, not assumed.
-    expect(feeds.filter((feed) => feed.mode === "discover").map((feed) => feed.domain)).toEqual(expect.arrayContaining(["reuters.com", "apnews.com", "bloomberg.com"]));
+    // The outlets that retired RSS were measured, not assumed: their discovery
+    // rows exist, were fetched from production on 2026-09-17, and were then
+    // switched off by the curation migration with what was found in the note.
+    const retired = await database.rows<{ domain: string; is_active: boolean; note: string | null }>(
+      "select domain, is_active, note from public.publisher_feeds where domain in ('reuters.com', 'apnews.com', 'bloomberg.com') order by domain",
+    );
+    expect(retired.map((feed) => [feed.domain, feed.is_active])).toEqual([["apnews.com", false], ["bloomberg.com", false], ["reuters.com", false]]);
+    for (const feed of retired) expect(feed.note).toMatch(/2026-09-17/);
+  });
+
+  it("writes a run's feed health in one statement, touching health columns only, and only for the service role", async () => {
+    const [{ id, url, mode }] = await database.rows<{ id: string; url: string; mode: string }>("select id, url, mode from public.publisher_feeds where domain = 'espn.com' order by url limit 1");
+    const [{ written }] = await database.rows<{ written: number }>("select public.record_feed_health($1::jsonb) as written", [
+      JSON.stringify([
+        { id, fetched_at: "2026-09-17T15:15:29Z", status: "ok", http_status: 200, error: null, item_count: 24, dated_count: 24, described_count: 24, matched_count: 3, newest_published_at: "2026-09-17T15:12:00Z", discovered_url: null, etag: '"abc"', last_modified: null, consecutive_failures: 0 },
+        { id: "00000000-0000-4000-8000-000000000000", fetched_at: "2026-09-17T15:15:29Z", status: "error", http_status: 503, error: "gone", item_count: null, dated_count: null, described_count: null, matched_count: 0, newest_published_at: null, discovered_url: null, etag: null, last_modified: null, consecutive_failures: 1 },
+      ]),
+    ]);
+    expect(Number(written)).toBe(1);
+    const [row] = await database.rows<Record<string, unknown>>("select url, mode, last_status, last_http_status, last_item_count, last_matched_count, etag, consecutive_failures, last_fetched_at::text as fetched from public.publisher_feeds where id = $1", [id]);
+    expect(row).toMatchObject({ url, mode, last_status: "ok", last_http_status: 200, last_item_count: 24, last_matched_count: 3, etag: '"abc"', consecutive_failures: 0 });
+    expect(String(row.fetched)).toContain("2026-09-17 15:15:29");
+    for (const role of USER_ROLES) {
+      const [{ ok }] = await database.rows<{ ok: boolean }>("select has_function_privilege($1, 'public.record_feed_health(jsonb)', 'execute') as ok", [role]);
+      expect(ok, `${role} may execute record_feed_health`).toBe(false);
+    }
   });
 
   it("declares Twitch and API-Sports as data, with every metric able to fill its baseline", async () => {

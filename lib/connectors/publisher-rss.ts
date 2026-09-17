@@ -63,9 +63,9 @@ export interface PublisherRssConfig {
   max_item_age_hours: number;
   /** Feeds fetched at once. Default 8, at most 16. */
   concurrency: number;
-  /** Per-feed request timeout. Default 8000. */
+  /** Per-feed request timeout. Default 6000. */
   feed_timeout_ms: number;
-  /** Budget for STARTING fetches of the catalogue; feeds not started inside it wait for the next poll. Default 20000. */
+  /** Budget for STARTING fetches of the catalogue; feeds not started inside it wait for the next poll. Default 15000. */
   fetch_budget_ms: number;
 }
 
@@ -74,8 +74,8 @@ const DEFAULT_CONFIG: PublisherRssConfig = {
   max_items_per_person: 60,
   max_item_age_hours: 72,
   concurrency: 8,
-  feed_timeout_ms: 8_000,
-  fetch_budget_ms: 20_000,
+  feed_timeout_ms: 6_000,
+  fetch_budget_ms: 15_000,
 };
 
 /** Items dated this far into the future are still accepted: publisher clocks drift by minutes, not hours. */

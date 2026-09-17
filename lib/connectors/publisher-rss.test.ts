@@ -122,7 +122,7 @@ beforeEach(() => resetPublisherFeedCache());
 
 describe("configuration", () => {
   it("reads the source config with clamps, and the subject config with the identifier as the first term", () => {
-    expect(readPublisherRssConfig({})).toEqual({ max_items_per_feed: 50, max_items_per_person: 60, max_item_age_hours: 72, concurrency: 8, feed_timeout_ms: 8000, fetch_budget_ms: 20000 });
+    expect(readPublisherRssConfig({})).toEqual({ max_items_per_feed: 50, max_items_per_person: 60, max_item_age_hours: 72, concurrency: 8, feed_timeout_ms: 6000, fetch_budget_ms: 15000 });
     expect(readPublisherRssConfig({ max_items_per_feed: 1000, concurrency: 0, max_item_age_hours: 24, fetch_budget_ms: 99_999 })).toMatchObject({ max_items_per_feed: 200, concurrency: 8, max_item_age_hours: 24, fetch_budget_ms: 50_000 });
     expect(readSubjectConfig({ match_terms: ["Mahomes", " Mahomes ", 7 as never], topics: ["NFL", "Sports"] }, " Patrick Mahomes ", mahomes)).toEqual({ terms: ["Patrick Mahomes", "Mahomes"], topics: ["nfl", "sports"] });
     expect(readSubjectConfig(null, "", mahomes)).toEqual({ terms: ["Patrick Mahomes"], topics: [] });

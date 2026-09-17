@@ -332,38 +332,32 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
     },
 
     async recordFeedHealth(rows) {
-      // One update per row, a few at a time: the catalogue is dozens of rows,
-      // not thousands, and an update touches only the health columns so an
-      // operator's edit to the configuration columns is never overwritten.
-      const batch = 10;
-      for (let start = 0; start < rows.length; start += batch) {
-        const results = await Promise.all(
-          rows.slice(start, start + batch).map((row) =>
-            client
-              .from("publisher_feeds")
-              .update({
-                last_fetched_at: row.fetchedAt.toISOString(),
-                last_status: row.status,
-                last_http_status: row.httpStatus,
-                last_error: row.error,
-                last_item_count: row.itemCount,
-                last_dated_count: row.datedCount,
-                last_described_count: row.describedCount,
-                last_matched_count: row.matchedCount,
-                last_newest_published_at: row.newestPublishedAt ? row.newestPublishedAt.toISOString() : null,
-                discovered_url: row.discoveredUrl,
-                etag: row.etag,
-                last_modified: row.lastModified,
-                consecutive_failures: row.consecutiveFailures,
-                updated_at: row.fetchedAt.toISOString(),
-              })
-              .eq("id", row.id),
-          ),
-        );
-        for (const result of results) {
-          if (result.error) throw new Error(`Failed to record feed health: ${result.error.message}`);
-        }
-      }
+      if (rows.length === 0) return;
+      // ONE round trip for the whole catalogue. The first version did one
+      // update per row in batches of ten, and on a minute when the database
+      // answered in seconds rather than milliseconds those ninety-four updates
+      // ran the scheduled function into the platform's 60-second kill. The
+      // function touches only the health columns, so an operator's edit to the
+      // configuration columns is never overwritten.
+      const { error } = await client.rpc("record_feed_health", {
+        rows: rows.map((row) => ({
+          id: row.id,
+          fetched_at: row.fetchedAt.toISOString(),
+          status: row.status,
+          http_status: row.httpStatus,
+          error: row.error,
+          item_count: row.itemCount,
+          dated_count: row.datedCount,
+          described_count: row.describedCount,
+          matched_count: row.matchedCount,
+          newest_published_at: row.newestPublishedAt ? row.newestPublishedAt.toISOString() : null,
+          discovered_url: row.discoveredUrl,
+          etag: row.etag,
+          last_modified: row.lastModified,
+          consecutive_failures: row.consecutiveFailures,
+        })) as Json,
+      });
+      if (error) throw new Error(`Failed to record feed health: ${error.message}`);
     },
 
     async insertSnapshots(rows) {
