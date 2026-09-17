@@ -472,8 +472,8 @@ export const apisportsConnector: DataConnector = {
    * The season passing-yards figure, read strictly and snapshotted RAW once
    * per change. It is the season cumulative total — the shape this connector
    * refuses to register as a metric (a monotone step function has no usable
-   * baseline) — so it goes to raw_source_snapshots only, with no observation
-   * and no signal, under SEASON_PASSING_YARDS_SNAPSHOT. The per-game metric,
+   * baseline) — so it is queued as a snapshot only, with no observation and
+   * no signal, under SEASON_PASSING_YARDS_SNAPSHOT. The per-game metric,
    * `game_passing_yards`, is not produced here until its source is settled:
    * either the per-game statistics endpoint or a difference of this total.
    *
