@@ -323,8 +323,23 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
 
       try {
         // 1. Poll ---------------------------------------------------------------
+        // Events and metrics are two reads of one source, and a failure in the
+        // second must not throw away the first: for a whole day the API-Sports
+        // connector fetched every finished game and lost them all to a metric
+        // it could not parse. A metrics failure is recorded on the poll as an
+        // error, its queued snapshots are discarded, and the events go through.
         const events: RawSignal[] = await connector.fetchForPerson(person, externalIdentifier, context);
-        const readings: MetricReading[] = connector.fetchMetrics ? await connector.fetchMetrics(person, externalIdentifier, context) : [];
+        let readings: MetricReading[] = [];
+        let metricsError: string | null = null;
+        if (connector.fetchMetrics) {
+          const queuedBefore = pendingSnapshots.length;
+          try {
+            readings = await connector.fetchMetrics(person, externalIdentifier, context);
+          } catch (error) {
+            metricsError = errorMessage(error);
+            pendingSnapshots.length = queuedBefore;
+          }
+        }
 
         // 1b. Admit -------------------------------------------------------------
         // Each event's publisher is resolved through the allowlist (a blocked
@@ -487,6 +502,13 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
             stored: Boolean(signal.dedupeKey && idByDedupeKey.has(signal.dedupeKey)),
             headline: signal.headline,
           });
+        }
+
+        if (metricsError) {
+          status = "error";
+          reason = `metrics: ${metricsError}`;
+          summary.errors += 1;
+          errors.push({ source: source.name, person: person.slug, message: reason });
         }
       } catch (error) {
         status = "error";

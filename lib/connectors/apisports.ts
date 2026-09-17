@@ -47,11 +47,27 @@ import { ConnectorError, type DataConnector, type MetricReading, type RawSignal 
  *
  * THE PATHS ARE CONFIGURATION, AND WHY. api-sports.io is unreachable from the
  * network this was written on — every domain of theirs is refused by the egress
- * proxy — so the endpoint paths and statistic field names here are NOT verified
- * against a live response. They live in data_sources.config for exactly that
- * reason: a path that turns out wrong is a one-row update, not a deploy. Every
- * read validates the envelope and throws naming what actually came back, so the
- * first real poll writes the truth into source_polls instead of going quiet.
+ * proxy — so the endpoint paths and statistic field names live in
+ * data_sources.config: a path that turns out wrong is a one-row update, not a
+ * deploy. Every read validates the envelope and throws naming what actually
+ * came back, so a wrong guess writes the truth into source_polls instead of
+ * going quiet.
+ *
+ * WHAT THE FIRST LIVE RESPONSE TAUGHT (2026-09-17, run by hand). Player
+ * statistics on the American Football host are not keyed fields. They come
+ * back as named GROUPS of name/value pairs:
+ *
+ *   response[0].teams[0].groups[{ name: "Passing", statistics: [{ name: "yards", value: "3,587" }, ...] }, { name: "Rushing", statistics: [{ name: "yards", value: "422" }] }, ...]
+ *
+ * Three things follow. A statistic is addressed by GROUP and NAME, never by a
+ * dotted path — "yards" alone is ambiguous across Passing, Rushing and
+ * Receiving. Values are STRINGS with thousands separators, so the parser
+ * accepts exactly that grammar and refuses anything else out loud ("3,587" is
+ * 3587; it is never 3). And the figure is the SEASON CUMULATIVE total, which
+ * this connector deliberately does not register as a metric (see above): it
+ * is snapshotted raw, once per change, under `season_passing_yards`, and the
+ * per-game figure `game_passing_yards` waits on a decision recorded outside
+ * this file — the per-game endpoint, or a difference of the cumulative.
  */
 
 export const APISPORTS_SOURCE_NAME = "apisports";
@@ -66,6 +82,12 @@ export interface ApiSportsPaths {
   player_statistics: string;
 }
 
+/** Where a statistic lives in the grouped shape: the group's name and the statistic's name, both matched case-insensitively. */
+export interface GroupedStatLookup {
+  group: string;
+  name: string;
+}
+
 export interface ApiSportsConnectorConfig {
   host: string;
   /** Season year. Null means derive it from the calendar. */
@@ -73,7 +95,9 @@ export interface ApiSportsConnectorConfig {
   /** API-Sports team id, when known; otherwise taken from the player's statistics response. */
   team_id: number | null;
   paths: ApiSportsPaths;
-  /** Candidate field names for passing yards, tried in order — vendors rename statistic keys between sports and versions. */
+  /** The season passing-yards statistic in the grouped shape the American Football host returns. */
+  passing_yards_stat: GroupedStatLookup;
+  /** Dotted-path fallbacks for a keyed shape, tried in order when the grouped lookup finds nothing. */
   passing_yards_keys: string[];
   /** How many finished games back to consider for events on one poll. */
   recent_games: number;
@@ -87,9 +111,13 @@ const DEFAULT_CONFIG: ApiSportsConnectorConfig = {
     games: "/games?season={season}&team={team}",
     player_statistics: "/players/statistics?id={player}&season={season}",
   },
+  passing_yards_stat: { group: "Passing", name: "yards" },
   passing_yards_keys: ["passing.yards", "passing_yards", "yards"],
   recent_games: 5,
 };
+
+/** The raw snapshot key of the season cumulative figure. Not a metric: no baseline, no signal, never registered. */
+export const SEASON_PASSING_YARDS_SNAPSHOT = "season_passing_yards";
 
 function stringOr(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
@@ -97,6 +125,14 @@ function stringOr(value: unknown, fallback: string): string {
 
 function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function lookupOr(value: unknown, fallback: GroupedStatLookup): GroupedStatLookup {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fallback;
+  const record = value as Record<string, unknown>;
+  return typeof record.group === "string" && record.group.trim() && typeof record.name === "string" && record.name.trim()
+    ? { group: record.group.trim(), name: record.name.trim() }
+    : fallback;
 }
 
 export function readApiSportsConfig(config: Record<string, unknown>): ApiSportsConnectorConfig {
@@ -111,6 +147,7 @@ export function readApiSportsConfig(config: Record<string, unknown>): ApiSportsC
       games: stringOr(paths.games, DEFAULT_CONFIG.paths.games),
       player_statistics: stringOr(paths.player_statistics, DEFAULT_CONFIG.paths.player_statistics),
     },
+    passing_yards_stat: lookupOr(config.passing_yards_stat, DEFAULT_CONFIG.passing_yards_stat),
     passing_yards_keys:
       Array.isArray(keys) && keys.length > 0 && keys.every((key) => typeof key === "string") ? (keys as string[]) : DEFAULT_CONFIG.passing_yards_keys,
     recent_games: recent !== null && recent > 0 ? Math.floor(recent) : DEFAULT_CONFIG.recent_games,
@@ -222,14 +259,78 @@ function dig(source: unknown, path: string): unknown {
   }, source);
 }
 
-/** A statistic that may arrive as a number or as a numeric string ("342"). */
+/**
+ * A statistic's value, strictly. The host sends numbers as strings, with
+ * thousands separators ("3,587"), sometimes negative ("-10"), sometimes with a
+ * decimal ("62.7"), sometimes null. This accepts exactly that grammar — an
+ * optional sign, digits grouped in threes by commas or ungrouped, an optional
+ * decimal part — strips the separators and converts. Anything else is null,
+ * never a partial read: "3,587" is 3587, and it can never come back as 3.
+ */
+const STAT_VALUE = /^-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$/;
+
+export function parseStatValue(raw: unknown): number | null {
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  if (typeof raw !== "string") return null;
+  const text = raw.trim();
+  if (!STAT_VALUE.test(text)) return null;
+  const value = Number(text.replace(/,/g, ""));
+  return Number.isFinite(value) ? value : null;
+}
+
+/** A statistic that may arrive as a number or as a numeric string ("342"), addressed by dotted path. */
 export function readStatistic(source: unknown, candidates: string[]): number | null {
   for (const candidate of candidates) {
-    const raw = dig(source, candidate);
-    if (typeof raw === "number" && Number.isFinite(raw)) return raw;
-    if (typeof raw === "string" && raw.trim() !== "" && Number.isFinite(Number(raw))) return Number(raw);
+    const value = parseStatValue(dig(source, candidate));
+    if (value !== null) return value;
   }
   return null;
+}
+
+export type GroupedStatResult =
+  | { status: "ok"; value: number; raw: unknown }
+  /** The statistic is there and its value is not a number: say so, never guess. */
+  | { status: "unparseable"; raw: unknown }
+  /** No such group / name; what IS there, so the next config edit is informed. */
+  | { status: "missing"; groups: string[]; names: string[] };
+
+interface RawGroup {
+  name?: unknown;
+  statistics?: Array<{ name?: unknown; value?: unknown }>;
+}
+
+function groupsOf(entry: unknown): RawGroup[] {
+  const teams = (entry as { teams?: unknown } | undefined)?.teams;
+  if (!Array.isArray(teams)) return [];
+  return teams.flatMap((team) => {
+    const groups = (team as { groups?: unknown } | undefined)?.groups;
+    return Array.isArray(groups) ? (groups as RawGroup[]) : [];
+  });
+}
+
+const same = (a: unknown, b: string) => typeof a === "string" && a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/**
+ * A statistic in the grouped shape: `teams[].groups[name].statistics[name].value`.
+ * Group first, because names repeat across groups ("yards" is passing,
+ * rushing and receiving yards depending on which one it is under).
+ */
+export function readGroupedStatistic(entry: unknown, lookup: GroupedStatLookup): GroupedStatResult {
+  const groups = groupsOf(entry);
+  for (const group of groups) {
+    if (!same(group.name, lookup.group)) continue;
+    for (const stat of group.statistics ?? []) {
+      if (!same(stat.name, lookup.name)) continue;
+      const value = parseStatValue(stat.value);
+      return value === null ? { status: "unparseable", raw: stat.value } : { status: "ok", value, raw: stat.value };
+    }
+  }
+  const matched = groups.filter((group) => same(group.name, lookup.group));
+  return {
+    status: "missing",
+    groups: groups.map((group) => (typeof group.name === "string" ? group.name : "?")),
+    names: matched.flatMap((group) => (group.statistics ?? []).map((stat) => (typeof stat.name === "string" ? stat.name : "?"))),
+  };
 }
 
 export interface ApiSportsGame {
@@ -368,12 +469,16 @@ export const apisportsConnector: DataConnector = {
   },
 
   /**
-   * Metric: per-game passing yards, sampled once per game.
+   * The season passing-yards figure, read strictly and snapshotted RAW once
+   * per change. It is the season cumulative total — the shape this connector
+   * refuses to register as a metric (a monotone step function has no usable
+   * baseline) — so it goes to raw_source_snapshots only, with no observation
+   * and no signal, under SEASON_PASSING_YARDS_SNAPSHOT. The per-game metric,
+   * `game_passing_yards`, is not produced here until its source is settled:
+   * either the per-game statistics endpoint or a difference of this total.
    *
-   * The reading is returned only when the figure has moved, so `samples` in the
-   * baseline counts games rather than polls. Eight games is the declared
-   * minimum, which lands around the season's halfway point — the earliest a
-   * claim about form is worth making.
+   * Every failure is loud and names what came back: a value that is not a
+   * number, or a group / statistic that is not there and the ones that are.
    */
   async fetchMetrics(person, playerId, context): Promise<MetricReading[]> {
     if (typeof window !== "undefined") throw new Error("The API-Sports connector is server-only.");
@@ -384,21 +489,31 @@ export const apisportsConnector: DataConnector = {
     const status = await fetchApiSportsStatus(config, key, context.fetch, context.now.getTime());
     const season = seasonFor(context.now, config.season);
     const statistics = (await call<unknown>(fill(config.paths.player_statistics, { player, season }), config, key, context.fetch)).response ?? [];
+    const where = `on ${config.host} for season ${season}; plan ${status.plan ?? "unknown"}, ${status.requestsToday ?? "?"} of ${status.dailyLimit ?? "?"} requests used today`;
 
-    const yards = readStatistic(statistics[0], config.passing_yards_keys);
-    if (yards === null) {
+    const grouped = readGroupedStatistic(statistics[0], config.passing_yards_stat);
+    if (grouped.status === "unparseable") {
       throw new ConnectorError(
-        `API-Sports player ${player} (${person.slug}) carried no passing yards on ${config.host} for season ${season} under any of ${config.passing_yards_keys.join(", ")}; ` +
-          `plan ${status.plan ?? "unknown"}, ${status.requestsToday ?? "?"} of ${status.dailyLimit ?? "?"} requests used today. ` +
-          `The statistics response held ${statistics.length} entr${statistics.length === 1 ? "y" : "ies"}; correct config.passing_yards_keys or config.paths.player_statistics on the data_sources row rather than redeploying.`,
+        `API-Sports player ${player} (${person.slug}) carried a passing-yards value that is not a number: ${JSON.stringify(grouped.raw)} ` +
+          `(group "${config.passing_yards_stat.group}", statistic "${config.passing_yards_stat.name}") ${where}. Nothing was recorded.`,
+      );
+    }
+    const yards = grouped.status === "ok" ? grouped.value : readStatistic(statistics[0], config.passing_yards_keys);
+    if (yards === null) {
+      const seen = grouped.status === "missing" ? grouped : { groups: [], names: [] };
+      throw new ConnectorError(
+        `API-Sports player ${player} (${person.slug}) carried no passing yards ${where}: ` +
+          `no statistic "${config.passing_yards_stat.name}" in group "${config.passing_yards_stat.group}" ` +
+          `(groups present: ${seen.groups.length > 0 ? seen.groups.join(", ") : "none"}; statistics in that group: ${seen.names.length > 0 ? seen.names.join(", ") : "none"}), ` +
+          `and none of ${config.passing_yards_keys.join(", ")} as a keyed field. ` +
+          `The statistics response held ${statistics.length} entr${statistics.length === 1 ? "y" : "ies"}; correct config.passing_yards_stat or config.paths.player_statistics on the data_sources row rather than redeploying.`,
       );
     }
 
-    // Once per game, not once per poll. The figure is the same number until a
-    // new game is played, and re-recording it would let the baseline count
-    // hours as if they were performances.
-    const previous = await context.snapshots.latest("game_passing_yards");
-    if (previous && previous.value === yards) return [];
-    return [{ metricKey: "game_passing_yards", value: yards }];
+    // Once per change, not once per poll: the total is the same number until
+    // a new game is played, and a row per hour would be a row about the cron.
+    const previous = await context.snapshots.latest(SEASON_PASSING_YARDS_SNAPSHOT);
+    if (!previous || previous.value !== yards) context.snapshots.record(SEASON_PASSING_YARDS_SNAPSHOT, yards);
+    return [];
   },
 };

@@ -392,6 +392,34 @@ describe("runIngestion", () => {
     expect(summary.totals.errors).toBe(1);
   });
 
+  it("a metrics failure is an error poll that still stores the events, and discards only what the failing metrics call queued", async () => {
+    // For a whole day the API-Sports connector fetched every finished game and
+    // lost them all because its metric could not be parsed. Two reads of one
+    // source; the second failing must not throw away the first.
+    const halfBroken: DataConnector = {
+      name: "x",
+      async fetchForPerson() {
+        return [{ headline: "Kansas City Chiefs beat Denver Broncos 27-20.", dedupeKey: "x:game:9001", occurredAt: NOW, rawPayload: { kind: "game_result" } }];
+      },
+      async fetchMetrics(_p, _id, context) {
+        context.snapshots.record("half_written", 1);
+        throw new Error("carried no passing yards");
+      },
+    };
+    const store = createMemoryIngestStore({
+      sources: [makeSource({ id: "src-x", name: "x", is_active: true })],
+      mappings: { "src-x": [{ person, externalIdentifier: "m" }] },
+    });
+
+    const summary = await runIngestion({ store, now: NOW, registry: buildRegistry([halfBroken]), force: true, log: quiet });
+
+    expect(store.signals.map((s) => s.headline)).toEqual(["Kansas City Chiefs beat Denver Broncos 27-20."]);
+    expect(store.snapshots).toEqual([]);
+    expect(store.polls.map((p) => [p.status, p.reason, p.signalsCreated, p.snapshotsRecorded])).toEqual([["error", "metrics: carried no passing yards", 1, 0]]);
+    expect(summary.errors).toEqual([{ source: "x", person: person.slug, message: "metrics: carried no passing yards" }]);
+    expect(summary.sourcesRun[0]).toMatchObject({ signalsCreated: 1, eventSignals: 1, snapshotsRecorded: 0, errors: 1 });
+  });
+
   describe("with the RSS connector, end to end", () => {
     // A Google News search feed as Google serves it: every link wrapped in a news.google.com redirect, the title suffixed
     // with the outlet, and the publisher named in <source url="...">. Three copies of one story, one blocked scraper, one
