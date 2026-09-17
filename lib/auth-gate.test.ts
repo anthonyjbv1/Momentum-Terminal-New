@@ -57,8 +57,9 @@ describe("decideAuthGate", () => {
   });
 
   it("leaves the shared-secret internal routes to their own check, by exact route only", () => {
-    // /api/ingest/cron joined the list in Phase 9: a scheduled ingestion carries CRON_SECRET, never a session.
-    expect(SHARED_SECRET_ROUTES).toEqual(["/api/ingest", "/api/ingest/cron", "/api/engine/tick", "/api/engine/cron", "/api/admin/health"]);
+    // /api/ingest/cron joined the list in Phase 9 and /api/ingest/live in Phase 16: a scheduled fire carries CRON_SECRET, never a session.
+    // The first live fires after the Phase 16 deploy answered 401 from this gate, before the route's own check ever ran.
+    expect(SHARED_SECRET_ROUTES).toEqual(["/api/ingest", "/api/ingest/cron", "/api/ingest/live", "/api/engine/tick", "/api/engine/cron", "/api/admin/health"]);
     for (const route of SHARED_SECRET_ROUTES) expect(decideAuthGate(route, "?force=1", SIGNED_OUT)).toEqual({ kind: "allow" });
     expect(decideAuthGate("/api/ingestion", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
     expect(decideAuthGate("/api/engine", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
