@@ -268,17 +268,44 @@ export interface PublisherFeedRow {
   consecutiveFailures: number;
 }
 
+/**
+ * One live session (Phase 16): a broadcast being followed, or recently
+ * finished. The audience figures here are the ones the session's own event
+ * headlines already carry ("live to 40,327 viewers"), not a metric level.
+ */
+export interface LiveSessionRow {
+  id: string;
+  personSlug: string;
+  source: string;
+  channel: string;
+  startedAt: string;
+  endedAt: string | null;
+  lastSampledAt: string | null;
+  complete: boolean;
+  samples: number;
+  viewerLatest: number | null;
+  viewerPeak: number | null;
+  averageViewers: number | null;
+  category: string | null;
+  categorySwitches: number;
+  clipsTotal: number;
+  clipsPerHour: number | null;
+  signalsCreated: number;
+}
+
 export interface IngestionReport {
   sources: SourceHealthRow[];
   runs: Array<{ id: string; startedAt: string; finishedAt: string | null; trigger: string; forced: boolean; sourcesRun: number; signalsCreated: number; snapshotsRecorded: number; observations: number; errors: number; blockedDropped: number; duplicatesCollapsed: number }>;
   recentErrors: Array<{ at: string; source: string; person: string | null; reason: string }>;
   baselines: BaselineRow[];
   feeds: PublisherFeedRow[];
+  /** Live mode: open sessions first, then the most recently ended. */
+  liveSessions: LiveSessionRow[];
 }
 
 export async function readIngestion(): Promise<IngestionReport> {
   const client = await adminClient();
-  const [sources, runs, errors, baselines, feeds] = await Promise.all([
+  const [sources, runs, errors, baselines, feeds, live] = await Promise.all([
     client.from("source_health").select("*").order("name"),
     client.from("ingest_runs").select("*").order("started_at", { ascending: false }).limit(RECENT_LIMIT),
     client
@@ -289,12 +316,42 @@ export async function readIngestion(): Promise<IngestionReport> {
       .limit(RECENT_LIMIT),
     client.from("metric_baseline_progress").select("*"),
     client.from("publisher_feeds").select("*").order("domain").order("section").order("url"),
+    client
+      .from("live_sessions")
+      .select("id, channel, started_at, ended_at, last_sampled_at, complete, sample_count, viewer_sum, viewer_latest, viewer_peak, category_latest, category_switches, clips_total, signals_created, data_source:data_sources!inner(name), person:people!inner(slug)")
+      .order("ended_at", { ascending: true, nullsFirst: true })
+      .order("started_at", { ascending: false })
+      .limit(RECENT_LIMIT),
   ]);
-  for (const [label, result] of Object.entries({ sources, runs, errors, baselines, feeds })) {
+  for (const [label, result] of Object.entries({ sources, runs, errors, baselines, feeds, live })) {
     if (result.error) throw new Error(`${label}: ${result.error.message}`);
   }
 
   return {
+    liveSessions: (live.data ?? []).map((row) => {
+      const samples = Number(row.sample_count ?? 0);
+      const end = row.ended_at ? Date.parse(row.ended_at) : Date.now();
+      const hours = Math.max(0, (end - Date.parse(row.started_at)) / 3_600_000);
+      return {
+        id: row.id,
+        personSlug: row.person.slug,
+        source: row.data_source.name,
+        channel: row.channel,
+        startedAt: row.started_at,
+        endedAt: row.ended_at,
+        lastSampledAt: row.last_sampled_at,
+        complete: row.complete,
+        samples,
+        viewerLatest: row.viewer_latest === null ? null : Number(row.viewer_latest),
+        viewerPeak: row.viewer_peak === null ? null : Number(row.viewer_peak),
+        averageViewers: samples > 0 ? Math.round(Number(row.viewer_sum) / samples) : null,
+        category: row.category_latest,
+        categorySwitches: Number(row.category_switches ?? 0),
+        clipsTotal: Number(row.clips_total ?? 0),
+        clipsPerHour: hours > 0 ? Math.round((Number(row.clips_total ?? 0) / hours) * 10) / 10 : null,
+        signalsCreated: Number(row.signals_created ?? 0),
+      };
+    }),
     feeds: (feeds.data ?? []).map((row) => ({
       id: row.id,
       domain: row.domain,

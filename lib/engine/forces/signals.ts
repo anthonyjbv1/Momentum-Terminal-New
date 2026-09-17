@@ -1,6 +1,7 @@
 import type { EngineConfig } from "@/lib/engine/config";
 import { clamp } from "@/lib/engine/math";
 import { isMetricSignal } from "@/lib/engine/sentiment/metric";
+import { isPrescoredSignal } from "@/lib/engine/sentiment/prescored";
 import type { SentimentResult } from "@/lib/engine/sentiment/types";
 import { UNWEIGHTED, describeVolume, type VolumeWeight } from "@/lib/engine/signal-volume";
 import type { EngineSignal, ForceEntry, ScoredSignal } from "@/lib/engine/types";
@@ -98,9 +99,14 @@ export function isExpiredSignal(signal: Pick<EngineSignal, "occurredAt" | "rawPa
   return signalFreshness(signal, now, config).weight === 0;
 }
 
-/** The volume weight a signal carries: the person's, for an event signal; exactly 1 for a metric signal. */
+/**
+ * The volume weight a signal carries: the person's, for an event signal;
+ * exactly 1 for a metric signal, and for a prescored live moment (Phase 16),
+ * which is the platform's own sampling of a session and not coverage the
+ * world produced.
+ */
 export function signalVolumeWeight(signal: Pick<EngineSignal, "rawPayload">, volumeWeight: number): number {
-  return isMetricSignal(signal.rawPayload) ? 1 : volumeWeight;
+  return isMetricSignal(signal.rawPayload) || isPrescoredSignal(signal.rawPayload) ? 1 : volumeWeight;
 }
 
 export function signalImpact(signal: EngineSignal, sentiment: SentimentResult, config: EngineConfig["signals"], now: Date, volumeWeight = 1): number {

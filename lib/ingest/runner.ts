@@ -50,7 +50,7 @@ import { STORY_DEDUP_LOOKBACK_HOURS } from "./stories";
  */
 
 export interface IngestLogLine {
-  event: "run" | "source" | "poll" | "observation" | "signal" | "drop" | "collapse" | "upgrade" | "exclude" | "feed";
+  event: "run" | "source" | "poll" | "observation" | "signal" | "drop" | "collapse" | "upgrade" | "exclude" | "feed" | "note";
   [key: string]: unknown;
 }
 
@@ -176,7 +176,8 @@ function lookbackHours(metricKey: string, configs: MetricConfigs): number {
   return Math.max(1, own, ...derived);
 }
 
-function observationRow(runId: string, personId: string, source: DataSource, observation: MetricObservation, signalId: string | null): ObservationRow {
+/** One observation as the raw ledger records it. Shared with live mode, which observes a session's closing metrics the same way. */
+export function observationRow(runId: string, personId: string, source: DataSource, observation: MetricObservation, signalId: string | null): ObservationRow {
   const reading = observation.reading;
   return {
     runId,
@@ -394,6 +395,9 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
       // Items the connector refuses as being about somebody else. Queued here,
       // counted and logged below, exactly as blocked domains are.
       const excluded: ExcludedItem[] = [];
+      // What the connector wants the operator to know about an otherwise ok
+      // poll (Phase 16): written onto the poll row's reason and logged.
+      const notes: string[] = [];
       const context: ConnectorContext = {
         source,
         config,
@@ -404,6 +408,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         personConfig,
         exclude: (item) => excluded.push(item),
         feeds,
+        note: (message) => notes.push(message),
       };
       const poll: Omit<PollRow, "status" | "reason" | "latencyMs" | "finishedAt"> = {
         runId,
@@ -618,9 +623,13 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         errors.push({ source: source.name, person: person.slug, message: reason });
       }
 
+      for (const message of notes) log({ event: "note", run: runId, source: source.name, person: person.slug, message });
+      // A note rides on an ok poll's reason, so a source that is limping reads as such in the console; an error keeps its own reason.
+      if (status === "ok" && notes.length > 0) reason = notes.join(" | ");
+
       const latencyMs = clock() - pollStarted;
       const finishedAt = new Date(poll.startedAt.getTime() + latencyMs);
-      log({ event: "poll", run: runId, source: source.name, person: person.slug, status, reason, latencyMs, signals: poll.signalsCreated, snapshots: poll.snapshotsRecorded, observations: poll.observations });
+      log({ event: "poll", run: runId, source: source.name, person: person.slug, status, reason, latencyMs, signals: poll.signalsCreated, snapshots: poll.snapshotsRecorded, observations: poll.observations, notes: notes.length });
       try {
         await store.recordPoll({ ...poll, status, reason, latencyMs, finishedAt });
       } catch (error) {

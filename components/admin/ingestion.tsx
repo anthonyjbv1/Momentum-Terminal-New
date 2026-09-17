@@ -161,6 +161,69 @@ export function IngestionSection({ report, now }: { report: IngestionReport; now
         </Scroll>
 
         <p className="adm-sub" style={{ marginTop: 16 }}>
+          Live sessions · broadcasts followed minute by minute (Phase 16): open first, then the most recent
+        </p>
+        {report.liveSessions.length === 0 ? (
+          <Empty>No broadcast has been followed yet. A session opens within a minute of a mapped broadcaster going live.</Empty>
+        ) : (
+          <Scroll>
+            <table className="adm-t">
+              <thead>
+                <tr>
+                  <th>Person</th>
+                  <th>Channel</th>
+                  <th>State</th>
+                  <th>Started</th>
+                  <th>Length</th>
+                  <th className="n">Samples</th>
+                  <th className="n">Viewers</th>
+                  <th className="n">Peak</th>
+                  <th className="n">Average</th>
+                  <th className="n">Clips</th>
+                  <th className="n">Clips / h</th>
+                  <th className="n">Signals</th>
+                  <th className="wrap">Category</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.liveSessions.map((row) => {
+                  const end = row.endedAt ? Date.parse(row.endedAt) : now;
+                  const minutes = Math.max(0, Math.round((end - Date.parse(row.startedAt)) / 60_000));
+                  return (
+                    <tr key={row.id}>
+                      <td>
+                        <span className="adm-k">{row.personSlug}</span> <span className="adm-dim">{row.source}</span>
+                      </td>
+                      <td className="adm-k">{row.channel}</td>
+                      <td>
+                        <Badge tone={row.endedAt ? "plain" : "ok"}>{row.endedAt ? "ended" : "live"}</Badge>
+                        {row.complete ? null : <div className="adm-dim">joined late or gapped</div>}
+                      </td>
+                      <td>
+                        {age(row.startedAt, now)}
+                        <div className="adm-k adm-dim">{stamp(row.startedAt)}</div>
+                      </td>
+                      <td>{`${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`}</td>
+                      <td className="n">{num(row.samples)}</td>
+                      <td className="n">{row.viewerLatest === null ? "—" : num(row.viewerLatest)}</td>
+                      <td className="n">{row.viewerPeak === null ? "—" : num(row.viewerPeak)}</td>
+                      <td className="n">{row.averageViewers === null ? "—" : num(row.averageViewers)}</td>
+                      <td className="n">{num(row.clipsTotal)}</td>
+                      <td className="n">{row.clipsPerHour === null ? "—" : num(row.clipsPerHour, 1)}</td>
+                      <td className="n">{num(row.signalsCreated)}</td>
+                      <td className="wrap adm-dim">
+                        {row.category ?? "—"}
+                        {row.categorySwitches > 0 ? ` · ${num(row.categorySwitches)} switch${row.categorySwitches === 1 ? "" : "es"}` : ""}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Scroll>
+        )}
+
+        <p className="adm-sub" style={{ marginTop: 16 }}>
           Publisher feeds · the catalogue, and what each feed&apos;s last fetch found
         </p>
         {report.feeds.length === 0 ? (

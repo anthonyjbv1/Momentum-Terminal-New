@@ -8,6 +8,10 @@
     {
       "path": "/api/ingest/cron",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/ingest/live",
+      "schedule": "* * * * *"
     }
   ]
 }

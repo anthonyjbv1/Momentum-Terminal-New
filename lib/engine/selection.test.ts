@@ -73,11 +73,13 @@ describe("selectTickSignals — newest first", () => {
       ...Array.from({ length: 60 }, (_, i) => metric(`m-${i}`, `person-${i % 16}`)),
       ...Array.from({ length: 60 }, (_, i) => event(`e-${i}`, "mrbeast", 100 - i)),
       { ...event("b-1", "drake", 1), rawPayload: { kind: "baseline" } },
+      // A prescored live moment (Phase 16) is free too: it never reaches the model, so it never waits on the rotation.
+      { ...event("live-1", "kai-cenat", 2), rawPayload: { kind: "live_moment", moment: "audience_surge", direction: 1, confidence: 0.5 }, sourceName: "twitch" },
     ];
     const { selected, eventSignals, freeSignals, leftBehind } = selectTickSignals(shuffled(backlog), config);
-    expect(freeSignals).toBe(61);
+    expect(freeSignals).toBe(62);
     expect(eventSignals).toBe(12);
-    expect(selected).toHaveLength(73);
+    expect(selected).toHaveLength(74);
     expect(leftBehind).toBe(48);
 
     // The tick names expired event signals free too: a large expired backlog is all taken, beyond any per-person chunk.

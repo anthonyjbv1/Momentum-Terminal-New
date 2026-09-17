@@ -1,5 +1,6 @@
 import type { EngineConfig } from "@/lib/engine/config";
 import { isFreeSignal } from "@/lib/engine/selection";
+import { LIVE_MOMENT_KIND } from "@/lib/engine/sentiment/prescored";
 import { readSignalVolumeRow, type PersonSignalVolume, type PersonSignalVolumeRow } from "@/lib/engine/signal-volume";
 import type {
   EngineSignal,
@@ -31,15 +32,16 @@ function sumBy<T>(rows: T[], key: (row: T) => string, value: (row: T) => number)
 
 /**
  * When each person's EVENT signals were last processed, from the processed
- * rows in the activity window. Metric and baseline signals are excluded:
- * they are processed on every tick for free and would make everyone look
- * recently served. Expired event signals (processed at zero cost) do count,
- * which is a mild imprecision after an outage and nothing in steady state.
+ * rows in the activity window. Metric, baseline and prescored live-moment
+ * signals are excluded: they are processed on every tick for free and would
+ * make everyone look recently served. Expired event signals (processed at
+ * zero cost) do count, which is a mild imprecision after an outage and
+ * nothing in steady state.
  */
 export function lastServedByPerson(rows: Array<{ person_id: string; processed_at: string | null; kind: string | null }>): Map<string, Date> {
   const latest = new Map<string, Date>();
   for (const row of rows) {
-    if (!row.processed_at || row.kind === "metric" || row.kind === "baseline") continue;
+    if (!row.processed_at || row.kind === "metric" || row.kind === "baseline" || row.kind === LIVE_MOMENT_KIND) continue;
     const at = new Date(row.processed_at);
     const current = latest.get(row.person_id);
     if (!current || at > current) latest.set(row.person_id, at);

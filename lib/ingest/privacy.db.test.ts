@@ -390,14 +390,20 @@ describe("the registry", () => {
       "apisports.game_interceptions",
       "apisports.game_passer_rating",
       "apisports.game_passing_yards",
+      "twitch.clips_per_stream_hour",
       "twitch.follower_count",
+      "twitch.session_peak_viewers",
       "twitch.stream_days_7d",
       "twitch.stream_hours_7d",
     ]);
 
     // No instantaneous live reading is a metric: a concurrent-viewer count read
-    // at an arbitrary minute has a distribution set by the polling schedule.
-    for (const key of Object.keys(metrics)) expect(key).not.toMatch(/viewer/);
+    // at an arbitrary minute has a distribution set by the polling schedule. The
+    // one audience metric is the PEAK OF A WHOLE SESSION, recorded once per
+    // session when it ends (Phase 16), and needs five sessions before it says anything.
+    expect(Object.keys(metrics).filter((key) => /viewer/.test(key))).toEqual(["twitch.session_peak_viewers"]);
+    expect(metrics["twitch.session_peak_viewers"]).toMatchObject({ delta: "level", polarity: 1, min_samples: 5, baseline_window_hours: 720 });
+    expect(metrics["twitch.clips_per_stream_hour"]).toMatchObject({ delta: "level", polarity: 1, min_samples: 5, baseline_window_hours: 720 });
 
     // A weekly sport cannot reach the platform's usual 24 samples inside one
     // season, so every per-game metric declares the same reachable minimum:

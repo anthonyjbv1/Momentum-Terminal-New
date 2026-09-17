@@ -221,6 +221,179 @@ export type Database = {
           },
         ]
       }
+      live_samples: {
+        Row: {
+          category: string | null
+          clips_in_window: number
+          clips_truncated: boolean
+          clips_window_from: string | null
+          clips_window_to: string | null
+          error: string | null
+          id: number
+          latency_ms: number | null
+          sampled_at: string
+          session_id: string
+          signals_created: number
+          status: string
+          title: string | null
+          viewer_count: number | null
+        }
+        Insert: {
+          category?: string | null
+          clips_in_window?: number
+          clips_truncated?: boolean
+          clips_window_from?: string | null
+          clips_window_to?: string | null
+          error?: string | null
+          id?: number
+          latency_ms?: number | null
+          sampled_at: string
+          session_id: string
+          signals_created?: number
+          status: string
+          title?: string | null
+          viewer_count?: number | null
+        }
+        Update: {
+          category?: string | null
+          clips_in_window?: number
+          clips_truncated?: boolean
+          clips_window_from?: string | null
+          clips_window_to?: string | null
+          error?: string | null
+          id?: number
+          latency_ms?: number | null
+          sampled_at?: string
+          session_id?: string
+          signals_created?: number
+          status?: string
+          title?: string | null
+          viewer_count?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "live_samples_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "live_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      live_sessions: {
+        Row: {
+          broadcaster_id: string
+          category_latest: string | null
+          category_switches: number
+          channel: string
+          clips_counted_to: string | null
+          clips_total: number
+          complete: boolean
+          created_at: string
+          data_source_id: string
+          ended_at: string | null
+          first_seen_at: string
+          id: string
+          largest_drop_fraction: number | null
+          last_burst_at: string | null
+          last_drop_at: string | null
+          last_sampled_at: string | null
+          last_seen_at: string
+          last_surge_at: string | null
+          missed_checks: number
+          peak_at: string | null
+          person_id: string
+          sample_count: number
+          signals_created: number
+          started_at: string
+          stream_id: string
+          title_latest: string | null
+          updated_at: string
+          viewer_latest: number | null
+          viewer_peak: number | null
+          viewer_sum: number
+        }
+        Insert: {
+          broadcaster_id: string
+          category_latest?: string | null
+          category_switches?: number
+          channel: string
+          clips_counted_to?: string | null
+          clips_total?: number
+          complete?: boolean
+          created_at?: string
+          data_source_id: string
+          ended_at?: string | null
+          first_seen_at: string
+          id?: string
+          largest_drop_fraction?: number | null
+          last_burst_at?: string | null
+          last_drop_at?: string | null
+          last_sampled_at?: string | null
+          last_seen_at: string
+          last_surge_at?: string | null
+          missed_checks?: number
+          peak_at?: string | null
+          person_id: string
+          sample_count?: number
+          signals_created?: number
+          started_at: string
+          stream_id: string
+          title_latest?: string | null
+          updated_at?: string
+          viewer_latest?: number | null
+          viewer_peak?: number | null
+          viewer_sum?: number
+        }
+        Update: {
+          broadcaster_id?: string
+          category_latest?: string | null
+          category_switches?: number
+          channel?: string
+          clips_counted_to?: string | null
+          clips_total?: number
+          complete?: boolean
+          created_at?: string
+          data_source_id?: string
+          ended_at?: string | null
+          first_seen_at?: string
+          id?: string
+          largest_drop_fraction?: number | null
+          last_burst_at?: string | null
+          last_drop_at?: string | null
+          last_sampled_at?: string | null
+          last_seen_at?: string
+          last_surge_at?: string | null
+          missed_checks?: number
+          peak_at?: string | null
+          person_id?: string
+          sample_count?: number
+          signals_created?: number
+          started_at?: string
+          stream_id?: string
+          title_latest?: string | null
+          updated_at?: string
+          viewer_latest?: number | null
+          viewer_peak?: number | null
+          viewer_sum?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "live_sessions_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "data_sources"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "live_sessions_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       llm_model_prices: {
         Row: {
           cache_read_per_mtok: number

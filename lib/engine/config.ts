@@ -226,6 +226,17 @@ export interface EngineConfig {
     /** |sigma| from which a metric reading is remembered as anomalous. */
     anomalousSigma: number;
   };
+  /**
+   * The prescored scorer (Phase 16): a live moment arrives with its own
+   * direction and confidence, declared by the live runner from the session's
+   * arithmetic; the Engine only decides how memorable it is.
+   */
+  live: {
+    /** Declared confidence from which a live moment is remembered as notable. */
+    notableConfidence: number;
+    /** Declared confidence from which a live moment is remembered as anomalous. */
+    anomalousConfidence: number;
+  };
   /** FORCE 3 — Market Mood (global sentiment tide). */
   marketMood: {
     /** Fraction of the mood applied to each person. */
@@ -423,6 +434,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     volume: { referenceSignalsPerDay: 20, windowDays: 14, minSamples: 7, sdFloor: 2, thresholdStdDevs: 1, minWeight: 0.1, maxWeight: 2 },
   },
   metrics: { fullConfidenceSigma: 3, notableSigma: 2, anomalousSigma: 3 },
+  live: { notableConfidence: 0.5, anomalousConfidence: 0.9 },
   marketMood: {
     fraction: 0.25,
     defaultSensitivity: 1.0,

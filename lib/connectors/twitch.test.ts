@@ -242,3 +242,110 @@ describe("twitchConnector", () => {
     await expect(twitchConnector.fetchMetrics?.(person, "   ", context(fetch))).rejects.toThrow(/No Twitch channel configured for kai-cenat/);
   });
 });
+
+/** A Helix double for live mode: /streams answers from a list, /clips pages through what the test hands it. */
+function liveFetch(options: { streams?: Array<Record<string, unknown>>; pages?: Array<{ data: Array<{ id: string; created_at: string }>; cursor?: string }> } = {}) {
+  const calls: Call[] = [];
+  const pages = [...(options.pages ?? [])];
+  const impl: typeof fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    calls.push({ url, headers: Object.fromEntries(new Headers(init?.headers).entries()), body: typeof init?.body === "string" ? init.body : null });
+    if (url.startsWith("https://id.twitch.tv/oauth2/token")) return Response.json({ access_token: "token-1", expires_in: 3600 });
+    if (url.includes("/helix/streams")) return Response.json({ data: options.streams ?? [] });
+    if (url.includes("/helix/clips")) {
+      const page = pages.shift() ?? { data: [] };
+      return Response.json({ data: page.data, pagination: page.cursor ? { cursor: page.cursor } : {} });
+    }
+    throw new Error(`unexpected url ${url}`);
+  };
+  return Object.assign(impl, { calls, urls: (fragment: string) => calls.filter((call) => call.url.includes(fragment)).map((call) => call.url) });
+}
+
+describe("twitchConnector.live (Phase 16)", () => {
+  const saved = { id: process.env.TWITCH_CLIENT_ID, secret: process.env.TWITCH_CLIENT_SECRET };
+  beforeEach(() => {
+    resetTwitchTokenCache();
+    process.env.TWITCH_CLIENT_ID = "client-id";
+    process.env.TWITCH_CLIENT_SECRET = "client-secret";
+  });
+  afterEach(() => {
+    if (saved.id === undefined) delete process.env.TWITCH_CLIENT_ID;
+    else process.env.TWITCH_CLIENT_ID = saved.id;
+    if (saved.secret === undefined) delete process.env.TWITCH_CLIENT_SECRET;
+    else process.env.TWITCH_CLIENT_SECRET = saved.secret;
+    resetTwitchTokenCache();
+  });
+
+  const live = { id: "48211", user_id: "144304", user_login: "kaicenat", type: "live", title: "MAFIATHON 3 DAY 9", game_name: "Just Chatting", viewer_count: 184_211, started_at: "2026-09-15T06:00:00.000Z" };
+
+  it("detects every asked-for broadcaster in ONE request: logins lowercased, numeric identifiers as ids, the unlisted offline", async () => {
+    const fetch = liveFetch({ streams: [live, { id: "9", user_id: "777", user_login: "adinross", type: "", viewer_count: 5 }] });
+    const statuses = await twitchConnector.live!.detect(["KaiCenat", "adinross", "555", "nobody"], context(fetch));
+    expect(fetch.urls("/helix/streams")).toEqual(["https://api.twitch.tv/helix/streams?user_login=kaicenat&user_login=adinross&user_id=555&user_login=nobody&first=100"]);
+    expect(statuses.map((status) => [status.externalIdentifier, status.stream?.id ?? null])).toEqual([
+      ["KaiCenat", "48211"],
+      // Listed with type "" (Helix's "in error"): not live.
+      ["adinross", null],
+      ["555", null],
+      ["nobody", null],
+    ]);
+    expect(statuses[0].stream).toEqual({ id: "48211", broadcasterId: "144304", channel: "kaicenat", title: "MAFIATHON 3 DAY 9", category: "Just Chatting", viewerCount: 184_211, startedAt: new Date("2026-09-15T06:00:00.000Z") });
+  });
+
+  it("batches a hundred identifiers per request, so knowing who is live is one Helix point a minute per hundred broadcasters", async () => {
+    const fetch = liveFetch({ streams: [] });
+    const many = Array.from({ length: 101 }, (_, i) => `channel${i}`);
+    const statuses = await twitchConnector.live!.detect(many, context(fetch));
+    expect(fetch.urls("/helix/streams")).toHaveLength(2);
+    expect(statuses).toHaveLength(101);
+    expect(statuses.every((status) => status.stream === null)).toBe(true);
+  });
+
+  it("counts clips inside an exact window: the request is widened to whole minutes (Helix ignores seconds) and each clip is judged by its own created_at", async () => {
+    const from = new Date("2026-09-18T01:10:30.000Z");
+    const to = new Date("2026-09-18T01:12:30.000Z");
+    const fetch = liveFetch({
+      pages: [
+        {
+          data: [
+            { id: "before", created_at: "2026-09-18T01:10:29.000Z" },
+            { id: "at-from", created_at: "2026-09-18T01:10:30.000Z" },
+            { id: "inside", created_at: "2026-09-18T01:11:59.000Z" },
+            { id: "at-to", created_at: "2026-09-18T01:12:30.000Z" },
+            { id: "after", created_at: "2026-09-18T01:13:00.000Z" },
+          ],
+        },
+      ],
+    });
+    const counted = await twitchConnector.live!.countClips("144304", from, to, context(fetch));
+    expect(counted).toEqual({ count: 2, truncated: false, requests: 1 });
+    const url = new URL(fetch.urls("/helix/clips")[0]);
+    expect(url.searchParams.get("broadcaster_id")).toBe("144304");
+    expect(url.searchParams.get("started_at")).toBe("2026-09-18T01:09:00.000Z");
+    expect(url.searchParams.get("ended_at")).toBe("2026-09-18T01:14:00.000Z");
+    expect(url.searchParams.get("first")).toBe("100");
+    // An empty window costs nothing.
+    expect(await twitchConnector.live!.countClips("144304", to, from, context(fetch))).toEqual({ count: 0, truncated: false, requests: 0 });
+  });
+
+  it("pages through a busy window with the cursor, and past the page cap reports the count as a floor", async () => {
+    const from = new Date("2026-09-18T01:00:00.000Z");
+    const to = new Date("2026-09-18T01:10:00.000Z");
+    const clip = (i: number) => ({ id: `c${i}`, created_at: "2026-09-18T01:05:00.000Z" });
+    const page = (n: number, cursor?: string) => ({ data: Array.from({ length: n }, (_, i) => clip(i)), cursor });
+    const fetch = liveFetch({ pages: [page(100, "p2"), page(100, "p3"), page(40)] });
+    expect(await twitchConnector.live!.countClips("144304", from, to, context(fetch))).toEqual({ count: 240, truncated: false, requests: 3 });
+    expect(new URL(fetch.urls("/helix/clips")[1]).searchParams.get("after")).toBe("p2");
+    const busy = liveFetch({ pages: [page(100, "p2"), page(100, "p3"), page(100, "p4"), page(100, "p5")] });
+    expect(await twitchConnector.live!.countClips("144304", from, to, context(busy))).toEqual({ count: 300, truncated: true, requests: 3 });
+    const capped = liveFetch({ pages: [page(100, "p2"), page(100, "p3")] });
+    expect(await twitchConnector.live!.countClips("144304", from, to, context(capped, { live: { clip_max_pages: 1 } }))).toEqual({ count: 100, truncated: true, requests: 1 });
+  });
+
+  it("builds the live event under the same key as the hourly poll, so whichever sees the stream first stores it once", () => {
+    const signal = twitchConnector.live!.liveSignal(person, { id: "48211", broadcasterId: "144304", channel: "kaicenat", title: "MAFIATHON 3 DAY 9", category: "Just Chatting", viewerCount: 184_211, startedAt: new Date("2026-09-15T06:00:00.000Z") }, NOW);
+    expect(signal.dedupeKey).toBe("twitch:stream:48211");
+    expect(signal.headline).toBe('Kai Cenat is live on Twitch playing Just Chatting to 184,211 viewers: "MAFIATHON 3 DAY 9".');
+    expect(signal.rawPayload).toMatchObject({ kind: "stream", stream_id: "48211", channel: "kaicenat", viewer_count: 184_211 });
+  });
+});

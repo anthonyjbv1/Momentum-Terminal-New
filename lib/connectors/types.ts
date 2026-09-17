@@ -112,6 +112,74 @@ export interface ConnectorContext {
    * Symmetric with `publishers`: loaded by the runner, read by the connector.
    */
   feeds?: FeedCatalog;
+  /**
+   * Something the operator should know that did NOT fail the poll (Phase 16):
+   * a fallback read that came back empty, a figure recorded from a degraded
+   * response. The runner writes notes onto the poll row's reason when the
+   * poll is otherwise ok and logs each one, so a source that is quietly
+   * limping shows as such in the console instead of as either healthy or
+   * dead. Symmetric with `exclude`: the connector says, the runner accounts.
+   */
+  note?(message: string): void;
+}
+
+// ---------------------------------------------------------------------------
+// Live mode (Phase 16)
+// ---------------------------------------------------------------------------
+
+/** A broadcast in progress, as the platform reports it. */
+export interface LiveStream {
+  /** The platform's id for THIS broadcast: one session per id, however many checks see it. */
+  id: string;
+  /** The platform's id for the broadcaster, for the reads that need it (clips). */
+  broadcasterId: string;
+  /** The channel as the platform names it (a login), for the audit trail. */
+  channel: string;
+  title: string;
+  /** The game or category, or null when the platform reports none. */
+  category: string | null;
+  viewerCount: number | null;
+  startedAt: Date | null;
+}
+
+/** Whether one mapped broadcaster is live, keyed by the mapping's external identifier. */
+export interface LiveStatus {
+  externalIdentifier: string;
+  stream: LiveStream | null;
+}
+
+/** Clips created inside a window of one broadcast. */
+export interface LiveClipCount {
+  count: number;
+  /** True when the page cap was reached before the window was exhausted: the count is a floor. */
+  truncated: boolean;
+  /** Upstream requests spent. */
+  requests: number;
+}
+
+/**
+ * What a connector must be able to do for the live runner (lib/ingest/live)
+ * to drive it minute by minute while a mapped broadcaster is on air. A
+ * connector without it is polled on its source interval and nothing else;
+ * a connector with it gets live mode for every mapped broadcaster, by
+ * mapping and not by code: a streamer added later is a person_data_sources
+ * row.
+ */
+export interface LiveCapability {
+  /**
+   * Which of these mapped broadcasters are live right now, in as few
+   * upstream requests as the platform allows (Helix answers a hundred
+   * logins in one). Every identifier asked for is answered, live or not.
+   */
+  detect(identifiers: string[], context: ConnectorContext): Promise<LiveStatus[]>;
+  /** Clips of one broadcaster created at or after `from` and before `to`. */
+  countClips(broadcasterId: string, from: Date, to: Date, context: ConnectorContext): Promise<LiveClipCount>;
+  /**
+   * The event for a broadcast having begun, keyed exactly as the source's own
+   * event poll keys it, so whichever of the two sees the stream first stores
+   * it once.
+   */
+  liveSignal(person: Person, stream: LiveStream, now: Date): RawSignal;
 }
 
 /** An item a connector refused as being about somebody else. */
@@ -222,6 +290,11 @@ export interface DataConnector {
    * and the system carries on without it. Omitted means always available.
    */
   available?(): ConnectorAvailability;
+  /**
+   * Live mode (Phase 16): the reads the live runner needs to follow a
+   * broadcast minute by minute. Omitted: the source has no live mode.
+   */
+  readonly live?: LiveCapability;
 }
 
 /** Error raised by connectors for upstream API problems. */

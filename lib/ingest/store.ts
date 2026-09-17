@@ -66,7 +66,8 @@ export interface SnapshotRow {
   recordedAt: Date;
 }
 
-export type IngestTrigger = "manual" | "cron";
+/** What opened a run: the manual endpoint, the scheduled ingestion, or live mode closing a session (Phase 16). */
+export type IngestTrigger = "manual" | "cron" | "live";
 
 export interface RunMeta {
   startedAt: Date;

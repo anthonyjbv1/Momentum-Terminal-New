@@ -132,6 +132,14 @@ describe("Signals — the person's volume weight (Phase 15)", () => {
     ]);
   });
 
+  it("never weights a prescored live moment (Phase 16): the platform's own sampling of a session is not coverage, but it IS aged", () => {
+    const moment = signal({ rawPayload: { kind: "live_moment", moment: "audience_surge", direction: 1, confidence: 0.5 }, sourceName: "twitch" });
+    expect(signalImpact(moment, positive, CONFIG.signals, NOW, 0.1)).toBeCloseTo(1.2);
+    const dayOld = { ...moment, occurredAt: new Date(NOW.getTime() - 24 * 3_600_000) };
+    expect(signalImpact(dayOld, positive, CONFIG.signals, NOW, 0.1)).toBeCloseTo(0.6);
+    expect(isExpiredSignal({ ...moment, occurredAt: new Date(NOW.getTime() - 8 * 24 * 3_600_000) }, NOW, CONFIG.signals)).toBe(true);
+  });
+
   it("carries the weight and the baseline into the force's details, and the force is what it was at weight 1", () => {
     const scored = scoreSignals([signal({ id: "a" })], new Map([["a", positive]]), CONFIG.signals, NOW);
     const plain = signalsForce(scored, CONFIG.signals);

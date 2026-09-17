@@ -8,6 +8,7 @@ export type { SentimentAnomaly, SentimentInput, SentimentResult, SentimentScorer
 export { RulesBasedScorer, rulesBasedScorer } from "./rules";
 export { LLMScorer, createDefaultLLMScorer } from "./llm";
 export { MetricScorer, metricScorer, isMetricSignal, readMetricPayload } from "./metric";
+export { LIVE_MOMENT_KIND, PrescoredScorer, prescoredScorer, isPrescoredSignal, readPrescoredPayload } from "./prescored";
 
 /**
  * Scorer registry. The Engine asks for a scorer by name (SCORER env var,

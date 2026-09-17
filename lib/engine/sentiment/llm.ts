@@ -9,6 +9,7 @@ import type { Json } from "@/types/database";
 
 import { TickCallBudget, type DeferralReason } from "./budget";
 import { metricScorer as defaultMetricScorer } from "./metric";
+import { LIVE_MOMENT_KIND, prescoredScorer } from "./prescored";
 import { SENTIMENT_RESPONSE_SCHEMA, SENTIMENT_SYSTEM_PROMPT, buildSentimentUserPrompt } from "./prompts";
 import { rulesBasedScorer } from "./rules";
 import type { ScoringContext, ScoringOutcome, SentimentAnomaly, SentimentInput, SentimentResult, SentimentScorer } from "./types";
@@ -184,6 +185,13 @@ export class LLMScorer implements SentimentScorer {
     if (kind === "metric") {
       this.stats.prefiltered += 1;
       return this.metricScorer.scoreSignal(signal) as Promise<SentimentResult>;
+    }
+    // A live moment (Phase 16) arrives with its own direction and confidence
+    // from the session's arithmetic; the tick routes it away from here, and
+    // this keeps it away should a caller hand it over directly.
+    if (kind === LIVE_MOMENT_KIND) {
+      this.stats.prefiltered += 1;
+      return prescoredScorer.scoreSignal(signal) as Promise<SentimentResult>;
     }
     if (kind === "baseline") {
       this.stats.prefiltered += 1;

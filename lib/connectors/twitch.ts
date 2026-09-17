@@ -1,6 +1,6 @@
 import { getTwitchCredentialsOrNull } from "@/lib/env";
 
-import { ConnectorError, type ConnectorContext, type DataConnector, type MetricReading, type RawSignal } from "./types";
+import { ConnectorError, type ConnectorContext, type DataConnector, type LiveCapability, type LiveClipCount, type LiveStatus, type LiveStream, type MetricReading, type RawSignal } from "./types";
 
 /**
  * Twitch connector — Helix, app access token (Client Credentials), no user auth.
@@ -39,6 +39,26 @@ import { ConnectorError, type ConnectorContext, type DataConnector, type MetricR
  * polls stores once. Viewer counts ride in the payload and the headline, where
  * they are an observation about a moment rather than a level pretending to have
  * a baseline.
+ *
+ * LIVE MODE (Phase 16). The hourly poll above is the wrong instrument for the
+ * one thing on this platform that moves minute by minute, so the connector
+ * also exposes the reads the live runner (lib/ingest/live) drives every
+ * minute while a mapped broadcaster is on air:
+ *
+ *   detect      GET /streams for up to a hundred logins in ONE request, so
+ *               knowing who is live costs one Helix point a minute whatever
+ *               the number of broadcasters mapped
+ *   countClips  GET /clips for one broadcaster inside a window. Helix ignores
+ *               the SECONDS of started_at and ended_at, so the request is
+ *               widened to whole minutes on both sides and the clips are
+ *               filtered here by their own created_at, exactly; consecutive
+ *               windows therefore never double count and never miss a clip
+ *               at a boundary. Pages are capped: a window that runs past the
+ *               cap reports its count as a floor rather than spending the
+ *               minute's budget on one broadcaster.
+ *
+ * What is measured within a session, and why the Phase 10 objection does not
+ * apply to it, is written on the live runner.
  */
 
 export const TWITCH_SOURCE_NAME = "twitch";
@@ -186,6 +206,100 @@ export async function fetchTwitchStream(userId: string, auth: HelixAuth, fetchIm
   };
 }
 
+/** Helix answers up to this many `user_login` / `user_id` filters on one /streams request. */
+export const STREAMS_BATCH_SIZE = 100;
+/** Helix caps `first` at 100 on /clips. */
+const CLIPS_PAGE_SIZE = 100;
+/** Pages of clips read for one window before the count is reported as a floor. */
+export const DEFAULT_CLIP_MAX_PAGES = 3;
+
+/** A purely numeric identifier is a user id; anything else is a login. */
+function isUserId(identifier: string): boolean {
+  return /^\d+$/.test(identifier.trim());
+}
+
+function readStream(raw: { id?: string; user_id?: string; user_login?: string; title?: string; game_name?: string; viewer_count?: number; started_at?: string; type?: string }): LiveStream | null {
+  // Helix reports type "live" for a broadcast and "" while it is in error; only the former is a stream.
+  if (!raw.id || !raw.user_id || raw.type !== "live") return null;
+  const startedAt = raw.started_at ? new Date(raw.started_at) : null;
+  return {
+    id: raw.id,
+    broadcasterId: raw.user_id,
+    channel: raw.user_login ?? raw.user_id,
+    title: raw.title?.trim() || "(untitled)",
+    category: raw.game_name?.trim() || null,
+    viewerCount: typeof raw.viewer_count === "number" && Number.isFinite(raw.viewer_count) ? raw.viewer_count : null,
+    startedAt: startedAt && !Number.isNaN(startedAt.getTime()) ? startedAt : null,
+  };
+}
+
+/**
+ * Which of these channels are live, in batches of a hundred per request.
+ * Every identifier asked for is answered; a channel Helix does not list is
+ * offline (or does not exist, which for this purpose is the same fact).
+ */
+export async function fetchTwitchStreams(identifiers: string[], auth: HelixAuth, fetchImpl: typeof fetch): Promise<LiveStatus[]> {
+  const wanted = identifiers.map((identifier) => identifier.trim()).filter((identifier) => identifier.length > 0);
+  const byLogin = new Map<string, LiveStream>();
+  const byId = new Map<string, LiveStream>();
+  for (let start = 0; start < wanted.length; start += STREAMS_BATCH_SIZE) {
+    const batch = wanted.slice(start, start + STREAMS_BATCH_SIZE);
+    const query = batch.map((identifier) => (isUserId(identifier) ? `user_id=${encodeURIComponent(identifier)}` : `user_login=${encodeURIComponent(identifier.toLowerCase())}`)).join("&");
+    const body = await helix<{ data?: Array<Parameters<typeof readStream>[0]> }>(`/streams?${query}&first=${STREAMS_BATCH_SIZE}`, auth, fetchImpl);
+    for (const raw of body.data ?? []) {
+      const stream = readStream(raw);
+      if (!stream) continue;
+      byLogin.set(stream.channel.toLowerCase(), stream);
+      byId.set(stream.broadcasterId, stream);
+    }
+  }
+  return wanted.map((identifier) => ({
+    externalIdentifier: identifier,
+    stream: (isUserId(identifier) ? byId.get(identifier) : byLogin.get(identifier.toLowerCase())) ?? null,
+  }));
+}
+
+/** Down to the minute, for a Helix parameter whose seconds are ignored. */
+function floorToMinute(at: Date): Date {
+  return new Date(Math.floor(at.getTime() / 60_000) * 60_000);
+}
+
+/**
+ * Clips of one broadcaster created at or after `from` and before `to`.
+ * Requested a minute wide on both sides (Helix ignores the seconds), counted
+ * by each clip's own created_at, so the window is exact whatever Helix
+ * rounds. Reads at most `maxPages` pages; past that the count is a floor.
+ */
+export async function countTwitchClips(
+  broadcasterId: string,
+  from: Date,
+  to: Date,
+  auth: HelixAuth,
+  fetchImpl: typeof fetch,
+  options: { maxPages?: number } = {},
+): Promise<LiveClipCount> {
+  if (!(to.getTime() > from.getTime())) return { count: 0, truncated: false, requests: 0 };
+  const maxPages = Math.max(1, options.maxPages ?? DEFAULT_CLIP_MAX_PAGES);
+  const startedAt = new Date(floorToMinute(from).getTime() - 60_000).toISOString();
+  const endedAt = new Date(floorToMinute(to).getTime() + 2 * 60_000).toISOString();
+  let count = 0;
+  let requests = 0;
+  let cursor: string | null = null;
+  while (requests < maxPages) {
+    const page = `/clips?broadcaster_id=${encodeURIComponent(broadcasterId)}&started_at=${encodeURIComponent(startedAt)}&ended_at=${encodeURIComponent(endedAt)}&first=${CLIPS_PAGE_SIZE}${cursor ? `&after=${encodeURIComponent(cursor)}` : ""}`;
+    const body: { data?: Array<{ id?: string; created_at?: string }>; pagination?: { cursor?: string } } = await helix(page, auth, fetchImpl);
+    requests += 1;
+    for (const clip of body.data ?? []) {
+      if (!clip.id || !clip.created_at) continue;
+      const createdAt = Date.parse(clip.created_at);
+      if (Number.isFinite(createdAt) && createdAt >= from.getTime() && createdAt < to.getTime()) count += 1;
+    }
+    cursor = body.pagination?.cursor?.trim() || null;
+    if (!cursor || (body.data ?? []).length === 0) return { count, truncated: false, requests };
+  }
+  return { count, truncated: true, requests };
+}
+
 export interface TwitchArchiveEntry {
   id: string;
   createdAt: Date;
@@ -254,10 +368,14 @@ export function summariseArchive(entries: TwitchArchiveEntry[], now: Date, windo
 /** Signal kind for a live broadcast, so the Engine and the Feed can tell it from an article. */
 export const TWITCH_LIVE_KIND = "stream";
 
-function liveSignal(person: { display_name: string }, user: TwitchUser, stream: TwitchStream, now: Date): RawSignal {
+/**
+ * The event for a broadcast: one per stream id, whichever of the hourly poll
+ * and the live runner sees it first (they build the same key).
+ */
+export function twitchLiveSignal(person: { display_name: string }, stream: LiveStream, now: Date): RawSignal {
   const viewers = stream.viewerCount === null ? null : Math.round(stream.viewerCount);
   const audience = viewers === null ? "" : ` to ${viewers.toLocaleString("en-US")} viewers`;
-  const playing = stream.gameName ? ` playing ${stream.gameName}` : "";
+  const playing = stream.category ? ` playing ${stream.category}` : "";
   return {
     headline: `${person.display_name} is live on Twitch${playing}${audience}: "${stream.title}".`,
     occurredAt: stream.startedAt ?? now,
@@ -268,15 +386,38 @@ function liveSignal(person: { display_name: string }, user: TwitchUser, stream: 
       kind: TWITCH_LIVE_KIND,
       source: TWITCH_SOURCE_NAME,
       stream_id: stream.id,
-      channel: user.login,
+      channel: stream.channel,
       title: stream.title,
-      game: stream.gameName,
+      game: stream.category,
       viewer_count: viewers,
       started_at: stream.startedAt?.toISOString() ?? null,
       observed_at: now.toISOString(),
     },
   };
 }
+
+function liveSignal(person: { display_name: string }, user: TwitchUser, stream: TwitchStream, now: Date): RawSignal {
+  return twitchLiveSignal(
+    person,
+    { id: stream.id, broadcasterId: user.id, channel: user.login, title: stream.title, category: stream.gameName, viewerCount: stream.viewerCount, startedAt: stream.startedAt },
+    now,
+  );
+}
+
+/** Live mode's reads (Phase 16), on the same token and the same 401 retry as the poll. */
+const twitchLive: LiveCapability = {
+  async detect(identifiers, context) {
+    if (typeof window !== "undefined") throw new Error("The Twitch connector is server-only.");
+    return withFreshToken(context, (auth) => fetchTwitchStreams(identifiers, auth, context.fetch));
+  },
+  async countClips(broadcasterId, from, to, context) {
+    if (typeof window !== "undefined") throw new Error("The Twitch connector is server-only.");
+    const pages = (context.config as Record<string, unknown>).live;
+    const maxPages = pages && typeof pages === "object" && typeof (pages as { clip_max_pages?: unknown }).clip_max_pages === "number" ? (pages as { clip_max_pages: number }).clip_max_pages : DEFAULT_CLIP_MAX_PAGES;
+    return withFreshToken(context, (auth) => countTwitchClips(broadcasterId, from, to, auth, context.fetch, { maxPages }));
+  },
+  liveSignal: (person, stream, now) => twitchLiveSignal(person, stream, now),
+};
 
 async function authorise(context: ConnectorContext): Promise<HelixAuth> {
   const credentials = getTwitchCredentialsOrNull();
@@ -305,6 +446,7 @@ function requireIdentifier(person: { slug: string }, identifier: string): string
 
 export const twitchConnector: DataConnector = {
   name: TWITCH_SOURCE_NAME,
+  live: twitchLive,
 
   available() {
     return getTwitchCredentialsOrNull() ? { ok: true } : { ok: false, reason: "TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET are not set" };

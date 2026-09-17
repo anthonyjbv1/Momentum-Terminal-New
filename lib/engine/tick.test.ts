@@ -170,6 +170,34 @@ describe("Engine tick", () => {
     expect(store.processedSignals[0]).toMatchObject({ id: "sig-base", impactScore: 0, sentimentLabel: "neutral" });
   });
 
+  it("scores a prescored live moment (Phase 16) from its declaration, free of the model, and persists it like any signal", async () => {
+    const store = createMemoryEngineStore(
+      seed({
+        signals: [
+          {
+            id: "sig-live",
+            personId: "p-mrbeast",
+            headline: "MrBeast's live audience is up 30% in the last ten minutes, 40,000 to 52,000 viewers, 1h 20m into the stream.",
+            rawPayload: { kind: "live_moment", moment: "audience_surge", direction: 1, confidence: 0.6, magnitude: 0.3, source: "twitch" },
+            sourceName: "twitch",
+            sourceTier: 2,
+            occurredAt: NOW,
+            createdAt: NOW,
+          },
+        ],
+      }),
+    );
+    // A scorer that would blow up if the model were ever asked.
+    const never = { name: "never", scoreSignal: async () => { throw new Error("the model must not see a live moment"); } };
+    const summary = await runEngineTick({ store, scorer: never, now: NOW, config: withEngineConfig({ marketMood: { fraction: 0 } }) });
+    expect(summary.signals[0]).toMatchObject({ id: "sig-live", label: "positive", direction: 1, confidence: 0.6, scorer: "prescored", anomaly: "notable" });
+    // 1.5 × tier 2 (1.0) × 0.6, fresh, unweighted.
+    expect(summary.signals[0].impact).toBeCloseTo(0.9, 4);
+    expect(summary.scoring).toMatchObject({ selected: 1, llmCalls: 0, attempted: 0, withoutModel: 1, deferred: 0 });
+    expect(summary.people.find((p) => p.slug === "mrbeast")?.forces.signals).toBeCloseTo(0.9, 4);
+    expect(store.processedSignals[0]).toMatchObject({ id: "sig-live", sentimentLabel: "positive" });
+  });
+
   it("dry runs compute everything and persist nothing", async () => {
     const store = createMemoryEngineStore(seed());
     const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, dryRun: true });

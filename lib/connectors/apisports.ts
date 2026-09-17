@@ -658,26 +658,51 @@ export const apisportsConnector: DataConnector = {
     const where = `on ${config.host} for season ${season}; plan ${status.plan ?? "unknown"}, ${status.requestsToday ?? "?"} of ${status.dailyLimit ?? "?"} requests used today`;
 
     // 1. The season total, raw ------------------------------------------------
-    const grouped = readGroupedStatistic(statistics[0], config.passing_yards_stat, player);
-    if (grouped.status === "unparseable") {
-      throw new ConnectorError(
-        `API-Sports player ${player} (${person.slug}) carried a passing-yards value that is not a number: ${JSON.stringify(grouped.raw)} ` +
-          `(group "${config.passing_yards_stat.group}", statistic "${config.passing_yards_stat.name}") ${where}. Nothing was recorded.`,
+    //
+    // A FALLBACK MUST NOT GATE THE PRODUCT (Phase 16). The season endpoint is
+    // the one documented above as unreliable — it carried last season's
+    // total under this season's number for a week, switched to this
+    // season's at 13:00 on 2026-09-17, and by 20:45 the same day answered
+    // with no entries at all, 200 OK, no errors payload, quota untouched.
+    // Until this change, that empty answer threw here, before the per-game
+    // metrics (the ones that matter) were read, so a data refresh on their
+    // side would have silenced every per-game figure for as long as it
+    // lasted, with the poll showing "error" and nothing saying which read
+    // had failed. Now: a season total that is absent or not where config
+    // says is a NOTE on an otherwise ok poll, the snapshot is skipped for
+    // the poll, and the per-game read goes ahead (the team id is
+    // configuration). A value that is there and not a number still fails
+    // loudly: that is the shape moving, not the endpoint blinking.
+    let seasonYards: number | null = null;
+    if (statistics.length === 0) {
+      context.note?.(
+        `season statistics answered with no entries for player ${player} ${where}: season total not recorded this poll; per-game metrics read through config.team_id`,
       );
+    } else {
+      const grouped = readGroupedStatistic(statistics[0], config.passing_yards_stat, player);
+      if (grouped.status === "unparseable") {
+        throw new ConnectorError(
+          `API-Sports player ${player} (${person.slug}) carried a passing-yards value that is not a number: ${JSON.stringify(grouped.raw)} ` +
+            `(group "${config.passing_yards_stat.group}", statistic "${config.passing_yards_stat.name}") ${where}. Nothing was recorded.`,
+        );
+      }
+      seasonYards = grouped.status === "ok" ? grouped.value : readStatistic(statistics[0], config.passing_yards_keys);
+      if (seasonYards === null) {
+        const seen = grouped.status === "missing" ? grouped : { groups: [], names: [] };
+        context.note?.(
+          `API-Sports player ${player} (${person.slug}) carried no passing yards ${where}: ` +
+            `no statistic "${config.passing_yards_stat.name}" in group "${config.passing_yards_stat.group}" ` +
+            `(groups present: ${seen.groups.length > 0 ? seen.groups.join(", ") : "none"}; statistics in that group: ${seen.names.length > 0 ? seen.names.join(", ") : "none"}), ` +
+            `and none of ${config.passing_yards_keys.join(", ")} as a keyed field. ` +
+            `The statistics response held ${statistics.length} entr${statistics.length === 1 ? "y" : "ies"}; the season total was not recorded this poll and the per-game metrics were read regardless. ` +
+            `Correct config.passing_yards_stat or config.paths.player_statistics on the data_sources row rather than redeploying.`,
+        );
+      }
     }
-    const seasonYards = grouped.status === "ok" ? grouped.value : readStatistic(statistics[0], config.passing_yards_keys);
-    if (seasonYards === null) {
-      const seen = grouped.status === "missing" ? grouped : { groups: [], names: [] };
-      throw new ConnectorError(
-        `API-Sports player ${player} (${person.slug}) carried no passing yards ${where}: ` +
-          `no statistic "${config.passing_yards_stat.name}" in group "${config.passing_yards_stat.group}" ` +
-          `(groups present: ${seen.groups.length > 0 ? seen.groups.join(", ") : "none"}; statistics in that group: ${seen.names.length > 0 ? seen.names.join(", ") : "none"}), ` +
-          `and none of ${config.passing_yards_keys.join(", ")} as a keyed field. ` +
-          `The statistics response held ${statistics.length} entr${statistics.length === 1 ? "y" : "ies"}; correct config.passing_yards_stat or config.paths.player_statistics on the data_sources row rather than redeploying.`,
-      );
+    if (seasonYards !== null) {
+      const previousTotal = await context.snapshots.latest(SEASON_PASSING_YARDS_SNAPSHOT);
+      if (!previousTotal || previousTotal.value !== seasonYards) context.snapshots.record(SEASON_PASSING_YARDS_SNAPSHOT, seasonYards);
     }
-    const previousTotal = await context.snapshots.latest(SEASON_PASSING_YARDS_SNAPSHOT);
-    if (!previousTotal || previousTotal.value !== seasonYards) context.snapshots.record(SEASON_PASSING_YARDS_SNAPSHOT, seasonYards);
 
     // 2. Per game, the metric -------------------------------------------------
     const team = teamIdFrom(config, statistics);

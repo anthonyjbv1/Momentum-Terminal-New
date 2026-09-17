@@ -170,6 +170,7 @@ function apisportsFetch(options: Options = {}) {
 
 const context = (fetch: typeof globalThis.fetch, options: { config?: Record<string, unknown>; latest?: Record<string, { value: number; recordedAt: Date }> } = {}) => {
   const recorded: Array<{ metricKey: string; value: number; recordedAt?: Date }> = [];
+  const notes: string[] = [];
   return {
     source: makeSource({ name: "apisports" }),
     config: (options.config ?? {}) as Record<string, never>,
@@ -182,7 +183,9 @@ const context = (fetch: typeof globalThis.fetch, options: { config?: Record<stri
     },
     now: NOW,
     fetch,
+    note: (message: string) => void notes.push(message),
     recorded,
+    notes,
   };
 };
 
@@ -408,13 +411,33 @@ describe("apisportsConnector", () => {
       await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, context(apisportsFetch({ statistics: [seasonEntry(null)] })))).rejects.toThrow(/not a number: null/);
     });
 
-    it("names the plan, the quota, the groups and statistics present, and the tried keys when it cannot be found", async () => {
+    it("is a NOTE, not a failure, when it cannot be found: the plan, the quota, the groups and statistics present, and the tried keys are named, and the per-game metrics are still read (Phase 16)", async () => {
       const fetch = apisportsFetch({ statistics: [{ teams: [{ team: { id: 17 }, groups: [{ name: "Rushing", statistics: [{ name: "yards", value: "12" }] }] }] }], plan: "Free", requests: { current: 44, limit_day: 100 } });
-      const failure = apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch));
-      await expect(failure).rejects.toThrow(/carried no passing yards/);
-      await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch))).rejects.toThrow(/plan Free, 44 of 100 requests used today/);
-      await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch))).rejects.toThrow(/no statistic "yards" in group "Passing" \(groups present: Rushing; statistics in that group: none\)/);
-      await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch))).rejects.toThrow(/passing\.yards, passing_yards, yards/);
+      const ctx = context(fetch);
+      const readings = await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx);
+      expect(ctx.notes).toHaveLength(1);
+      expect(ctx.notes[0]).toMatch(/carried no passing yards/);
+      expect(ctx.notes[0]).toMatch(/plan Free, 44 of 100 requests used today/);
+      expect(ctx.notes[0]).toMatch(/no statistic "yards" in group "Passing" \(groups present: Rushing; statistics in that group: none\)/);
+      expect(ctx.notes[0]).toMatch(/passing\.yards, passing_yards, yards/);
+      expect(ctx.notes[0]).toMatch(/per-game metrics were read regardless/);
+      // Nothing false recorded for the season, and the per-game figure is there: the fallback did not gate the product.
+      expect(ctx.recorded.map((r) => r.metricKey)).not.toContain(SEASON_PASSING_YARDS_SNAPSHOT);
+      expect(readings?.map((r) => r.metricKey)).toEqual([GAME_PASSING_YARDS_METRIC]);
+    });
+
+    it("an EMPTY season response (what the host answered from 20:45 UTC on 2026-09-17) is a note on an ok poll: the per-game metrics are read through config.team_id", async () => {
+      const fetch = apisportsFetch({ statistics: [], plan: "Pro", requests: { current: 293, limit_day: 7500 } });
+      const ctx = context(fetch, { config: { team_id: 17 } });
+      const readings = await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx);
+      expect(ctx.notes).toEqual([
+        expect.stringMatching(/season statistics answered with no entries for player 1197 on v1\.american-football\.api-sports\.io for season 2026; plan Pro, 293 of 7500 requests used today: season total not recorded this poll; per-game metrics read through config\.team_id/),
+      ]);
+      expect(ctx.recorded.map((r) => r.metricKey)).not.toContain(SEASON_PASSING_YARDS_SNAPSHOT);
+      expect(readings).toEqual([{ metricKey: GAME_PASSING_YARDS_METRIC, value: 184, recordedAt: new Date(WEEK1_KICKOFF) }]);
+      expect(fetch.urls("/games/statistics/players")).toHaveLength(1);
+      // Without a configured team the fixtures cannot be addressed at all, and THAT is still loud.
+      await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, context(apisportsFetch({ statistics: [] })))).rejects.toThrow(/yielded no team id/);
     });
 
     it("still reads a keyed shape through the dotted fallbacks", async () => {

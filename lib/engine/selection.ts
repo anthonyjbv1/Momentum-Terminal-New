@@ -1,5 +1,6 @@
 import type { EngineConfig } from "@/lib/engine/config";
 import { isMetricSignal } from "@/lib/engine/sentiment/metric";
+import { isPrescoredSignal } from "@/lib/engine/sentiment/prescored";
 import type { EngineSignal } from "@/lib/engine/types";
 import type { Json } from "@/types/database";
 
@@ -9,8 +10,9 @@ import type { Json } from "@/types/database";
  * The store reads the backlog up to a ceiling; this decides how much of it a
  * tick is allowed to score, in the shape of the model calls it will cost:
  *
- *   - FREE signals (metric, baseline, and — passed in by the tick — event
- *     signals past the freshness limit) are all taken. They cost no call.
+ *   - FREE signals (metric, baseline, prescored live moments, and — passed
+ *     in by the tick — event signals past the freshness limit) are all
+ *     taken. They cost no call.
  *   - LIVE event signals are taken NEWEST FIRST within a person, at most
  *     maxEventSignalsPerPersonPerTick (12, ONE CHUNK: the rule that stops
  *     one subject's backlog owning the tick) per person and at most
@@ -61,9 +63,9 @@ function kindOf(payload: Json | null): string | null {
   return typeof kind === "string" ? kind : null;
 }
 
-/** A signal the model never sees, so it costs the tick nothing. */
+/** A signal the model never sees, so it costs the tick nothing: a metric, a baseline, or a prescored live moment (Phase 16). */
 export function isFreeSignal(signal: Pick<EngineSignal, "rawPayload">): boolean {
-  return isMetricSignal(signal.rawPayload) || kindOf(signal.rawPayload) === "baseline";
+  return isMetricSignal(signal.rawPayload) || kindOf(signal.rawPayload) === "baseline" || isPrescoredSignal(signal.rawPayload);
 }
 
 /** Newest first, then id, so a batch stamped with one timestamp is cut the same way every time. */

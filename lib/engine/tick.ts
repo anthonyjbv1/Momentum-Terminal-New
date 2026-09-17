@@ -13,6 +13,7 @@ import { volumeWeight } from "@/lib/engine/signal-volume";
 import { DORMANT_TARGET_DRIFT, advanceTargetDrift, effectiveTarget, readTargetDriftState, type TargetDriftState } from "@/lib/engine/target-drift";
 import { TickCallBudget, type DeferralReason } from "@/lib/engine/sentiment/budget";
 import { isMetricSignal, metricScorer as defaultMetricScorer } from "@/lib/engine/sentiment/metric";
+import { isPrescoredSignal, prescoredScorer as defaultPrescoredScorer } from "@/lib/engine/sentiment/prescored";
 import { isDeferred, type ScoringContext, type SentimentResult, type SentimentScorer } from "@/lib/engine/sentiment/types";
 import { buySellPrices, computeSpreads } from "@/lib/engine/spread";
 import type { EngineStore } from "@/lib/engine/store";
@@ -53,6 +54,8 @@ export interface EngineTickOptions {
   scorer?: SentimentScorer;
   /** Scores metric signals (payload kind "metric") from their explicit polarity and sigma. Defaults to the MetricScorer. */
   metricScorer?: SentimentScorer;
+  /** Scores prescored live moments (payload kind "live_moment") from their declared direction and confidence. Defaults to the PrescoredScorer. */
+  prescoredScorer?: SentimentScorer;
   config?: EngineConfig;
   now?: Date;
   /** Compute everything and return the summary without persisting. */
@@ -83,6 +86,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
   const { store, config = DEFAULT_ENGINE_CONFIG, dryRun = false, trigger = "manual" } = options;
   const scorer = options.scorer ?? getSentimentScorer();
   const metricScorer = options.metricScorer ?? defaultMetricScorer;
+  const prescored = options.prescoredScorer ?? defaultPrescoredScorer;
   const startedAt = options.now ?? new Date();
   const wallClockStart = Date.now();
   // The clock starts before the load: loading time is tick time.
@@ -106,8 +110,9 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
 
   // 3. Sentiment -------------------------------------------------------------
   // Routed by what the signal IS, not where it came from: a metric signal
-  // (payload kind "metric") goes to the metric scorer, everything else to
-  // the sentiment scorer. No source is named here. Both get the tick's
+  // (payload kind "metric") goes to the metric scorer, a prescored live
+  // moment (kind "live_moment") to the prescored scorer, everything else to
+  // the sentiment scorer. No source is named here. All get the tick's
   // context; only a scorer that spends money ever defers.
   const scoring: ScoringContext = { deadline, callBudget: new TickCallBudget(config.llm.callBudgetPerTick) };
   const sentiments = new Map<string, SentimentResult>();
@@ -127,7 +132,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
         });
         return;
       }
-      const chosen = isMetricSignal(signal.rawPayload) ? metricScorer : scorer;
+      const chosen = isMetricSignal(signal.rawPayload) ? metricScorer : isPrescoredSignal(signal.rawPayload) ? prescored : scorer;
       const outcome = await chosen.scoreSignal(
         {
           id: signal.id,
