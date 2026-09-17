@@ -25,7 +25,7 @@ export interface ProfilePerson {
   category: string;
   avatarUrl: string | null;
   score: number;
-  /** The Gravity force's target: where the score drifts with nothing happening. */
+  /** The Gravity force's target as the Engine last used it: the seed plus the drifting target's offset (Phase 14). Where the score settles with nothing happening. */
   revertTarget: number;
   spread: number;
   buyPrice: number | null;
@@ -44,6 +44,8 @@ export interface ProfilePersonRow {
   avatar_url: string | null;
   current_score: number | string;
   revert_target: number | string;
+  /** The drifting target's offset (Phase 14); absent or null reads as 0, the seed alone. */
+  target_offset?: number | string | null;
   spread: number | string;
   buy_price: number | string | null;
   sell_price: number | string | null;
@@ -70,7 +72,7 @@ export function toProfilePerson(row: ProfilePersonRow): ProfilePerson {
     category: row.category,
     avatarUrl: row.avatar_url,
     score: toNumber(row.current_score),
-    revertTarget: toNumber(row.revert_target),
+    revertTarget: toNumber(row.revert_target) + toNumber(row.target_offset),
     spread: toNumber(row.spread),
     buyPrice: toNullableNumber(row.buy_price),
     sellPrice: toNullableNumber(row.sell_price),

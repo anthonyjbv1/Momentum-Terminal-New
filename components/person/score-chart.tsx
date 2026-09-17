@@ -9,8 +9,8 @@ import { ChartEmpty, LiveLineChart } from "@/components/charts/live-line-chart";
 
 /**
  * The score line (6c+): the live line chart with the score's own rules.
- * One decimal on the axis and the crosshair, the Y_RANGE_FLOOR of two
- * points, and the gravity target as the dashed reference. Everything about
+ * One decimal on the axis and the crosshair, the Y_RANGE_FLOOR of half a
+ * point, and the gravity target as the dashed reference. Everything about
  * the cadence, the breath, the tick reveal and reduced motion lives in
  * components/charts/live-line-chart.tsx, shared with the portfolio.
  */

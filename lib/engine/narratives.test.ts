@@ -10,6 +10,7 @@ function person(overrides: Partial<PersonSummary>): PersonSummary {
     slug: "p",
     displayName: "Person",
     revertTarget: 60,
+    targetOffset: 0,
     previousScore: 50,
     newScore: 50,
     change: 0,

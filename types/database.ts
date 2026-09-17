@@ -418,6 +418,9 @@ export type Database = {
           sell_price: number | null
           slug: string
           spread: number
+          target_attention: number | null
+          target_direction: number | null
+          target_offset: number
         }
         Insert: {
           avatar_url?: string | null
@@ -439,6 +442,9 @@ export type Database = {
           sell_price?: number | null
           slug: string
           spread?: number
+          target_attention?: number | null
+          target_direction?: number | null
+          target_offset?: number
         }
         Update: {
           avatar_url?: string | null
@@ -460,6 +466,9 @@ export type Database = {
           sell_price?: number | null
           slug?: string
           spread?: number
+          target_attention?: number | null
+          target_direction?: number | null
+          target_offset?: number
         }
         Relationships: []
       }

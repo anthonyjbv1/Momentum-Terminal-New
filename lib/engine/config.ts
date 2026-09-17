@@ -55,13 +55,87 @@ export interface EngineConfig {
   score: {
     floor: number;
     ceiling: number;
-    /** Decimal places scores are rounded to when persisted. */
+    /**
+     * Decimal places scores are rounded to when persisted. FOUR, since Phase
+     * 14, and this is the precision of the STORED score only: every surface
+     * formats to one or two decimals and every quote is rounded to whole
+     * cents on both sides (points_to_cents, pointsToCents), so nothing
+     * user-facing changes with it.
+     *
+     * Why not two. At the 30-second cadence Gravity's pull in one tick is
+     * gap × (1 − e^(−0.35/120)) = gap × 0.0029; once a score is within 1.72
+     * points of its target that is under half a cent, and rounding to two
+     * decimals discarded it on EVERY tick. The first 24-hour run showed the
+     * result: every person without signals stuck 1.3 to 1.7 points short of
+     * their target, moved only when Market Mood tipped a tick over the
+     * rounding edge, and the board read as frozen. Four decimals keep the
+     * dead zone under 0.02 points. Not a force constant: no force changed.
+     */
     decimals: number;
   };
-  /** FORCE 1 — Gravity (mean reversion toward people.revert_target). */
+  /** FORCE 1 — Gravity (mean reversion toward the person's target: revert_target, plus the drift below when it is on). */
   gravity: {
     /** Decay rate per hour: decayed = target + (score - target) * e^(-lambda * deltaHours). */
     lambdaPerHour: number;
+  };
+  /**
+   * THE DRIFTING TARGET (Phase 14). Gravity's target as "what is normal for
+   * this person", moved by sustained signal evidence over WEEKS, instead of
+   * a seeded constant that becomes the ranking once every score has settled.
+   *
+   *   target = revert_target (the seed) + offset,   |offset| ≤ bound
+   *
+   * The evidence is the Signals force itself, the one thing that moved the
+   * score because of the world rather than because of the platform (Market
+   * Mood, trades and Gravity never feed it): two exponential averages of its
+   * impact per hour with this section's own half-life, ATTENTION (the gross
+   * impact, direction ignored) and DIRECTION (the signed impact). Then
+   *
+   *   coverage = min(attention / fullCoverageImpactPerHour, 1)      0..1
+   *   lean     = clamp(direction / fullCoverageImpactPerHour, −1, 1) −1..1
+   *   offset   = bound × (coverage × (1 + lean) − 1)
+   *
+   * so with no evidence the normal sinks to seed − bound (the floor); full
+   * coverage that is balanced holds the seed; full coverage that is as
+   * positive as it is full holds seed + bound (the ceiling); and sustained
+   * negative coverage sinks to the floor as an inert person does, while the
+   * Signals force keeps pushing their score below it in real time. The
+   * floor is PER PERSON (their own seed less the bound), so the seeded order
+   * of prominence survives among the quiet; a common floor would erase it.
+   *
+   * A person the drift has never measured is presumed fully covered and
+   * balanced (attention = fullCoverageImpactPerHour, direction = 0, offset
+   * 0), so turning the switch on moves no target at all; the normal then
+   * drifts from the seed at the half-life's pace as evidence accrues or
+   * fails to. Off, the state is not kept: nothing accumulates in the dark,
+   * and a target is its seed.
+   *
+   * THE FOURTH CLOCK, kept apart on purpose: Signals freshness weights a
+   * signal in the queue (hours); memory expiry decides what the model is
+   * shown verbatim (a 30-day cutoff); Gravity decays a score toward its
+   * target (λ per hour); this moves the target itself, and is the slowest
+   * of the four by an order of magnitude. Its constants are its own and
+   * must stay its own. TUNABLE, all three.
+   */
+  targetDrift: {
+    /** The switch. Ships false. ENGINE_TARGET_DRIFT_ENABLED=true turns it on deliberately. */
+    enabled: boolean;
+    /** The clock: half-life, in hours, of the two evidence averages. 336 is two weeks. */
+    halfLifeHours: number;
+    /** The bound: the target never leaves seed ± this many points. */
+    bound: number;
+    /**
+     * The gross Signals impact per hour, averaged over the half-life, at
+     * which a person counts as fully covered. 0.2 is about five points of
+     * signal impact a day, roughly twenty scored items at routine
+     * confidence: what every covered subject of the first run produced.
+     * The one constant here most likely to move, and the known weakness of
+     * the design: it is global, so a person with more sources reaches it
+     * more easily, the same weakness the volume normalisation carries and
+     * with the same honest fix (each person's own trailing volume) once
+     * there is history to build it from.
+     */
+    fullCoverageImpactPerHour: number;
   };
   /** FORCE 2 — Signals (news impact). */
   signals: {
@@ -306,8 +380,9 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     maxEventSignalsPerTick: 48,
     maxEventSignalsPerPersonPerTick: 12,
   },
-  score: { floor: 35, ceiling: 100, decimals: 2 },
+  score: { floor: 35, ceiling: 100, decimals: 4 },
   gravity: { lambdaPerHour: 0.35 },
+  targetDrift: { enabled: false, halfLifeHours: 336, bound: 8, fullCoverageImpactPerHour: 0.2 },
   signals: {
     baseImpact: 1.5,
     tierMultipliers: { 1: 1.5, 2: 1.0, 3: 0.5, 4: 0.3, 5: 0.3 },
@@ -412,6 +487,12 @@ export interface EngineEnvOverrides {
    * changed. A positive integer; anything else is ignored.
    */
   tradingMinPopulatedWindows?: string | undefined;
+  /**
+   * ENGINE_TARGET_DRIFT_ENABLED. The switch of the drifting target
+   * (targetDrift.enabled, default false). Only the exact string "true"
+   * turns it on, like the two cron flags; anything else leaves it off.
+   */
+  targetDriftEnabled?: string | undefined;
 }
 
 /** A strictly positive integer from a raw environment string, or null. */
@@ -423,11 +504,17 @@ export function parsePositiveInteger(raw: string | undefined): number | null {
   return Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
+/** The exact string "true", trimmed, and nothing else: the same rule as the cron flags. */
+export function parseExactTrue(raw: string | undefined): boolean {
+  return typeof raw === "string" && raw.trim() === "true";
+}
+
 /** DEFAULT_ENGINE_CONFIG with any environment overrides applied. */
 export function engineConfigFromEnv(env: EngineEnvOverrides, base: EngineConfig = DEFAULT_ENGINE_CONFIG): EngineConfig {
   const overrides: DeepPartial<EngineConfig> = {};
   const minPopulatedWindows = parsePositiveInteger(env.tradingMinPopulatedWindows);
   if (minPopulatedWindows !== null) overrides.tradingActivity = { minPopulatedWindows };
+  if (parseExactTrue(env.targetDriftEnabled)) overrides.targetDrift = { enabled: true };
   return withEngineConfig(overrides, base);
 }
 
@@ -436,6 +523,9 @@ export function describeEngineOverrides(config: EngineConfig, base: EngineConfig
   const out: string[] = [];
   if (config.tradingActivity.minPopulatedWindows !== base.tradingActivity.minPopulatedWindows) {
     out.push(`tradingActivity.minPopulatedWindows = ${config.tradingActivity.minPopulatedWindows} (default ${base.tradingActivity.minPopulatedWindows})`);
+  }
+  if (config.targetDrift.enabled !== base.targetDrift.enabled) {
+    out.push(`targetDrift.enabled = ${config.targetDrift.enabled} (default ${base.targetDrift.enabled})`);
   }
   return out;
 }

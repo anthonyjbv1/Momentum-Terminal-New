@@ -37,8 +37,9 @@ export const POINT_CENTS = 100;
 /**
  * The one conversion from points to money, mirroring points_to_cents():
  * round to the nearest cent, half away from zero. Scores and spreads are
- * persisted at two decimals, so this is exact for every real quote; the
- * rounding exists so a stray float can never carry fractions of a cent.
+ * persisted at four decimals since Phase 14, so a quote is rounded to the
+ * cent here and in the database by the same rule, and the two never differ;
+ * the rounding also means a stray float can never carry fractions of a cent.
  */
 export function pointsToCents(value: Points | number): Cents {
   const scaled = Number((value * POINT_CENTS).toFixed(6));

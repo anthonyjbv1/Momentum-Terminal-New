@@ -21,7 +21,7 @@ const MOMENTUM_WINDOW = "1 hour";
 const SPARKLINE_POINTS = 24;
 
 const PERSON_COLUMNS =
-  "id, slug, display_name, category, avatar_url, current_score, revert_target, spread, buy_price, sell_price, last_tick_at";
+  "id, slug, display_name, category, avatar_url, current_score, revert_target, target_offset, spread, buy_price, sell_price, last_tick_at";
 
 export async function getHomeBoard(): Promise<HomeBoard> {
   const supabase = createSupabaseAdminClient();

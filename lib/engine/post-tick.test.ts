@@ -23,8 +23,8 @@ const summary: TickSummary = {
   scoring: { backlogBefore: 2, loaded: 2, selected: 2, personOrder: ["drake", "mrbeast"], attempted: 2, llmScored: 2, fallbacks: 0, withoutModel: 0, expired: 0, deferred: 0, deferredByReason: {}, llmCalls: 2, llmCallBudget: 4, processed: 2, backlogAfter: 0, partial: false, budgetMs: 25_000, remainingMs: 20_000 },
   deferred: [],
   people: [
-    { id: "d", slug: "drake", displayName: "Drake", revertTarget: 65, previousScore: 50, newScore: 51.24, change: 1.24, spread: 0.5, buyPrice: 51.74, sellPrice: 50.74, forces: { gravity: 0.04, signals: 1.2 }, signalsProcessed: 1 },
-    { id: "m", slug: "mrbeast", displayName: "MrBeast", revertTarget: 68, previousScore: 50, newScore: 50.1, change: 0.1, spread: 0.5, buyPrice: 50.6, sellPrice: 49.6, forces: { gravity: 0.05, signals: 0.05 }, signalsProcessed: 1 },
+    { id: "d", slug: "drake", displayName: "Drake", revertTarget: 65, targetOffset: 0, previousScore: 50, newScore: 51.24, change: 1.24, spread: 0.5, buyPrice: 51.74, sellPrice: 50.74, forces: { gravity: 0.04, signals: 1.2 }, signalsProcessed: 1 },
+    { id: "m", slug: "mrbeast", displayName: "MrBeast", revertTarget: 68, targetOffset: 0, previousScore: 50, newScore: 50.1, change: 0.1, spread: 0.5, buyPrice: 50.6, sellPrice: 49.6, forces: { gravity: 0.05, signals: 0.05 }, signalsProcessed: 1 },
   ],
   signals: [
     { id: "s1", personSlug: "drake", headline: "Drake drops surprise album", label: "positive", confidence: 0.8, direction: 1, impact: 1.2, ageHours: 0, freshness: 1, scorer: "llm", anomaly: "notable", narrative: "Drake's momentum climbed on a surprise album drop." },

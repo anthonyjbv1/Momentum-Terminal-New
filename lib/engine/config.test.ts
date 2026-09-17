@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_ENGINE_CONFIG, describeEngineOverrides, engineConfigFromEnv, parsePositiveInteger } from "./config";
+import { DEFAULT_ENGINE_CONFIG, describeEngineOverrides, engineConfigFromEnv, parseExactTrue, parsePositiveInteger } from "./config";
 import { CRON_DEFAULTS } from "./cron";
 import { CALLS_PER_PERSON_PER_TICK } from "./sentiment/budget";
 import { CALL_OVERHEAD_MS } from "./sentiment/llm";
@@ -81,6 +81,57 @@ describe("Phase 12 invariants", () => {
 });
 
 /**
+ * THE DRIFTING TARGET (Phase 14): its own constants, behind a switch that
+ * ships off, on a clock an order of magnitude slower than the others'.
+ */
+describe("Phase 14 invariants", () => {
+  const { targetDrift, signals, memory, gravity, score } = DEFAULT_ENGINE_CONFIG;
+
+  it("ships OFF, and only the exact string \"true\" in ENGINE_TARGET_DRIFT_ENABLED turns it on", () => {
+    expect(targetDrift.enabled).toBe(false);
+    expect(engineConfigFromEnv({}).targetDrift.enabled).toBe(false);
+    expect(engineConfigFromEnv({ targetDriftEnabled: "true" }).targetDrift.enabled).toBe(true);
+    expect(engineConfigFromEnv({ targetDriftEnabled: " true " }).targetDrift.enabled).toBe(true);
+    for (const bad of ["", "1", "TRUE", "yes", "false", "on"]) expect(engineConfigFromEnv({ targetDriftEnabled: bad }).targetDrift.enabled).toBe(false);
+    expect(parseExactTrue("true")).toBe(true);
+    expect(parseExactTrue(undefined)).toBe(false);
+    expect(describeEngineOverrides(engineConfigFromEnv({ targetDriftEnabled: "true" }))).toEqual(["targetDrift.enabled = true (default false)"]);
+  });
+
+  it("names the drift rate, the bound and the coverage rate as tunables: half-life 14 days, ±8 points, 0.2 points an hour", () => {
+    expect(targetDrift.halfLifeHours).toBe(336);
+    expect(targetDrift.bound).toBe(8);
+    expect(targetDrift.fullCoverageImpactPerHour).toBe(0.2);
+  });
+
+  it("THE FOURTH CLOCK: separate from Signals freshness and memory expiry, and at least ten times slower than freshness", () => {
+    expect(targetDrift.halfLifeHours).toBeGreaterThanOrEqual(signals.freshnessHalfLifeHours * 10);
+    expect(targetDrift.halfLifeHours).not.toBe(signals.freshnessMaxAgeHours);
+    expect(targetDrift.halfLifeHours).not.toBe(memory.maxEventAgeDays * 24);
+    // Its constants are its own: nothing in the Signals or memory sections reads as a drift constant, and the switch only lives here.
+    expect(Object.keys(signals)).not.toContain("targetDrift");
+    expect(Object.keys(memory)).not.toContain("targetDrift");
+    expect(Object.keys(targetDrift).sort()).toEqual(["bound", "enabled", "fullCoverageImpactPerHour", "halfLifeHours"]);
+  });
+
+  it("changed no force constant: Gravity's λ, the freshness curve and memory expiry are what they were", () => {
+    expect(gravity).toEqual({ lambdaPerHour: 0.35 });
+    expect(signals.freshnessHalfLifeHours).toBe(24);
+    expect(signals.freshnessMaxAgeHours).toBe(168);
+    expect(memory.maxEventAgeDays).toBe(30);
+    expect(signals.maxAbsImpactPerTick).toBe(10);
+  });
+
+  it("stores the score at four decimals so Gravity's pull inside 1.72 points of the target is no longer rounded away", () => {
+    expect(score.decimals).toBe(4);
+    // At 30 s, Gravity moves gap × (1 − e^(−λ/120)); the dead zone is the gap at which that is under half a unit of the stored precision.
+    const perTick = 1 - Math.exp(-gravity.lambdaPerHour / 120);
+    expect(0.005 / perTick).toBeCloseTo(1.72, 2); // what two decimals cost
+    expect(0.00005 / perTick).toBeLessThan(0.02); // what four decimals cost
+  });
+});
+
+/**
  * The environment overrides for the controlled test: strictly parsed, opt-in,
  * and never able to move a default. The production default of the
  * Trading Activity minimum-sample guard stays 30 whatever happens here.
@@ -105,7 +156,12 @@ describe("engineConfigFromEnv", () => {
     expect({ ...config.tradingActivity, minPopulatedWindows: 30 }).toEqual(DEFAULT_ENGINE_CONFIG.tradingActivity);
     expect(config.gravity).toEqual(DEFAULT_ENGINE_CONFIG.gravity);
     expect(config.spread).toEqual(DEFAULT_ENGINE_CONFIG.spread);
+    expect(config.targetDrift).toEqual(DEFAULT_ENGINE_CONFIG.targetDrift);
     expect(engineConfigFromEnv({})).toEqual(DEFAULT_ENGINE_CONFIG);
+    // The drift switch moves the switch and nothing else: the rate, the bound and the coverage rate are code constants.
+    const drifting = engineConfigFromEnv({ targetDriftEnabled: "true" });
+    expect({ ...drifting.targetDrift, enabled: false }).toEqual(DEFAULT_ENGINE_CONFIG.targetDrift);
+    expect(drifting.gravity).toEqual(DEFAULT_ENGINE_CONFIG.gravity);
   });
 
   it("names an active override for the tick log, and nothing when there is none", () => {

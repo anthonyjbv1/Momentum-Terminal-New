@@ -167,11 +167,12 @@ describe("selection", () => {
   });
 
   it("pins recorded moves at or beyond the threshold, strongest first, at most PINNED_MAX, within the window", () => {
-    expect(HIGH_IMPACT_THRESHOLD).toBe(1.25);
+    // Phase 14: the Engine's own unit of notable, shared with narratives.minAbsChange and memory.notableImpactThreshold.
+    expect(HIGH_IMPACT_THRESHOLD).toBe(0.5);
     expect(PINNED_WINDOW_HOURS).toBe(24);
     const entries = [
-      entry({ id: "small", impact: 1.2 }),
-      entry({ id: "exact", impact: 1.25 }),
+      entry({ id: "small", impact: 0.45 }),
+      entry({ id: "exact", impact: 0.5 }),
       entry({ id: "down", impact: -3.1 }),
       entry({ id: "old", impact: 5, occurredAt: iso(NOW - 25 * 3_600_000) }),
       entry({ id: "big", impact: 2.6 }),
@@ -182,8 +183,8 @@ describe("selection", () => {
     expect(pinned.map((item) => item.id)).toEqual(["down", "bigger", "big"]);
     expect(pinned).toHaveLength(PINNED_MAX);
     // At the threshold qualifies; just under it does not.
-    expect(selectPinned([entry({ id: "small", impact: 1.2 }), entry({ id: "exact", impact: -1.25 })], NOW).map((item) => item.id)).toEqual(["exact"]);
-    expect(selectPinned([entry({ id: "quiet", impact: 0.4 })], NOW)).toEqual([]);
+    expect(selectPinned([entry({ id: "small", impact: 0.45 }), entry({ id: "exact", impact: -0.5 })], NOW).map((item) => item.id)).toEqual(["exact"]);
+    expect(selectPinned([entry({ id: "quiet", impact: 0.28 })], NOW)).toEqual([]); // the first run's mean move when anything moved
   });
 });
 

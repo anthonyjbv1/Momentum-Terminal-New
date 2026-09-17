@@ -2,7 +2,7 @@ import "server-only";
 
 import { DEFAULT_ENGINE_CONFIG } from "@/lib/engine/config";
 import { HIGH_IMPACT_THRESHOLD } from "@/lib/feed/feed-model";
-import { isEngineCronEnabled, isIngestCronEnabled } from "@/lib/env";
+import { isEngineCronEnabled, isIngestCronEnabled, isTargetDriftEnabled } from "@/lib/env";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 import { requireAdmin } from "./auth";
@@ -399,6 +399,8 @@ export interface EngineReport {
   /** The two schedules, separately gated, never conflated. */
   engineCronEnabled: boolean;
   ingestCronEnabled: boolean;
+  /** The drifting Gravity target (Phase 14): ENGINE_TARGET_DRIFT_ENABLED, exactly "true". */
+  targetDriftEnabled: boolean;
   tickCount: number;
   lastTickAt: string | null;
   lastTickNumber: number | null;
@@ -415,7 +417,20 @@ export interface EngineReport {
     work: TickWork | null;
     movers: Array<{ slug: string; change: number }>;
   }>;
-  scores: Array<{ slug: string; displayName: string; score: number; revertTarget: number; lastTickAt: string | null }>;
+  scores: Array<{
+    slug: string;
+    displayName: string;
+    score: number;
+    /** The target Gravity uses: seed plus offset. */
+    revertTarget: number;
+    /** The seeded revert_target. */
+    seedTarget: number;
+    /** The drifting target's offset the last tick wrote; 0 while the drift is off. */
+    targetOffset: number;
+    /** How many active source mappings the person has: 0 means nothing can ever produce a signal for them. */
+    activeSources: number;
+    lastTickAt: string | null;
+  }>;
 }
 
 function readTickWork(summary: unknown): TickWork | null {
@@ -437,12 +452,16 @@ export async function readEngine(): Promise<EngineReport> {
   const client = await adminClient();
   const [ticks, people, count] = await Promise.all([
     client.from("engine_ticks").select("*").order("tick_number", { ascending: false }).limit(RECENT_LIMIT),
-    client.from("people").select("id, slug, display_name, current_score, revert_target, last_tick_at").eq("is_active", true).order("current_score", { ascending: false }).order("slug"),
+    client.from("people").select("id, slug, display_name, current_score, revert_target, target_offset, last_tick_at").eq("is_active", true).order("current_score", { ascending: false }).order("slug"),
     client.from("engine_ticks").select("tick_number", { count: "exact", head: true }),
   ]);
   for (const [label, result] of Object.entries({ ticks, people, count })) {
     if (result.error) throw new Error(`${label}: ${result.error.message}`);
   }
+  const mappings = await client.from("person_data_sources").select("person_id").eq("is_active", true);
+  if (mappings.error) throw new Error(`person_data_sources: ${mappings.error.message}`);
+  const sourcesByPerson = new Map<string, number>();
+  for (const row of mappings.data ?? []) sourcesByPerson.set(row.person_id, (sourcesByPerson.get(row.person_id) ?? 0) + 1);
   // The same count the tick itself takes at load: unprocessed signals of active people.
   const backlog = await client
     .from("signals")
@@ -457,6 +476,7 @@ export async function readEngine(): Promise<EngineReport> {
   return {
     engineCronEnabled: isEngineCronEnabled(),
     ingestCronEnabled: isIngestCronEnabled(),
+    targetDriftEnabled: isTargetDriftEnabled(),
     tickCount: count.count ?? 0,
     lastTickAt: rows[0]?.started_at ?? null,
     lastTickNumber: rows[0] ? Number(rows[0].tick_number) : null,
@@ -483,7 +503,10 @@ export async function readEngine(): Promise<EngineReport> {
       slug: person.slug,
       displayName: person.display_name,
       score: Number(person.current_score),
-      revertTarget: Number(person.revert_target),
+      revertTarget: Number(person.revert_target) + Number(person.target_offset ?? 0),
+      seedTarget: Number(person.revert_target),
+      targetOffset: Number(person.target_offset ?? 0),
+      activeSources: sourcesByPerson.get(person.id) ?? 0,
       lastTickAt: person.last_tick_at,
     })),
   };
@@ -514,6 +537,12 @@ export async function readLevers(): Promise<Lever[]> {
     { name: "Close cooldown", value: `${data?.close_cooldown_seconds ?? "—"}s`, source: "platform_settings.close_cooldown_seconds", note: "Minimum hold before a position may be closed. Policy floor is one full tick (30 s)." },
     { name: "Notable-move threshold", value: `${HIGH_IMPACT_THRESHOLD} points`, source: "lib/feed/feed-model.ts", note: "A recorded move at or beyond this takes the pinned treatment in the Feed." },
     { name: "Max signal impact per tick", value: `±${DEFAULT_ENGINE_CONFIG.signals.maxAbsImpactPerTick} points`, source: "lib/engine/config.ts", note: "Brake on the Signals force, whatever the volume of evidence." },
+    {
+      name: "Target drift",
+      value: isTargetDriftEnabled() ? "ENABLED" : "disabled",
+      source: "ENGINE_TARGET_DRIFT_ENABLED",
+      note: `Gravity's target drifts from the seed with sustained signal evidence: half-life ${DEFAULT_ENGINE_CONFIG.targetDrift.halfLifeHours} h, bound ±${DEFAULT_ENGINE_CONFIG.targetDrift.bound} points, full coverage at ${DEFAULT_ENGINE_CONFIG.targetDrift.fullCoverageImpactPerHour} points of signal impact an hour. Off, every target is its seed.`,
+    },
   ];
   return levers;
 }

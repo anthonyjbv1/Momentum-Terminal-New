@@ -1,5 +1,6 @@
 import type { DeferralReason } from "@/lib/engine/sentiment/budget";
 import type { SentimentResult } from "@/lib/engine/sentiment/types";
+import type { TargetDriftState } from "@/lib/engine/target-drift";
 import type { InversePair, Person } from "@/types";
 import type { Json } from "@/types/database";
 
@@ -92,6 +93,10 @@ export interface PersonTickResult {
   scoredSignals: ScoredSignal[];
   /** Sum of the Signals force this tick (input to Market Mood and inverse pairs). */
   signalsImpact: number;
+  /** The target Gravity pulled toward: the seed plus the drift's offset. */
+  target: number;
+  /** The drifting target's state after this tick; dormant while the drift is off. */
+  drift: TargetDriftState;
   /** Score after the five forces, clamped. */
   firstPassScore: number;
   /** Inverse-pair adjustment applied in the second pass. */
@@ -107,7 +112,10 @@ export interface PersonSummary {
   id: string;
   slug: string;
   displayName: string;
+  /** The target Gravity pulled toward this tick: the seed plus the drift's offset (the seed alone while the drift is off). */
   revertTarget: number;
+  /** The points the drifting target added to the seed this tick (Phase 14). 0 while the drift is off. */
+  targetOffset: number;
   previousScore: number;
   newScore: number;
   change: number;
@@ -204,7 +212,15 @@ export interface TickPersistence {
   finishedAt: Date;
   mood: number;
   summary: TickSummary;
-  people: Array<{ id: string; score: number; spread: number }>;
+  people: Array<{
+    id: string;
+    score: number;
+    spread: number;
+    /** The drifting target's state after this tick (Phase 14): null evidence and a zero offset while the drift is off. */
+    targetAttention: number | null;
+    targetDirection: number | null;
+    targetOffset: number;
+  }>;
   signals: Array<{ id: string; impactScore: number; sentimentLabel: SentimentResult["label"]; sentimentConfidence: number }>;
   events: Array<{ personId: string; force: ForceName; impact: number; details: Record<string, unknown> }>;
 }

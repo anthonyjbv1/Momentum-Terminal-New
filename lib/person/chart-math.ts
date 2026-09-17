@@ -11,8 +11,20 @@ import type { SeriesPoint } from "./profile-model";
  * so a moving line is readable, but it never spans fewer points than this:
  * with the countdown, the pulse and the tick reveal already drawing the eye
  * to every move, a 0.02-point drift must stay a flicker, not become a cliff.
+ *
+ * RETUNED IN PHASE 14 from 2.0 to 0.5, the Engine's unit of "notable" (the
+ * Feed's pin threshold, narratives.minAbsChange): a notable move now fills
+ * the chart, a routine signal about half of it, a quiet hour of Gravity a
+ * fifth. At 2.0 the floor was roughly 700 times the mean tick move of the
+ * first 24-hour run and every line read flat. ABSOLUTE ON PURPOSE, not
+ * relative to recent volatility: the floor only binds when the data span is
+ * smaller than it, so a floor set from the window's own volatility would
+ * never bind; one set from a longer window would make a quiet hour look as
+ * dramatic as a wild one, and that difference is the information the chart
+ * carries. A fixed floor in the score's own units keeps every window on one
+ * scale, so the same move reads the same size for every person on every day.
  */
-export const Y_RANGE_FLOOR = 2;
+export const Y_RANGE_FLOOR = 0.5;
 
 /** Padding above and below the (floored) span, as a fraction of it. */
 export const Y_PADDING = 0.15;

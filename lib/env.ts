@@ -115,9 +115,20 @@ export function getEngineSecretOrNull(): string | null {
  *
  *   ENGINE_TRADING_MIN_POPULATED_WINDOWS  the Trading Activity minimum-sample
  *                                         guard (code default 30, unchanged)
+ *   ENGINE_TARGET_DRIFT_ENABLED           the drifting Gravity target (Phase
+ *                                         14); exactly "true" turns it on
  */
-export function getEngineEnvOverrides(): { tradingMinPopulatedWindows: string | undefined } {
-  return { tradingMinPopulatedWindows: process.env.ENGINE_TRADING_MIN_POPULATED_WINDOWS };
+export function getEngineEnvOverrides(): { tradingMinPopulatedWindows: string | undefined; targetDriftEnabled: string | undefined } {
+  return { tradingMinPopulatedWindows: process.env.ENGINE_TRADING_MIN_POPULATED_WINDOWS, targetDriftEnabled: process.env.ENGINE_TARGET_DRIFT_ENABLED };
+}
+
+/**
+ * The switch of the drifting Gravity target, as the operator console reports
+ * it. The Engine reads it through getEngineEnvOverrides(); this is the same
+ * rule (exactly "true") in one place for display.
+ */
+export function isTargetDriftEnabled(): boolean {
+  return process.env.ENGINE_TARGET_DRIFT_ENABLED?.trim() === "true";
 }
 
 // ---------------------------------------------------------------------------

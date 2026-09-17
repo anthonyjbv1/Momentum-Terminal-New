@@ -45,13 +45,29 @@ describe("Engine tick", () => {
       expect(p.buyPrice).toBeCloseTo(p.newScore + 0.5, 2);
       expect(p.sellPrice).toBeCloseTo(p.newScore - 0.5, 2);
     }
-    // Gravity for one 30s tick from 50 toward 68: 18 * (1 - e^(-0.35/120)) = 0.0524 -> 50.05
-    expect(summary.people.find((p) => p.slug === "mrbeast")?.newScore).toBe(50.05);
+    // Gravity for one 30s tick from 50 toward 68: 18 * (1 - e^(-0.35/120)) = 0.052423 -> 50.0524 at the score's four decimals
+    expect(summary.people.find((p) => p.slug === "mrbeast")?.newScore).toBe(50.0524);
 
     expect(store.scoreHistory.map((h) => h.tickNumber)).toEqual([1, 1, 1]);
     expect(store.scoreEvents.every((e) => e.force === "gravity" && e.impact > 0)).toBe(true);
     expect(store.scoreEvents).toHaveLength(3);
-    expect(store.people.find((p) => p.id === "p-mrbeast")?.current_score).toBe(50.05);
+    expect(store.people.find((p) => p.id === "p-mrbeast")?.current_score).toBe(50.0524);
+  });
+
+  it("FOUR DECIMALS: Gravity's sub-cent pull near the target is applied, not rounded away every tick", async () => {
+    // At two decimals a person 1.37 below target was stuck: 1.37 × 0.0029 = 0.004 a tick, under half a cent, discarded 2,836 times a day.
+    expect(CONFIG.score.decimals).toBe(4);
+    const stuck = makePerson({ id: "p-stuck", slug: "stuck", current_score: 61.63, revert_target: 63 });
+    const store = createMemoryEngineStore({ people: [stuck], lastTickNumber: 1000 });
+    let now = NOW;
+    for (let tick = 0; tick < 120; tick += 1) {
+      now = new Date(now.getTime() + 30_000);
+      await runEngineTick({ store, scorer: rulesBasedScorer, now });
+    }
+    // An hour of ticks closes the gap by 1 − e^(−0.35): from 1.37 to 0.97.
+    const score = Number(store.people[0].current_score);
+    expect(score).toBeGreaterThan(61.63);
+    expect(63 - score).toBeCloseTo(1.37 * Math.exp(-0.35), 2);
   });
 
   it("increments tick_number and uses the time since the last tick", async () => {
@@ -195,6 +211,94 @@ describe("Engine tick", () => {
     const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW });
     expect(summary.tickNumber).toBe(5);
     await expect(store.applyTick({ ...store.ticks[0], expectedTickNumber: 5 })).rejects.toThrow(/stale tick/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE DRIFTING TARGET (Phase 14)
+// ---------------------------------------------------------------------------
+
+describe("Engine tick — the drifting target", () => {
+  const DAY = 24 * 3_600_000;
+  /** A fresh positive article (rules: "crosses" → 0.8 → 1.2 points at tier 2) for a person at a given instant. */
+  const praise = (id: string, personId: string, at: Date, sourceName = "rss"): EngineSignal => ({ id, personId, headline: "crosses 100M monthly listeners on Spotify", rawPayload: { kind: "article" }, sourceName, sourceTier: 2, occurredAt: at, createdAt: at });
+
+  it("OFF by default: the target is the seed, a stale offset on the row is ignored and reset, and nothing accumulates", async () => {
+    const stale = makePerson({ id: "p-stale", slug: "stale", current_score: 60, revert_target: 63, target_attention: 0.01, target_direction: -0.01, target_offset: -5 });
+    const store = createMemoryEngineStore({ people: [stale] });
+    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW });
+    expect(summary.people[0].revertTarget).toBe(63);
+    expect(summary.people[0].targetOffset).toBe(0);
+    expect(store.scoreEvents[0].details).toMatchObject({ revertTarget: 63, seedTarget: 63, targetDrift: { enabled: false, offset: 0, attention: null, direction: null } });
+    expect(store.people[0]).toMatchObject({ target_attention: null, target_direction: null, target_offset: 0 });
+    expect(store.ticks[0].people[0]).toMatchObject({ targetAttention: null, targetDirection: null, targetOffset: 0 });
+  });
+
+  it("ON: the first tick moves no target (a never-measured person is presumed fully covered), and the state is persisted", async () => {
+    const config = withEngineConfig({ targetDrift: { enabled: true } });
+    const store = createMemoryEngineStore(seed());
+    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config });
+    for (const p of summary.people) {
+      expect(p.targetOffset).toBeCloseTo(0, 3);
+      expect(p.revertTarget).toBeCloseTo({ drake: 65, "kendrick-lamar": 63, mrbeast: 68 }[p.slug]!, 3);
+    }
+    const mr = store.people.find((p) => p.id === "p-mrbeast")!;
+    expect(mr.target_attention).toBeCloseTo(CONFIG.targetDrift.fullCoverageImpactPerHour, 4);
+    expect(mr.target_direction).toBeCloseTo(0, 6);
+    expect(mr.target_offset).toBeCloseTo(0, 3);
+    expect(store.scoreEvents.find((e) => e.personId === "p-mrbeast")?.details).toMatchObject({ seedTarget: 68, targetDrift: { enabled: true, halfLifeHours: 336, bound: 8 } });
+  });
+
+  it("ON, weeks of silence: an inert person's target sinks toward their own floor and Gravity follows it; a covered person's rises", async () => {
+    // Market Mood off, so the quiet person's score shows Gravity following the target and nothing else.
+    const config = withEngineConfig({ targetDrift: { enabled: true }, marketMood: { fraction: 0 } });
+    const quiet = makePerson({ id: "p-quiet", slug: "quiet", display_name: "Quiet", current_score: 63, revert_target: 63 });
+    const covered = makePerson({ id: "p-covered", slug: "covered", display_name: "Covered", current_score: 60, revert_target: 60 });
+    const store = createMemoryEngineStore({ people: [quiet, covered] });
+    // One tick a day for eight weeks (Δh capped at 24 h). Each day the covered person gets six fresh praises from six
+    // sources: 6 × 1.2 / √6 = 2.94 points a day, 0.12 an hour, about 60 % of full coverage, entirely positive.
+    let last: Awaited<ReturnType<typeof runEngineTick>> | null = null;
+    for (let day = 1; day <= 56; day += 1) {
+      const now = new Date(NOW.getTime() + day * DAY);
+      for (let s = 0; s < 6; s += 1) store.signals.push(praise(`c-${day}-${s}`, "p-covered", now, `source-${s}`));
+      last = await runEngineTick({ store, scorer: rulesBasedScorer, now, config });
+      // The first tick of a never-ticked person spans 30 s, so day 15 is the fourteenth full day: one half-life, −4.
+      if (day === 15) {
+        expect(last.people.find((p) => p.slug === "quiet")!.targetOffset).toBeCloseTo(-4, 1);
+      }
+    }
+    const q = last!.people.find((p) => p.slug === "quiet")!;
+    const c = last!.people.find((p) => p.slug === "covered")!;
+    // Quiet: eight weeks at a 14-day half-life leaves 1/16 of the presumed coverage: offset −7.5, target 55.5, score right behind it.
+    expect(q.targetOffset).toBeCloseTo(-7.5, 1);
+    expect(q.revertTarget).toBeCloseTo(55.5, 1);
+    expect(q.newScore).toBeCloseTo(q.revertTarget, 0);
+    expect(q.targetOffset).toBeGreaterThanOrEqual(-CONFIG.targetDrift.bound);
+    // Covered: coverage 0.6, lean 0.6 → 8 × (0.6 × 1.6 − 1) = −0.3 at the limit; still above the quiet one by the coverage alone,
+    // and on a coverage of 0.12/h the seed is not quite earned: that is what fullCoverageImpactPerHour = 0.2 says.
+    expect(c.targetOffset).toBeGreaterThan(q.targetOffset + 5);
+    expect(c.targetOffset).toBeLessThanOrEqual(CONFIG.targetDrift.bound);
+    expect(c.revertTarget).toBeGreaterThan(q.revertTarget);
+    // The persisted state is the summary's state.
+    expect(store.people.find((p) => p.id === "p-quiet")!.target_offset).toBe(q.targetOffset);
+  });
+
+  it("ON, bounded: no amount of praise takes a target past seed + bound, and the score settles there", async () => {
+    // Full coverage is 0.2 points an hour; make it tiny so a daily praise saturates the drift inside the test.
+    const config = withEngineConfig({ targetDrift: { enabled: true, fullCoverageImpactPerHour: 0.001 } });
+    const person = makePerson({ id: "p-star", slug: "star", display_name: "Star", current_score: 60, revert_target: 60 });
+    const store = createMemoryEngineStore({ people: [person] });
+    let last: Awaited<ReturnType<typeof runEngineTick>> | null = null;
+    for (let day = 1; day <= 70; day += 1) {
+      const now = new Date(NOW.getTime() + day * DAY);
+      store.signals.push(praise(`s-${day}`, "p-star", now));
+      last = await runEngineTick({ store, scorer: rulesBasedScorer, now, config });
+    }
+    const star = last!.people[0];
+    expect(star.targetOffset).toBeLessThanOrEqual(8);
+    expect(star.targetOffset).toBeCloseTo(8, 0);
+    expect(star.revertTarget).toBeCloseTo(68, 0);
+    expect(star.newScore).toBeLessThanOrEqual(68 + 1.3); // the day's praise sits on top of a target that never passes 68
   });
 });
 

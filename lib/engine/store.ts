@@ -147,7 +147,7 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         finished_at: tick.finishedAt.toISOString(),
         mood: tick.mood,
         summary: tick.summary,
-        people: tick.people.map((p) => ({ id: p.id, score: p.score, spread: p.spread })),
+        people: tick.people.map((p) => ({ id: p.id, score: p.score, spread: p.spread, target_attention: p.targetAttention, target_direction: p.targetDirection, target_offset: p.targetOffset })),
         signals: tick.signals.map((s) => ({
           id: s.id,
           impact_score: s.impactScore,
@@ -252,6 +252,9 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
         if (!person) continue;
         person.current_score = update.score;
         person.spread = update.spread;
+        person.target_attention = update.targetAttention;
+        person.target_direction = update.targetDirection;
+        person.target_offset = update.targetOffset;
         person.last_tick_at = tick.finishedAt.toISOString();
         peopleUpdated += 1;
         scoreHistory.push({ personId: update.id, score: update.score, tickNumber, recordedAt: tick.finishedAt });

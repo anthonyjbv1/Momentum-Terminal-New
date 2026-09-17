@@ -4,25 +4,32 @@ import { Y_PADDING, Y_RANGE_FLOOR, blendSeries, easeOutCubic, gridValues, monoto
 
 describe("scoreDomain", () => {
   it("never spans fewer than the floor, centred on the data", () => {
-    expect(Y_RANGE_FLOOR).toBe(2);
+    // Phase 14: half a point, the Engine's unit of notable, so a notable move fills the chart and a flicker stays a flicker.
+    expect(Y_RANGE_FLOOR).toBe(0.5);
     const domain = scoreDomain([{ t: 0, score: 50.0 }, { t: 1, score: 50.02 }], 80);
     const pad = Y_RANGE_FLOOR * Y_PADDING;
-    expect(domain.lo).toBeCloseTo(50.01 - 1 - pad, 6);
-    expect(domain.hi).toBeCloseTo(50.01 + 1 + pad, 6);
+    expect(domain.lo).toBeCloseTo(50.01 - 0.25 - pad, 6);
+    expect(domain.hi).toBeCloseTo(50.01 + 0.25 + pad, 6);
     expect(domain.gravityInRange).toBe(false);
   });
 
   it("follows the data once it moves more than the floor", () => {
     const domain = scoreDomain([{ t: 0, score: 48 }, { t: 1, score: 53 }], 80);
     expect(domain.hi - domain.lo).toBeCloseTo(5 * (1 + 2 * Y_PADDING), 6);
+    // A routine signal's move (0.3) is inside the floor; a notable one (0.5) is exactly the floor.
+    const routine = scoreDomain([{ t: 0, score: 60 }, { t: 1, score: 60.3 }], 80);
+    expect(routine.hi - routine.lo).toBeCloseTo(Y_RANGE_FLOOR * (1 + 2 * Y_PADDING), 6);
   });
 
   it("takes in the gravity target when it is within a span of the data", () => {
-    const near = scoreDomain([{ t: 0, score: 50 }, { t: 1, score: 51 }], 52.5);
+    const near = scoreDomain([{ t: 0, score: 50 }, { t: 1, score: 51 }], 52);
     expect(near.gravityInRange).toBe(true);
-    expect(near.hi).toBeGreaterThanOrEqual(52.5);
+    expect(near.hi).toBeGreaterThanOrEqual(52);
     const far = scoreDomain([{ t: 0, score: 50 }, { t: 1, score: 51 }], 65);
     expect(far.gravityInRange).toBe(false);
+    // A flat line at the floor still reaches a target half a point away.
+    const flat = scoreDomain([{ t: 0, score: 61.63 }, { t: 1, score: 61.64 }], 62);
+    expect(flat.gravityInRange).toBe(true);
   });
 
   it("grids on 1 / 2 / 5 steps", () => {

@@ -24,14 +24,17 @@ import { formatSigned } from "@/lib/person/profile-model";
  * impact is at least this far from zero, in either direction, qualifies for
  * the pinned treatment at the top of the Feed.
  *
- * TUNABLE — A STARTING VALUE. On a 0–100 score with Gravity pulling every
- * person back toward baseline on every tick, a move the size of a full
- * chart height (Y_RANGE_FLOOR is 2.0) may be rare enough that the section
- * never appears and the treatment is never seen working. 1.25 sits well
- * under that while staying above what one routine signal moves a score.
- * Raise it once the real distribution of score moves is observable.
+ * TUNABLE, RETUNED IN PHASE 14 against the first 24-hour Engine run: 45,360
+ * score moves, of which none reached the previous 1.25 (the largest was
+ * exactly 1.25 once, on a backlog tick), nine cleared 0.5, and the mean
+ * move when anything moved at all was 0.28. 0.5 is the Engine's own unit of
+ * "notable" (narratives.minAbsChange and memory.notableImpactThreshold are
+ * both 0.5), about twice a routine signal's move, and on a day like that
+ * one it qualifies roughly ten moves across the covered subjects, of which
+ * PINNED_MAX shows the three strongest. The Feed's idea of notable now
+ * agrees with the Engine's instead of sitting two and a half times above it.
  */
-export const HIGH_IMPACT_THRESHOLD = 1.25;
+export const HIGH_IMPACT_THRESHOLD = 0.5;
 
 /** Only entries this recent are considered for the pinned treatment. */
 export const PINNED_WINDOW_HOURS = 24;

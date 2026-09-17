@@ -55,6 +55,8 @@ export interface PersonRow {
   avatar_url: string | null;
   current_score: number;
   revert_target: number;
+  /** The drifting target's offset (Phase 14); absent or null reads as 0, the seed alone. */
+  target_offset?: number | string | null;
   spread: number;
   buy_price: number | null;
   sell_price: number | null;
@@ -105,7 +107,8 @@ export function rankPeople(rows: PersonRow[], momentum: MomentumRow[]): BoardPer
         category: row.category,
         avatarUrl: row.avatar_url,
         score: toNumber(row.current_score),
-        revertTarget: toNumber(row.revert_target),
+        // Gravity's target as the Engine last used it: the seed plus the drift's offset.
+        revertTarget: toNumber(row.revert_target) + toNumber(row.target_offset),
         spread: toNumber(row.spread),
         buyPrice: toNullableNumber(row.buy_price),
         sellPrice: toNullableNumber(row.sell_price),

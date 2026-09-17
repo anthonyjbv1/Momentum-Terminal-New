@@ -9,6 +9,7 @@ import { inversePairAdjustments } from "@/lib/engine/inverse-pairs";
 import { clamp, round } from "@/lib/engine/math";
 import { isFreeSignal, selectTickSignals } from "@/lib/engine/selection";
 import { getSentimentScorer } from "@/lib/engine/sentiment";
+import { DORMANT_TARGET_DRIFT, advanceTargetDrift, effectiveTarget, readTargetDriftState, type TargetDriftState } from "@/lib/engine/target-drift";
 import { TickCallBudget, type DeferralReason } from "@/lib/engine/sentiment/budget";
 import { isMetricSignal, metricScorer as defaultMetricScorer } from "@/lib/engine/sentiment/metric";
 import { isDeferred, type ScoringContext, type SentimentResult, type SentimentScorer } from "@/lib/engine/sentiment/types";
@@ -158,17 +159,32 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
   }
 
   // 4. First pass ------------------------------------------------------------
-  // Gravity and Signals first for everyone, because Market Mood needs the
-  // platform-wide Signals movement before it can be applied to anyone.
+  // Signals first, then the drifting target (fed by this tick's Signals
+  // force), then Gravity toward that target, for everyone, because Market
+  // Mood needs the platform-wide Signals movement before it can be applied
+  // to anyone.
   const partial = context.people.map((person) => {
     const previousScore = Number(person.current_score);
     const deltaHours = deltaHoursFor(person, startedAt, config);
-    const gravity = roundForce(gravityForce(previousScore, Number(person.revert_target), deltaHours, config.gravity));
     const scoredSignals = scoreSignals(signalsByPerson.get(person.id) ?? [], sentiments, config.signals, startedAt);
     const signals = roundForce(signalsForce(scoredSignals, config.signals));
+    // The target: the seed, plus the drift's offset when the drift is on.
+    // Off, the dormant state is written back so nothing accumulates unseen.
+    const seedTarget = Number(person.revert_target);
+    const drift: TargetDriftState = config.targetDrift.enabled ? advanceTargetDrift(readTargetDriftState(person), signals.impact, deltaHours, config.targetDrift) : DORMANT_TARGET_DRIFT;
+    const target = effectiveTarget(seedTarget, drift.offset);
+    const gravityEntry = gravityForce(previousScore, target, deltaHours, config.gravity);
+    const gravity = roundForce({
+      ...gravityEntry,
+      details: {
+        ...gravityEntry.details,
+        seedTarget,
+        targetDrift: { enabled: config.targetDrift.enabled, offset: drift.offset, attention: drift.attention, direction: drift.direction, halfLifeHours: config.targetDrift.halfLifeHours, bound: config.targetDrift.bound },
+      },
+    });
     const openCapital = context.openCapitalCentsByPerson.get(person.id) ?? 0;
     const concentration = Number(person.max_allocation_cents) > 0 ? openCapital / Number(person.max_allocation_cents) : 0;
-    return { person, previousScore, deltaHours, gravity, scoredSignals, signals, openCapital, concentration };
+    return { person, previousScore, deltaHours, gravity, target, drift, scoredSignals, signals, openCapital, concentration };
   });
 
   const allSignalsImpacts = partial.map((p) => p.signals.impact);
@@ -201,6 +217,8 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       forces,
       scoredSignals: p.scoredSignals,
       signalsImpact: p.signals.impact,
+      target: p.target,
+      drift: p.drift,
       firstPassScore,
       inverseAdjustment: 0,
       newScore: firstPassScore,
@@ -255,7 +273,8 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     id: r.person.id,
     slug: r.person.slug,
     displayName: r.person.display_name,
-    revertTarget: Number(r.person.revert_target),
+    revertTarget: r.target,
+    targetOffset: r.drift.offset,
     previousScore: r.previousScore,
     newScore: r.newScore,
     change: round(r.newScore - r.previousScore, decimals),
@@ -335,7 +354,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     finishedAt,
     mood: summary.mood,
     summary,
-    people: results.map((r) => ({ id: r.person.id, score: r.newScore, spread: r.spread })),
+    people: results.map((r) => ({ id: r.person.id, score: r.newScore, spread: r.spread, targetAttention: r.drift.attention, targetDirection: r.drift.direction, targetOffset: r.drift.offset })),
     signals: scoredAll.map((s) => ({
       id: s.signal.id,
       impactScore: round(s.impact, FORCE_DECIMALS),

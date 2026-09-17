@@ -40,6 +40,7 @@ export function EngineSection({ report, now }: { report: EngineReport; now: numb
       <Stats>
         <Stat label="Engine cron" value={report.engineCronEnabled ? "ON" : "OFF"} tone={report.engineCronEnabled ? "ok" : "plain"} sub="ENGINE_CRON_ENABLED" />
         <Stat label="Ingestion cron" value={report.ingestCronEnabled ? "ON" : "OFF"} tone={report.ingestCronEnabled ? "ok" : "plain"} sub="INGEST_CRON_ENABLED" />
+        <Stat label="Target drift" value={report.targetDriftEnabled ? "ON" : "OFF"} tone={report.targetDriftEnabled ? "ok" : "plain"} sub="ENGINE_TARGET_DRIFT_ENABLED" />
         <Stat label="Backlog" value={num(report.backlog)} tone={report.backlog > 0 ? "warn" : "ok"} sub="unprocessed signals, what the next tick sees" />
         <Stat label="Ticks" value={num(report.tickCount)} sub={report.lastTickNumber === null ? "none yet" : `last #${report.lastTickNumber}`} />
         <Stat label="Last tick" value={age(report.lastTickAt, now)} sub={stamp(report.lastTickAt)} />
@@ -153,7 +154,10 @@ export function EngineSection({ report, now }: { report: EngineReport; now: numb
                         <th>Person</th>
                         <th className="n">Score</th>
                         <th className="n">Gravity target</th>
+                        <th className="n">Seed</th>
+                        <th className="n">Drift</th>
                         <th className="n">Gap</th>
+                        <th className="n">Sources</th>
                         <th>Last tick</th>
                       </tr>
                     </thead>
@@ -165,7 +169,10 @@ export function EngineSection({ report, now }: { report: EngineReport; now: numb
                           </td>
                           <td className="n">{person.score.toFixed(2)}</td>
                           <td className="n">{person.revertTarget.toFixed(2)}</td>
+                          <td className="n">{person.seedTarget.toFixed(2)}</td>
+                          <td className="n">{person.targetOffset === 0 ? "—" : `${person.targetOffset > 0 ? "+" : ""}${person.targetOffset.toFixed(2)}`}</td>
                           <td className="n">{(person.score - person.revertTarget).toFixed(2)}</td>
+                          <td className="n">{person.activeSources === 0 ? <Badge tone="warn">none</Badge> : num(person.activeSources)}</td>
                           <td>{age(person.lastTickAt, now)}</td>
                         </tr>
                       ))}
@@ -176,13 +183,18 @@ export function EngineSection({ report, now }: { report: EngineReport; now: numb
                           {scores.length} people · high {highest?.slug ?? "—"} / low {lowest?.slug ?? "—"}
                         </td>
                         <td className="n">{mean === null ? "—" : mean.toFixed(2)}</td>
-                        <td className="n" colSpan={3}>
+                        <td className="n" colSpan={6}>
                           mean
                         </td>
                       </tr>
                     </tfoot>
                   </table>
                 </Scroll>
+                <p className="adm-note">
+                  <b>Gravity target</b> is what the last tick pulled toward: the seeded <b>revert_target</b> plus the drifting target&rsquo;s offset (Phase 14; shown
+                  as <b>Drift</b>, empty while ENGINE_TARGET_DRIFT_ENABLED is off). <b>Sources</b> counts the person&rsquo;s active source mappings: a person with none can
+                  never receive a signal, so their score is their target and nothing else.
+                </p>
               </>
             )}
           </div>
