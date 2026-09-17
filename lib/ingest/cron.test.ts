@@ -72,9 +72,12 @@ describe("runScheduledIngestion", () => {
     expect(result).toMatchObject({ enabled: true, status: "ran", error: "upstream exploded" });
   });
 
-  it("blocks for less than an hour, and for longer than one invocation can last", () => {
+  it("blocks for less than the fifteen-minute schedule, and for longer than one invocation can last", () => {
+    // Above the route's maxDuration (60 s) so a live run always wins; below the
+    // schedule so a crashed run — its row never closed — is already past the
+    // window by the next fire and blocks no scheduled poll at all.
     expect(INGEST_CRON_DEFAULTS.staleAfterMinutes).toBeGreaterThan(1);
-    expect(INGEST_CRON_DEFAULTS.staleAfterMinutes).toBeLessThan(60);
+    expect(INGEST_CRON_DEFAULTS.staleAfterMinutes).toBeLessThan(15);
   });
 });
 

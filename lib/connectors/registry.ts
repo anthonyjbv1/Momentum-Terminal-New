@@ -3,6 +3,7 @@ import { billboardConnector } from "./billboard";
 import { finnhubConnector } from "./finnhub";
 import { forbesConnector } from "./forbes";
 import { newsdataConnector } from "./newsdata";
+import { publisherRssConnector } from "./publisher-rss";
 import { rssConnector } from "./rss";
 import { spotifyConnector } from "./spotify";
 import { twitchConnector } from "./twitch";
@@ -31,6 +32,7 @@ const ALL_CONNECTORS: readonly DataConnector[] = [
   billboardConnector,
   apisportsConnector,
   rssConnector,
+  publisherRssConnector,
 ];
 
 export type ConnectorRegistry = ReadonlyMap<string, DataConnector>;

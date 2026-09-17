@@ -105,6 +105,13 @@ export interface ConnectorContext {
    * queues, the runner accounts.
    */
   exclude?(item: ExcludedItem): void;
+  /**
+   * The publisher feed catalogue, for connectors that read SHARED feeds rather
+   * than a feed per person: the rows are configuration (publisher_feeds), the
+   * runner supplies them once per run and writes back what each fetch found.
+   * Symmetric with `publishers`: loaded by the runner, read by the connector.
+   */
+  feeds?: FeedCatalog;
 }
 
 /** An item a connector refused as being about somebody else. */
@@ -114,6 +121,65 @@ export interface ExcludedItem {
   reason: "excluded_term" | "missing_context";
   /** The term that matched; null when the item simply carried none of the required context. */
   term: string | null;
+}
+
+/** One row of the publisher feed catalogue, as the runner hands it to a connector. */
+export interface FeedCatalogEntry {
+  id: string;
+  /** The publisher's domain: the tier resolves through the allowlist from it, and it is the fallback when an item's link names no host. */
+  domain: string;
+  url: string;
+  /** A label for the operator: "NFL", "Music", "Top stories". */
+  section: string;
+  /** Which subjects watch this feed: a person whose topics intersect these reads it. Empty means everyone. */
+  topics: string[];
+  /** "feed": fetch and read it. "discover": find the feed behind a page, record what was found, ingest nothing. */
+  mode: "feed" | "discover";
+  /** Conditional-request validators from the last successful fetch. */
+  etag: string | null;
+  lastModified: string | null;
+  lastFetchedAt: Date | null;
+  lastStatus: string | null;
+  consecutiveFailures: number;
+}
+
+/**
+ * What one fetch of a catalogue row found.
+ *   ok             a feed with dated items
+ *   not_modified   the publisher answered 304 to the conditional request
+ *   empty          a well-formed feed carrying no items
+ *   undated        items, none with a publication date: nothing is ingested from it
+ *   not_feed       the URL answers, but not with RSS or Atom
+ *   error          HTTP failure, timeout, network
+ *   discovered     discovery mode: a feed was found behind the page (see discoveredUrl)
+ *   no_feed_found  discovery mode: nothing behind the page parsed as a feed
+ */
+export type FeedStatus = "ok" | "not_modified" | "empty" | "undated" | "not_feed" | "error" | "discovered" | "no_feed_found";
+
+export interface FeedHealthReport {
+  id: string;
+  fetchedAt: Date;
+  status: FeedStatus;
+  httpStatus: number | null;
+  error: string | null;
+  itemCount: number | null;
+  /** Items carrying a publication date: the only ones a publisher feed may ingest. */
+  datedCount: number | null;
+  /** Items carrying a description or body, as opposed to a bare headline. */
+  describedCount: number | null;
+  newestPublishedAt: Date | null;
+  discoveredUrl: string | null;
+  etag: string | null;
+  lastModified: string | null;
+}
+
+export interface FeedCatalog {
+  /** The active catalogue rows. */
+  list(): Promise<FeedCatalogEntry[]>;
+  /** What a fetch found; the runner persists it onto the row once the source has been polled. */
+  report(health: FeedHealthReport): void;
+  /** How many of a feed's items named a subject, summed over the run's people. */
+  matched(feedId: string, count: number): void;
 }
 
 /**
@@ -131,6 +197,14 @@ export interface ExcludedItem {
 export interface DataConnector {
   /** Must equal data_sources.name (e.g. "youtube"). */
   readonly name: string;
+  /**
+   * Connectors that carry the same STORIES declare one family, and the runner
+   * then deduplicates their events against each other: a story the publisher's
+   * own feed delivered at noon must not become a second signal when Google
+   * News surfaces it two days later. Omitted: the source deduplicates only
+   * against itself.
+   */
+  readonly storyFamily?: string;
   /**
    * Fetch fresh data about one person and translate it into RawSignals.
    * Throw (ideally a ConnectorError) on failure; the runner records the error

@@ -217,6 +217,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260915172000_poll_interval_off_the_hour.sql` | `rss`, `youtube` and `youtube_comments` from 60 to 55 minutes: an interval that is an exact multiple of 60 always loses the hourly cron's `59 < 60` comparison, so all three had been polling every second hour |
 | `20260915181500_poll_interval_spotify.sql` | The same correction on the dormant `spotify` row, so a rebuild — or turning it back on — does not reintroduce it |
 | `20260915190000_entity_disambiguation.sql` | `person_data_sources.config` (per-subject rules for a source); `excluded_filtered` on `source_polls` and `ingest_runs`; `source_health.excluded_24h`; Drake's exclusion terms for the university, its athletics and two namesakes |
+| `20260917142813_phase13_publisher_feeds.sql` | `publisher_feeds` (the publisher-direct feed catalogue: configuration plus the health each fetch writes back, service role only) with 94 candidate rows across 60 outlets, 25 of them discovery pages; the `publisher_rss` registry row (events only, 10 minutes) and the four subject mappings with match terms, topics and Drake's extended exclusions; `rss` to 10 and `apisports` to 40 minutes for the fifteen-minute cron |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
 
@@ -970,7 +971,7 @@ What changed anyway: the single-artist read is now a shared reader, and if it co
 | Job | Path | Schedule | Flag | Cost |
 |---|---|---|---|---|
 | Engine | `/api/engine/cron` | `* * * * *` | `ENGINE_CRON_ENABLED` | model calls |
-| Ingestion | `/api/ingest/cron` | `0 * * * *` | `INGEST_CRON_ENABLED` | none |
+| Ingestion | `/api/ingest/cron` | `*/15 * * * *` (hourly until Phase 13) | `INGEST_CRON_ENABLED` | none |
 
 Both ship **unset, which is off**; only the exact string `"true"` enables either. That separation is the point: baselines need a week of history and 24 samples before most metrics say anything, and ingestion can fill that while the Engine stays dormant and nothing costs.
 
@@ -978,7 +979,7 @@ Both ship **unset, which is off**; only the exact string `"true"` enables either
 
 1. **The flag, before anything else.** If `INGEST_CRON_ENABLED` is not `"true"` the handler returns `{ enabled: false, status: "skipped", reason: 'INGEST_CRON_ENABLED is not "true"' }` immediately — no auth check, no database connection, no poll. So the flag's state is observable from outside without holding a secret, and a disabled endpoint cannot be made to do work by anyone.
 2. **Authentication.** Vercel Cron sends `Authorization: Bearer $CRON_SECRET`; `INGEST_SECRET` is also accepted (`x-ingest-secret` or the same bearer header) so the job can be exercised by hand. `ENGINE_SECRET` is deliberately *not* accepted: the two jobs do not share an authority. Nothing here needs a human to paste a secret into curl — the platform supplies it.
-3. **The overlap guard.** An `ingest_runs` row with `finished_at is null` started inside the last 15 minutes means a run is still in flight, and this invocation returns `status: "skipped", reason: "a run is already in flight"` instead of polling everything twice. The staleness window is what stops a crashed run from blocking the schedule forever.
+3. **The overlap guard.** An `ingest_runs` row with `finished_at is null` started inside the last 10 minutes (15 until Phase 13) means a run is still in flight, and this invocation returns `status: "skipped", reason: "a run is already in flight"` instead of polling everything twice. The staleness window is what stops a crashed run from blocking the schedule forever: above the route's 60-second `maxDuration` so a live run always wins, below the fifteen-minute schedule so a crashed run is already past the window by the next fire and blocks nothing.
 
 **No model call happens on this path.** `lib/ingest/cron.test.ts` asserts it by reading the source: no file under `lib/ingest` or `lib/connectors`, and neither ingest route, imports `@/lib/llm`, a relative `llm` module, or `@anthropic-ai/sdk`. Sentiment scoring, narratives and memory all live behind the Engine's tick, which this job never enters. The manual `POST /api/ingest` is unchanged and still works exactly as before; the cron is a second door onto the same runner.
 
@@ -1026,7 +1027,7 @@ What is deliberately **not** registered, and why it never would have worked: sea
 
 **What can emit inside a season.** `game_passing_yards` declares `min_samples: 8`, reachable at his eighth recorded game — roughly the season's halfway point — with a 1680-hour (ten-week) window wide enough to hold eight games. That was the test every candidate had to pass: a metric needing the platform's usual 24 samples would need twenty-four games, which is longer than a regular season.
 
-**Request budget.** Per poll: the `/status` probe (cached six hours per process), the season statistics, the games list (fetched once and shared by the event and metric reads) and one per-game statistics call for each finished counted game not yet recorded — one a week in season, up to `recent_games` on a first backfill. Behind the 175-minute poll interval that is about thirty requests a day; the key is on the Pro plan (7,500 a day), and the free plan, which allows 100, does not serve the current season at all.
+**Request budget.** Per poll: the `/status` probe (cached six hours per process), the season statistics, the games list (fetched once and shared by the event and metric reads) and one per-game statistics call for each finished counted game not yet recorded — one a week in season, up to `recent_games` on a first backfill. The interval is 40 minutes since Phase 13 (175 before): every third fire of the fifteen-minute cron, so a final is caught within 45 minutes at a freshness weight of 0.98, at about 130 requests a day; the key is on the Pro plan (7,500 a day), and the free plan, which allows 100, does not serve the current season at all.
 
 **The paths are configuration.** api-sports.io is refused by this environment's egress proxy on every domain, so the endpoint paths and statistic field names were written without a live response. They live on the `data_sources` row rather than in the connector for exactly that reason — a path that turns out wrong is a one-row update, not a deploy — and every read validates the envelope (including the `errors` payload API-Sports returns *with a 200* for a wrong key or an unsubscribed sport) and throws naming what actually came back.
 
@@ -1036,7 +1037,7 @@ The same day fixed a runner fault the failure exposed: events and metrics are tw
 
 ### Poll intervals below the hour
 
-The runner skips a source when `minutes since last poll < poll_interval_minutes`. The hourly ingestion cron fires on the hour and the previous run's poll lands a few seconds after it, so the check sees **59** minutes: an interval that is an exact multiple of 60 always loses that race and the source polls half as often as its interval claims. Both Phase 10 rows sit off the multiple (55 for Twitch, 175 for API-Sports, which polls every third hour by design), and a test asserts `poll_interval_minutes % 60 !== 0` for them.
+The runner skips a source when `minutes since last poll < poll_interval_minutes`. The ingestion cron fires on its period and the previous run's poll lands a few seconds after it, so a period later the check sees a fraction **less** than the period: an interval that is an exact multiple of the period always loses that race and the source polls half as often as its interval claims. On the hourly schedule both Phase 10 rows sat off the multiple (55 for Twitch, 175 for API-Sports). Since Phase 13 the period is fifteen minutes and the rule is `poll_interval_minutes % 15 !== 0`, asserted for every active source: 10 (`rss`, `publisher_rss`) polls on every fire, 40 (`apisports`) every third, 55 (`youtube`, `youtube_comments`, `twitch`) every fourth — the hour.
 
 ### Credentials
 
@@ -1061,6 +1062,57 @@ which is Drake University's athletics programme, not the musician. This is worse
 
 **Visibility.** Each refusal is logged as `[ingest] {"event":"exclude","person":...,"term":...,"headline":...}` and counted onto `source_polls.excluded_filtered`, `ingest_runs.excluded_filtered` and `source_health.excluded_24h`, with an **Excluded · 24h** tile in the operator console — the same treatment blocked domains get. Over-filtering shows up as that count climbing while `signals_created` falls.
 
+## Publisher-direct feeds and the fifteen-minute pulse (Phase 13)
+
+### The aggregator delay
+
+Google News routinely surfaces an item one to three days after the outlet published it, so a real story reaches the Engine already discounted by the Phase 12 freshness curve. The live case: Mahomes' Week 1 win was scored at a freshness weight of **0.245** because it was 48.8 hours old when read; caught promptly it would have carried about 0.92. A publisher's own feed carries the timestamp the outlet wrote and no aggregator in between.
+
+### The inversion, and what it costs
+
+A section feed gives **all** of that section's coverage and the platform filters for the subjects' names, instead of searching for a name and taking what the aggregator ranked. More in, better timestamps, better provenance — and the tier is trivial, because the feed's domain is the publisher and every item resolves through `publisher_domains` like any other. The costs, all bounded and all stated:
+
+- **Request volume is per feed, not per subject.** Every catalogue feed is fetched every poll whether or not it mentions anyone: 69 feed rows every fifteen minutes is about **6,600 requests a day**, against roughly 380 for the four Google News searches at the same cadence. The catalogue is fetched **once per run** and shared across subjects (a module cache keyed on the run's clock, as the API-Sports games list is), at a concurrency of 8, with an 8-second timeout per feed and a 20-second budget for starting fetches; feeds not started inside the budget wait for the next poll, never-fetched and longest-unfetched first so nothing is starved. Conditional requests (`If-None-Match` / `If-Modified-Since` from the last fetch's validators) let an unchanged feed answer 304. A feed that keeps failing backs off — fifteen minutes per consecutive failure, capped at three hours — so a dead URL costs one request an hour, not four.
+- **Filtering work is per item per subject.** Every dated item is tested against every subject whose topics select the feed: a whole-word, case-insensitive match over the **headline only** (`matchesTerm`: "Mahomes'" and "Drake-Kendrick" match, "Drakeford" does not), then the same disambiguation rules the Google News row carries, over headline and outlet. A broad feed set surfaces more homonyms — Drake London, Nick Drake, Drake Batherson — so Drake's exclusions were extended on the new row.
+- **The same story arrives through two doors.** The publisher copy lands first; Google News surfaces it a day or two later under its own key. The two connectors declare one **story family** (`storyFamily: "news"`), and the runner deduplicates a poll's events against the signals stored by every source in the family, so the later copy collapses into the earlier signal (or upgrades it, if the later publisher is better-tiered and the Engine has not read it yet). A source that declares no family deduplicates against itself alone, exactly as before.
+
+### The catalogue
+
+`publisher_feeds` is configuration plus health, service role only. Configuration: `domain` (the publisher; also the fallback publisher of an item whose link names no host), `url`, `section` (a label), `topics` (a subject reads a feed when their topics intersect its tags; an untagged side reads everything), `mode`, `is_active`, `note`. Health, written by the runner after every fetch and never edited by hand: `last_status` (`ok` / `not_modified` / `empty` / `undated` / `not_feed` / `error` / `discovered` / `no_feed_found`), the HTTP status, the item count, **how many items carry a publication date**, how many carry a body (a feed with none is headline-only), how many named a subject on the last run, the newest date, the discovered URL, the conditional validators, and the failure streak.
+
+Two refusals are structural. An item with no publication date is **never ingested** from this source — dating it "now" would put exactly the assumed timestamp the source exists to avoid into the freshness curve — and is counted on the feed's health instead. Items older than `max_item_age_hours` (72) are not ingested either, so a first fetch of a deep feed cannot backfill a week of stale coverage; per person the poll stores at most `max_items_per_person` (60), newest first.
+
+**Discovery.** A row in mode `discover` names a page rather than a feed. The connector fetches it and, if the page is not itself a feed, reads the `<link rel="alternate" type="application/rss+xml">` declarations in its head, then anchors on the same site that look like feed links, then the conventional paths (`/feed/`, `/rss`, `/rss.xml`, `/feed.xml`, `/index.xml`, `/atom.xml`) — validating each candidate as a feed with dated items and recording the first that passes as `discovered_url`. A discovery row ingests nothing and, once it has reported either way, is not fetched again until an operator resets it; promoting a find is `update publisher_feeds set url = discovered_url, mode = 'feed'`.
+
+### Validated, not assumed
+
+No publisher was reachable from the session that wrote this: every outlet is refused by the egress proxy it runs behind, and so is the tool that fetches pages on its behalf. So nothing in the seed is asserted to work. Each of the 94 rows (60 outlets: every tier-1 and tier-2 allowlist domain that plausibly publishes a feed, plus the tier-3 sports, music and streaming desks closest to the four subjects, and discovery pages for the outlets whose feed address or existence was uncertain — Reuters, AP and Bloomberg among them) is a **candidate**; the first poll after deploy fetches it from production, where egress is open, and writes back what it found. The report of which outlets have working feeds, which are headline-only and which have retired RSS is read off the table, and the operator console shows it per row under **Publisher feeds**. Each fetch is also logged as `[ingest] {"event":"feed",...}` with the same counts.
+
+### The subjects
+
+| Subject | Match terms (whole words) | Topics read |
+|---|---|---|
+| Patrick Mahomes | Patrick Mahomes, Mahomes | nfl, sports, general |
+| Drake | Drake (with the extended exclusions) | music, entertainment, general |
+| MrBeast | MrBeast, Mr. Beast, Mr Beast, Jimmy Donaldson | creator, tech, business, entertainment, general |
+| Kai Cenat | Kai Cenat | creator, streaming, gaming, entertainment, music, general |
+
+The Google News rows are untouched and stay active as the fallback for coverage the catalogue misses; `news_volume_24h` stays on them, because a second volume series over a fixed publisher set would restart a baseline that is already accumulating for no new information. The publisher source declares no metric.
+
+### Fifteen minutes
+
+Between hourly polls the platform read as dead: information arrived in one burst and the 30-second tick spent the other 59 minutes rendering Gravity drift. Lowering a source's interval alone would have changed nothing — the job was not being invoked more often — so `vercel.json` now fires `/api/ingest/cron` at `*/15 * * * *` **and** the intervals moved, each off the multiple of the new period (see *Poll intervals below the hour*):
+
+| Source | Interval | Effective | Why |
+|---|---|---|---|
+| `rss`, `publisher_rss` | 10 | every fire (15 min) | news is what the faster pulse is for; Google News: 4 searches × 96 = ~380 requests a day; the catalogue: ~6,600 |
+| `apisports` | 40 | every third fire (45 min) | a weekly sport; a final is caught within 45 minutes at a freshness of 0.98 rather than 0.92; 3–4 requests a poll, ~130 a day of a 7,500 Pro quota |
+| `youtube` | 55 | every fourth fire (the hour) | unchanged: `search.list` costs 100 quota units a poll, and 96 polls a day would spend ~9,600 of the 10,000-unit daily quota on one channel — hourly is ~2,500 |
+| `youtube_comments` | 55 | the hour | unchanged: four times the polls is four times the comment digests, and each is scored by the model; comments are not time-critical |
+| `twitch` | 55 | the hour | unchanged: weekly aggregates and follower growth, and the stream event is keyed on the broadcast id; nothing improves at fifteen minutes |
+
+The staleness window fell from 15 to 10 minutes: still above the route's 60-second `maxDuration`, now below the schedule, so a crashed run blocks no scheduled poll at all. **No model call happens on the path** — the existing source scan in `lib/ingest/cron.test.ts` covers the new connector like every other — so the faster pulse costs function invocations and HTTP, nothing else. Run time stays inside the budget: the hourly runs were taking 16–31 s for eight polls; a fifteen-minute run is the four Google News polls plus one shared catalogue fetch, and every fourth fire adds the hourly sources.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -1071,6 +1123,7 @@ which is Drake University's athletics programme, not the musician. This is worse
 - **Phase 11**: the tick that always commits — a start-gated deadline per tick, deferral (unattempted signals stay unprocessed) distinct from fallback (failed attempts score by rules), the load bounded in LLM shape with one chunk per person per tick, one attempt per call, a real per-tick call budget, the usage ledger written before each call, and the backlog visible tick by tick in the admin console.
 - **Phase 12**: freshness — an age weight on the Signals force (half-life 24 h, zero past 7 days; expired signals processed at zero impact without a model call; metrics never aged; the model not shown a signal's date) and the effective per-request model timeout pinned end to end. The purge of the stale backlog was scoped and declined: freshness handles it.
 - **Phase 12+**: newest-first selection with a least-recently-served rotation across people, and memory event expiry (30 days, dated folds written as history, today's date and event ages in the person block).
+- **Phase 13**: publisher-direct feeds — the `publisher_feeds` catalogue read as one shared fetch per run, whole-word name matching scoped by topic, undated items refused, per-feed health and discovery written back onto the rows, the two news doors deduplicated as one story family with Google News kept as the fallback — and the ingestion cron at every fifteen minutes with every source interval off the multiple.
 - **Phase 5**: behavioral logging foundation: `session_id` and recommender-shaped indexes on `behavioral_events`, the canonical event vocabulary with per-type metadata contracts, server-side and browser logging services (validated, silent on failure, batched, session-grouped), and the service-role-only query layer.
 - **Phase 6a**: the design token system, the core component library, the persistent shell (banner with the 30-second countdown, bottom tabs, desktop two-panel layout) and the route skeleton with styled placeholders.
 - **Phase 6b**: Home wired to live data: the person card and ranked row, top movers, category filtering, sparklines, the desktop feed rail, and the behavioural logging that records impressions and dwell.
@@ -1093,4 +1146,4 @@ which is Drake University's athletics programme, not the musician. This is worse
 
 - **Phase 8+**: connector corrections: comment digests (one signal per video per poll, the distribution and the sample size, comments as evidence only), `comment_volume` as a metric on the shared baseline, Spotify's silent path turned into a named error, the dedup threshold lowered to 0.4 with the local-TV misses pinned as tests, 17 observed domains promoted and two corporate-PR domains held at the floor by decision, and derived-metric inputs declared.
 
-Deliberately not built yet: the profile screen, search results, the Forecast force, and the recommendation algorithm (For You). Shorting stays switched off; the risk levers stay inert (the cooldown's rise to 60 s is a policy floor, not a calibration); and both schedules are wired but switched off — the Engine's heartbeat behind `ENGINE_CRON_ENABLED` and the hourly ingestion behind `INGEST_CRON_ENABLED`, each of which ships unset.
+Deliberately not built yet: the profile screen, search results, the Forecast force, and the recommendation algorithm (For You). Shorting stays switched off; the risk levers stay inert (the cooldown's rise to 60 s is a policy floor, not a calibration); and both schedules are wired behind flags — the Engine's heartbeat behind `ENGINE_CRON_ENABLED` and the fifteen-minute ingestion behind `INGEST_CRON_ENABLED`, each of which ships unset.

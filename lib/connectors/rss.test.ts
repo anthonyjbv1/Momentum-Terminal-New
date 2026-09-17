@@ -66,7 +66,7 @@ describe("parseFeed", () => {
     const feed = parseFeed(RSS);
     expect(feed.title).toBe('"MrBeast" - Google News');
     expect(feed.items).toHaveLength(3);
-    expect(feed.items[0]).toEqual({ title: "MrBeast opens a theme park - Example Times", link: "https://news.google.com/rss/articles/one", guid: "one-guid", publishedAt: new Date("2026-09-12T10:30:00Z"), outlet: "Example Times", sourceUrl: "https://example.com" });
+    expect(feed.items[0]).toEqual({ title: "MrBeast opens a theme park - Example Times", link: "https://news.google.com/rss/articles/one", guid: "one-guid", publishedAt: new Date("2026-09-12T10:30:00Z"), outlet: "Example Times", sourceUrl: "https://example.com", hasDescription: false });
     expect(feed.items[1]).toMatchObject({ guid: null, outlet: '"MrBeast" - Google News', publishedAt: new Date("2026-09-11T09:00:00Z"), sourceUrl: null });
     expect(feed.items[2].publishedAt).toBeNull();
   });
@@ -74,7 +74,7 @@ describe("parseFeed", () => {
   it("reads Atom, preferring the alternate link", () => {
     const feed = parseFeed(ATOM);
     expect(feed.title).toBe("Outlet tag feed");
-    expect(feed.items).toEqual([{ title: "Drake announces a tour", link: "https://outlet.example/drake-tour", guid: "tag:outlet.example,2026:1", publishedAt: new Date("2026-09-12T08:00:00Z"), outlet: "Outlet", sourceUrl: null }]);
+    expect(feed.items).toEqual([{ title: "Drake announces a tour", link: "https://outlet.example/drake-tour", guid: "tag:outlet.example,2026:1", publishedAt: new Date("2026-09-12T08:00:00Z"), outlet: "Outlet", sourceUrl: null, hasDescription: false }]);
   });
 
   it("refuses what is not a feed", () => {

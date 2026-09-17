@@ -803,6 +803,84 @@ export type Database = {
         }
         Relationships: []
       }
+      publisher_feeds: {
+        Row: {
+          consecutive_failures: number
+          created_at: string
+          discovered_url: string | null
+          domain: string
+          etag: string | null
+          id: string
+          is_active: boolean
+          last_dated_count: number | null
+          last_described_count: number | null
+          last_error: string | null
+          last_fetched_at: string | null
+          last_http_status: number | null
+          last_item_count: number | null
+          last_matched_count: number | null
+          last_modified: string | null
+          last_newest_published_at: string | null
+          last_status: string | null
+          mode: string
+          note: string | null
+          section: string
+          topics: string[]
+          updated_at: string
+          url: string
+        }
+        Insert: {
+          consecutive_failures?: number
+          created_at?: string
+          discovered_url?: string | null
+          domain: string
+          etag?: string | null
+          id?: string
+          is_active?: boolean
+          last_dated_count?: number | null
+          last_described_count?: number | null
+          last_error?: string | null
+          last_fetched_at?: string | null
+          last_http_status?: number | null
+          last_item_count?: number | null
+          last_matched_count?: number | null
+          last_modified?: string | null
+          last_newest_published_at?: string | null
+          last_status?: string | null
+          mode?: string
+          note?: string | null
+          section: string
+          topics?: string[]
+          updated_at?: string
+          url: string
+        }
+        Update: {
+          consecutive_failures?: number
+          created_at?: string
+          discovered_url?: string | null
+          domain?: string
+          etag?: string | null
+          id?: string
+          is_active?: boolean
+          last_dated_count?: number | null
+          last_described_count?: number | null
+          last_error?: string | null
+          last_fetched_at?: string | null
+          last_http_status?: number | null
+          last_item_count?: number | null
+          last_matched_count?: number | null
+          last_modified?: string | null
+          last_newest_published_at?: string | null
+          last_status?: string | null
+          mode?: string
+          note?: string | null
+          section?: string
+          topics?: string[]
+          updated_at?: string
+          url?: string
+        }
+        Relationships: []
+      }
       rate_limit_buckets: {
         Row: {
           hits: number

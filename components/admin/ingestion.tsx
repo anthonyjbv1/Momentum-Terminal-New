@@ -46,6 +46,42 @@ function baselineReady(row: BaselineRow): boolean {
   return row.lastOutcome === "emitted" || row.lastOutcome === "inside_band";
 }
 
+/** What a publisher feed's last fetch found (Phase 13), and how to read it. */
+const FEED_TONE: Record<string, Tone> = {
+  ok: "ok",
+  not_modified: "ok",
+  discovered: "info",
+  empty: "warn",
+  undated: "warn",
+  no_feed_found: "warn",
+  not_feed: "bad",
+  error: "bad",
+};
+
+const FEED_NOTE: Record<string, string> = {
+  ok: "a feed with dated items: it is being read",
+  not_modified: "the publisher answered 304: nothing changed since the last fetch",
+  discovered: "discovery found a feed behind this page; promote it by setting url and mode",
+  empty: "a well-formed feed carrying no items",
+  undated: "items with no publication date: nothing is ingested from it",
+  no_feed_found: "discovery found nothing behind this page that parses as a feed",
+  not_feed: "the address answers, but not with RSS or Atom",
+  error: "HTTP failure, timeout or network error",
+};
+
+function feedBadge(status: string | null) {
+  if (status === null) return <Badge tone="plain">never fetched</Badge>;
+  return <Badge tone={FEED_TONE[status] ?? "plain"}>{status.replace(/_/g, " ")}</Badge>;
+}
+
+/** A feed's items carry bodies, headlines only, or nothing yet says. */
+function feedShape(row: IngestionReport["feeds"][number]): string {
+  if (row.itemCount === null || row.itemCount === 0) return "—";
+  if (row.datedCount === 0) return "undated";
+  if ((row.describedCount ?? 0) === 0) return "headline-only";
+  return `${num(row.describedCount)} with body`;
+}
+
 export function IngestionSection({ report, now }: { report: IngestionReport; now: number }) {
   const active = report.sources.filter((source) => source.isActive);
   const errors = report.sources.reduce((total, source) => total + source.errors24h, 0);
@@ -123,6 +159,66 @@ export function IngestionSection({ report, now }: { report: IngestionReport; now
             </tbody>
           </table>
         </Scroll>
+
+        <p className="adm-sub" style={{ marginTop: 16 }}>
+          Publisher feeds · the catalogue, and what each feed&apos;s last fetch found
+        </p>
+        {report.feeds.length === 0 ? (
+          <Empty>No publisher feed is registered.</Empty>
+        ) : (
+          <Scroll>
+            <table className="adm-t">
+              <thead>
+                <tr>
+                  <th>Publisher</th>
+                  <th>Section</th>
+                  <th>Topics</th>
+                  <th>State</th>
+                  <th className="n">Items</th>
+                  <th className="n">Dated</th>
+                  <th>Shape</th>
+                  <th className="n">Matched</th>
+                  <th>Newest item</th>
+                  <th>Fetched</th>
+                  <th className="wrap">Found / error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.feeds.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <span className="adm-k">{row.domain}</span>
+                      {row.isActive ? null : <> <Badge tone="plain">inactive</Badge></>}
+                      {row.mode === "discover" ? <> <Badge tone="info">discovery</Badge></> : null}
+                      <div className="adm-k adm-dim">{row.url}</div>
+                    </td>
+                    <td>{row.section}</td>
+                    <td className="adm-dim">{row.topics.join(", ") || "all"}</td>
+                    <td title={FEED_NOTE[row.lastStatus ?? ""] ?? undefined}>
+                      {feedBadge(row.lastStatus)}
+                      {row.consecutiveFailures > 0 ? <div className="adm-dim">{num(row.consecutiveFailures)} in a row</div> : null}
+                    </td>
+                    <td className="n">{row.itemCount === null ? "—" : num(row.itemCount)}</td>
+                    <td className="n">{row.datedCount === null ? "—" : num(row.datedCount)}</td>
+                    <td className="adm-dim">{feedShape(row)}</td>
+                    <td className="n">{row.matchedCount === null ? "—" : num(row.matchedCount)}</td>
+                    <td>
+                      {age(row.newestPublishedAt, now)}
+                      <div className="adm-k adm-dim">{stamp(row.newestPublishedAt)}</div>
+                    </td>
+                    <td>{age(row.lastFetchedAt, now)}</td>
+                    <td className="wrap adm-dim">{row.discoveredUrl ?? row.lastError ?? row.note ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Scroll>
+        )}
+        <p className="adm-note">
+          Health is measured, never assumed: every row is fetched from production on its turn, and an item with no publication date is never ingested from
+          this source. Matched counts how many of the feed&apos;s items named a subject on the last run. A discovery row records the feed it found and ingests
+          nothing until it is promoted.
+        </p>
 
         <p className="adm-sub" style={{ marginTop: 16 }}>
           Baseline progress · per person, per metric

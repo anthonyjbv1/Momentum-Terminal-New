@@ -7,7 +7,7 @@
     },
     {
       "path": "/api/ingest/cron",
-      "schedule": "0 * * * *"
+      "schedule": "*/15 * * * *"
     }
   ]
 }

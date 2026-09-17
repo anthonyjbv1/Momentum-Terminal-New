@@ -8,7 +8,8 @@ import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 /**
  * GET /api/ingest/cron — the scheduled ingestion heartbeat (see vercel.json:
- * hourly). A DIFFERENT job from /api/engine/cron, behind a different flag.
+ * every fifteen minutes; each source still keeps its own interval). A
+ * DIFFERENT job from /api/engine/cron, behind a different flag.
  *
  *   1. INGEST_CRON_ENABLED must be exactly "true", otherwise the handler
  *      returns "skipped (disabled)" immediately: no auth check, no database

@@ -6,9 +6,9 @@ import { buildRegistry, connectorRegistry, getConnector, listConnectorNames } fr
 import { createStubConnector } from "./stub";
 
 /** Every name in the data_sources seed must have a connector, and vice versa. */
-const SEEDED_SOURCE_NAMES = ["youtube", "youtube_comments", "twitch", "spotify", "forbes", "finnhub", "newsdata", "billboard", "apisports", "rss"];
+const SEEDED_SOURCE_NAMES = ["youtube", "youtube_comments", "twitch", "spotify", "forbes", "finnhub", "newsdata", "billboard", "apisports", "rss", "publisher_rss"];
 /** Implemented connectors; the rest are interface-compliant stubs. */
-const IMPLEMENTED = ["youtube", "youtube_comments", "spotify", "rss", "twitch", "apisports"];
+const IMPLEMENTED = ["youtube", "youtube_comments", "spotify", "rss", "twitch", "apisports", "publisher_rss"];
 /** Connectors that need a credential and say so. */
 const CREDENTIALED = ["youtube", "youtube_comments", "spotify", "twitch", "apisports"];
 
@@ -62,6 +62,11 @@ describe("connector registry", () => {
         expect(availability.ok ? "" : availability.reason).toMatch(/not set/);
       }
       expect(connectorRegistry.get("rss")!.available).toBeUndefined();
+      expect(connectorRegistry.get("publisher_rss")!.available).toBeUndefined();
+      // The two news connectors are one story family; nothing else is.
+      expect(connectorRegistry.get("rss")!.storyFamily).toBe("news");
+      expect(connectorRegistry.get("publisher_rss")!.storyFamily).toBe("news");
+      expect(connectorRegistry.get("apisports")!.storyFamily).toBeUndefined();
     } finally {
       if (saved.youtube !== undefined) process.env.YOUTUBE_API_KEY = saved.youtube;
       if (saved.id !== undefined) process.env.SPOTIFY_CLIENT_ID = saved.id;

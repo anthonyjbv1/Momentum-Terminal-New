@@ -1,4 +1,4 @@
-import type { SnapshotValue } from "@/lib/connectors/types";
+import type { FeedCatalogEntry, FeedHealthReport, SnapshotValue } from "@/lib/connectors/types";
 import type { DataSource, Person, TypedSupabaseClient } from "@/types";
 import type { Json } from "@/types/database";
 
@@ -135,6 +135,12 @@ export interface ObservationRow {
   signalId: string | null;
 }
 
+/** What one fetch of a catalogue row found, plus what the runner adds: how many items named a subject, and the failure streak. */
+export interface FeedHealthRow extends FeedHealthReport {
+  matchedCount: number;
+  consecutiveFailures: number;
+}
+
 export interface IngestStore {
   /** data_sources rows with is_active = true. */
   listActiveSources(): Promise<DataSource[]>;
@@ -148,8 +154,12 @@ export interface IngestStore {
   insertSignals(rows: SignalRow[]): Promise<StoredSignal[]>;
   /** The publisher allowlist: every publisher_domains row. */
   listPublisherDomains(): Promise<PublisherDomainRow[]>;
-  /** Event signals (not metric signals) of one person and source that occurred at or after `since`, oldest first, for story deduplication. */
-  listRecentSignals(personId: string, dataSourceId: string, since: Date): Promise<StoredSignalStory[]>;
+  /** Event signals (not metric signals) of one person across the given sources (a story family) that occurred at or after `since`, oldest first, for story deduplication. */
+  listRecentSignals(personId: string, dataSourceIds: string[], since: Date): Promise<StoredSignalStory[]>;
+  /** The active publisher feed catalogue, least recently fetched first. */
+  listFeeds(): Promise<FeedCatalogEntry[]>;
+  /** Writes what a run found onto the catalogue rows. */
+  recordFeedHealth(rows: FeedHealthRow[]): Promise<void>;
   /** Rewrites a stored, still unprocessed signal to a better publisher's copy of the same story. Returns whether a row changed (false once the Engine has read it). */
   upgradeSignal(id: string, upgrade: SignalUpgrade): Promise<boolean>;
   /** Insert snapshots. Exact duplicates (same person/source/metric/time) are skipped. Returns the number stored. */
@@ -259,12 +269,13 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
       return data.map((row) => ({ domain: row.domain, status: row.status === "blocked" ? "blocked" : "allowed", tier: row.tier }));
     },
 
-    async listRecentSignals(personId, dataSourceId, since) {
+    async listRecentSignals(personId, dataSourceIds, since) {
+      if (dataSourceIds.length === 0) return [];
       const { data, error } = await client
         .from("signals")
         .select("id, dedupe_key, headline, raw_payload, tier, processed, occurred_at")
         .eq("person_id", personId)
-        .eq("data_source_id", dataSourceId)
+        .in("data_source_id", dataSourceIds)
         .gte("occurred_at", since.toISOString())
         .order("occurred_at", { ascending: true })
         .order("id", { ascending: true })
@@ -295,6 +306,64 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
         .select("id");
       if (error) throw new Error(`Failed to upgrade signal ${id}: ${error.message}`);
       return data.length > 0;
+    },
+
+    async listFeeds() {
+      const { data, error } = await client
+        .from("publisher_feeds")
+        .select("id, domain, url, section, topics, mode, etag, last_modified, last_fetched_at, last_status, consecutive_failures")
+        .eq("is_active", true)
+        .order("last_fetched_at", { ascending: true, nullsFirst: true })
+        .order("url");
+      if (error) throw new Error(`Failed to load the publisher feed catalogue: ${error.message}`);
+      return data.map((row) => ({
+        id: row.id,
+        domain: row.domain,
+        url: row.url,
+        section: row.section,
+        topics: row.topics ?? [],
+        mode: row.mode === "discover" ? "discover" : "feed",
+        etag: row.etag,
+        lastModified: row.last_modified,
+        lastFetchedAt: row.last_fetched_at ? new Date(row.last_fetched_at) : null,
+        lastStatus: row.last_status,
+        consecutiveFailures: Number(row.consecutive_failures ?? 0),
+      }));
+    },
+
+    async recordFeedHealth(rows) {
+      // One update per row, a few at a time: the catalogue is dozens of rows,
+      // not thousands, and an update touches only the health columns so an
+      // operator's edit to the configuration columns is never overwritten.
+      const batch = 10;
+      for (let start = 0; start < rows.length; start += batch) {
+        const results = await Promise.all(
+          rows.slice(start, start + batch).map((row) =>
+            client
+              .from("publisher_feeds")
+              .update({
+                last_fetched_at: row.fetchedAt.toISOString(),
+                last_status: row.status,
+                last_http_status: row.httpStatus,
+                last_error: row.error,
+                last_item_count: row.itemCount,
+                last_dated_count: row.datedCount,
+                last_described_count: row.describedCount,
+                last_matched_count: row.matchedCount,
+                last_newest_published_at: row.newestPublishedAt ? row.newestPublishedAt.toISOString() : null,
+                discovered_url: row.discoveredUrl,
+                etag: row.etag,
+                last_modified: row.lastModified,
+                consecutive_failures: row.consecutiveFailures,
+                updated_at: row.fetchedAt.toISOString(),
+              })
+              .eq("id", row.id),
+          ),
+        );
+        for (const result of results) {
+          if (result.error) throw new Error(`Failed to record feed health: ${result.error.message}`);
+        }
+      }
     },
 
     async insertSnapshots(rows) {
@@ -443,6 +512,8 @@ export interface MemoryIngestStoreSeed {
   polls?: PollRow[];
   /** The publisher allowlist. Empty = every domain unknown, nothing blocked. */
   publisherDomains?: PublisherDomainRow[];
+  /** The publisher feed catalogue. Health written by a run is applied to these entries, as it is to the rows in production. */
+  feeds?: FeedCatalogEntry[];
 }
 
 export interface MemoryIngestStore extends IngestStore {
@@ -452,6 +523,8 @@ export interface MemoryIngestStore extends IngestStore {
   readonly polls: PollRow[];
   readonly observations: ObservationRow[];
   readonly publisherDomains: PublisherDomainRow[];
+  readonly feeds: FeedCatalogEntry[];
+  readonly feedHealth: FeedHealthRow[];
 }
 
 export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): MemoryIngestStore {
@@ -463,6 +536,8 @@ export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): Memor
   const polls: PollRow[] = [...(seed.polls ?? [])];
   const observations: ObservationRow[] = [];
   const publisherDomains: PublisherDomainRow[] = [...(seed.publisherDomains ?? [])];
+  const feeds: FeedCatalogEntry[] = (seed.feeds ?? []).map((entry) => ({ ...entry }));
+  const feedHealth: FeedHealthRow[] = [];
   let nextId = 1;
   const id = (prefix: string) => `${prefix}-${String(nextId++).padStart(4, "0")}`;
 
@@ -476,6 +551,8 @@ export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): Memor
     polls,
     observations,
     publisherDomains,
+    feeds,
+    feedHealth,
 
     async listActiveSources() {
       return sources.filter((source) => source.is_active).sort((a, b) => a.name.localeCompare(b.name));
@@ -515,9 +592,9 @@ export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): Memor
       return [...publisherDomains];
     },
 
-    async listRecentSignals(personId, dataSourceId, since) {
+    async listRecentSignals(personId, dataSourceIds, since) {
       return signals
-        .filter((s) => s.personId === personId && s.dataSourceId === dataSourceId && s.occurredAt.getTime() >= since.getTime() && s.rawPayload.kind !== "metric")
+        .filter((s) => s.personId === personId && dataSourceIds.includes(s.dataSourceId) && s.occurredAt.getTime() >= since.getTime() && s.rawPayload.kind !== "metric")
         .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime() || a.id.localeCompare(b.id))
         .map((s) => ({ id: s.id, dedupeKey: s.dedupeKey ?? null, headline: s.headline, outlet: typeof s.rawPayload.outlet === "string" ? s.rawPayload.outlet : null, tier: s.tier, processed: s.processed, occurredAt: s.occurredAt }));
     },
@@ -529,6 +606,25 @@ export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): Memor
       signal.headline = upgrade.headline;
       signal.rawPayload = upgrade.rawPayload;
       return true;
+    },
+
+    async listFeeds() {
+      return feeds
+        .map((entry) => ({ ...entry }))
+        .sort((a, b) => (a.lastFetchedAt?.getTime() ?? 0) - (b.lastFetchedAt?.getTime() ?? 0) || a.url.localeCompare(b.url));
+    },
+
+    async recordFeedHealth(rows) {
+      for (const row of rows) {
+        feedHealth.push(row);
+        const entry = feeds.find((feed) => feed.id === row.id);
+        if (!entry) continue;
+        entry.lastFetchedAt = row.fetchedAt;
+        entry.lastStatus = row.status;
+        entry.etag = row.etag;
+        entry.lastModified = row.lastModified;
+        entry.consecutiveFailures = row.consecutiveFailures;
+      }
     },
 
     async insertSnapshots(rows) {

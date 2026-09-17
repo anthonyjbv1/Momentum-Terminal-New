@@ -28,6 +28,9 @@ const INTERNAL_RELATIONS = [
   // Phase 9. metric_baseline_progress counts rows in the raw tables, so it is
   // internal on exactly the same terms as source_health: service role only.
   "metric_baseline_progress",
+  // Phase 13. The publisher feed catalogue and its health: configuration and
+  // counts the runner writes; nothing a user-facing path reads.
+  "publisher_feeds",
 ];
 const USER_ROLES = ["anon", "authenticated"];
 
@@ -258,43 +261,74 @@ describe("the registry", () => {
     // Exhaustive on purpose: a mapping that appears without being named here is
     // a person being polled that nobody decided to poll.
     expect(mappings).toEqual([
+      // Phase 13: every subject also reads the publisher feed catalogue, under
+      // their primary match term; the Google News search stays as the fallback.
+      { slug: "drake", source: "publisher_rss", identifier: "Drake" },
       { slug: "drake", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Drake%22") },
       { slug: "drake", source: "spotify", identifier: "3TVXtAsR1Inumwj472S9r4" },
       // Phase 10: a creator whose primary platform is Twitch, and an athlete on
       // a weekly schedule — two data shapes the first two subjects do not have.
+      { slug: "kai-cenat", source: "publisher_rss", identifier: "Kai Cenat" },
       { slug: "kai-cenat", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Kai+Cenat%22") },
       { slug: "kai-cenat", source: "twitch", identifier: "kaicenat" },
+      { slug: "mrbeast", source: "publisher_rss", identifier: "MrBeast" },
       { slug: "mrbeast", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22MrBeast%22") },
       { slug: "mrbeast", source: "youtube", identifier: "UCX6OQ3DkcsbYNE6H8uQQuVA" },
       { slug: "mrbeast", source: "youtube_comments", identifier: "UCX6OQ3DkcsbYNE6H8uQQuVA" },
       { slug: "patrick-mahomes", source: "apisports", identifier: "1197" },
+      { slug: "patrick-mahomes", source: "publisher_rss", identifier: "Patrick Mahomes" },
       { slug: "patrick-mahomes", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Patrick+Mahomes%22") },
     ]);
   });
 
-  it("keeps EVERY active source off the multiple of sixty, so the hourly cron never skips one", async () => {
+  it("keeps EVERY active source off the multiple of the cron period, so no fire ever skips one", async () => {
     // THE DEFECT THIS HOLDS SHUT. The runner skips a source when
-    // `minutes since last poll < poll_interval_minutes`. The hourly cron fires
-    // on the hour and the previous run's poll lands a few seconds after its own
-    // fire, so an hour later the check measures 59-point-something, not 60. Any
-    // interval that is an exact multiple of 60 loses that race every time and
-    // the source polls half as often as its interval claims — which is what rss,
-    // youtube and youtube_comments did, undetectably, from the moment the
-    // ingestion cron went on: a sample count rising at half speed looks exactly
-    // like a sample count rising.
+    // `minutes since last poll < poll_interval_minutes`. The cron fires on the
+    // period and the previous run's poll lands a few seconds after its own
+    // fire, so a period later the check measures a fraction less than the
+    // period. Any interval that is an exact multiple of the period loses that
+    // race every time and the source polls half as often as its interval
+    // claims — which is what rss, youtube and youtube_comments did at 60 on the
+    // hourly schedule, undetectably: a sample count rising at half speed looks
+    // exactly like a sample count rising.
     //
-    // 55 polls every hour. 175 polls every third hour, which is deliberate for a
-    // weekly sport on a 100-request daily quota. 60 or 180 would silently halve
-    // either. Every ACTIVE source is covered, not just the ones added last,
-    // because the next source registered at a tidy-looking 60 would reintroduce
-    // this in a form nothing on the dashboard reports.
+    // Phase 13 moved the schedule to every fifteen minutes. 10 polls on every
+    // fire; 40 every third (45 min), deliberate for a weekly sport; 55 every
+    // fourth (the hour), deliberate for the quota-bound YouTube reads and the
+    // weekly Twitch aggregates. 15, 30, 45 or 60 would silently halve any of
+    // them. Every ACTIVE source is covered, because the next source registered
+    // at a tidy-looking 15 would reintroduce this in a form nothing on the
+    // dashboard reports.
+    const CRON_PERIOD_MINUTES = 15;
     const active = await database.rows<{ name: string; poll_interval_minutes: number }>(
       "select name, poll_interval_minutes from public.data_sources where is_active order by name",
     );
-    expect(active.length).toBeGreaterThanOrEqual(5);
+    expect(active.length).toBeGreaterThanOrEqual(6);
     for (const source of active) {
-      expect(source.poll_interval_minutes % 60, `${source.name} polls every ${source.poll_interval_minutes} min, an exact multiple of 60`).not.toBe(0);
+      expect(source.poll_interval_minutes % CRON_PERIOD_MINUTES, `${source.name} polls every ${source.poll_interval_minutes} min, an exact multiple of ${CRON_PERIOD_MINUTES}`).not.toBe(0);
     }
+    const byName = Object.fromEntries(active.map((source) => [source.name, source.poll_interval_minutes]));
+    expect(byName).toMatchObject({ rss: 10, publisher_rss: 10, apisports: 40, youtube: 55, youtube_comments: 55, twitch: 55 });
+  });
+
+  it("registers every publisher feed under an allowed publisher of tier 1 to 3, with a topic and a mode", async () => {
+    const feeds = await database.rows<{ domain: string; url: string; mode: string; topics: string[]; tier: number | null; status: string | null }>(`
+      select f.domain, f.url, f.mode, f.topics, d.tier, d.status
+        from public.publisher_feeds f
+        left join public.publisher_domains d on d.domain = f.domain
+       where f.is_active
+       order by f.domain, f.url
+    `);
+    expect(feeds.length).toBeGreaterThanOrEqual(60);
+    for (const feed of feeds) {
+      expect(feed.status, `${feed.url}: ${feed.domain} is not on the allowlist`).toBe("allowed");
+      expect(feed.tier, `${feed.url}: ${feed.domain} tier`).toBeLessThanOrEqual(3);
+      expect(feed.topics.length, `${feed.url}: no topic`).toBeGreaterThan(0);
+      expect(["feed", "discover"], `${feed.url}: mode`).toContain(feed.mode);
+      expect(feed.url).toMatch(/^https:\/\//);
+    }
+    // A discovery row is a page to search, and there are known ones: the outlets that retired RSS are measured, not assumed.
+    expect(feeds.filter((feed) => feed.mode === "discover").map((feed) => feed.domain)).toEqual(expect.arrayContaining(["reuters.com", "apnews.com", "bloomberg.com"]));
   });
 
   it("declares Twitch and API-Sports as data, with every metric able to fill its baseline", async () => {

@@ -245,16 +245,40 @@ export interface BaselineRow {
   lastObservedAt: string | null;
 }
 
+/** One publisher feed of the Phase 13 catalogue, with what its last fetch found. Configuration and counts: no article text, no metric level. */
+export interface PublisherFeedRow {
+  id: string;
+  domain: string;
+  url: string;
+  section: string;
+  topics: string[];
+  mode: string;
+  isActive: boolean;
+  note: string | null;
+  lastFetchedAt: string | null;
+  lastStatus: string | null;
+  lastHttpStatus: number | null;
+  lastError: string | null;
+  itemCount: number | null;
+  datedCount: number | null;
+  describedCount: number | null;
+  matchedCount: number | null;
+  newestPublishedAt: string | null;
+  discoveredUrl: string | null;
+  consecutiveFailures: number;
+}
+
 export interface IngestionReport {
   sources: SourceHealthRow[];
   runs: Array<{ id: string; startedAt: string; finishedAt: string | null; trigger: string; forced: boolean; sourcesRun: number; signalsCreated: number; snapshotsRecorded: number; observations: number; errors: number; blockedDropped: number; duplicatesCollapsed: number }>;
   recentErrors: Array<{ at: string; source: string; person: string | null; reason: string }>;
   baselines: BaselineRow[];
+  feeds: PublisherFeedRow[];
 }
 
 export async function readIngestion(): Promise<IngestionReport> {
   const client = await adminClient();
-  const [sources, runs, errors, baselines] = await Promise.all([
+  const [sources, runs, errors, baselines, feeds] = await Promise.all([
     client.from("source_health").select("*").order("name"),
     client.from("ingest_runs").select("*").order("started_at", { ascending: false }).limit(RECENT_LIMIT),
     client
@@ -264,12 +288,34 @@ export async function readIngestion(): Promise<IngestionReport> {
       .order("finished_at", { ascending: false })
       .limit(RECENT_LIMIT),
     client.from("metric_baseline_progress").select("*"),
+    client.from("publisher_feeds").select("*").order("domain").order("section").order("url"),
   ]);
-  for (const [label, result] of Object.entries({ sources, runs, errors, baselines })) {
+  for (const [label, result] of Object.entries({ sources, runs, errors, baselines, feeds })) {
     if (result.error) throw new Error(`${label}: ${result.error.message}`);
   }
 
   return {
+    feeds: (feeds.data ?? []).map((row) => ({
+      id: row.id,
+      domain: row.domain,
+      url: row.url,
+      section: row.section,
+      topics: row.topics ?? [],
+      mode: row.mode,
+      isActive: row.is_active,
+      note: row.note,
+      lastFetchedAt: row.last_fetched_at,
+      lastStatus: row.last_status,
+      lastHttpStatus: row.last_http_status,
+      lastError: row.last_error,
+      itemCount: row.last_item_count,
+      datedCount: row.last_dated_count,
+      describedCount: row.last_described_count,
+      matchedCount: row.last_matched_count,
+      newestPublishedAt: row.last_newest_published_at,
+      discoveredUrl: row.discovered_url,
+      consecutiveFailures: Number(row.consecutive_failures ?? 0),
+    })),
     sources: (sources.data ?? []).map((row) => ({
       // source_health is a view, so the generator types every column nullable; the
       // three below are NOT NULL on data_sources and cannot actually be null.

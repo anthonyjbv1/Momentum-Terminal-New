@@ -36,6 +36,12 @@ import { ConnectorError, type ConnectorContext, type DataConnector, type MetricR
  */
 
 export const RSS_SOURCE_NAME = "rss";
+/**
+ * The story family the two news connectors share (Phase 13): a story the
+ * publisher's own feed delivered is the same story when the aggregator
+ * surfaces it later, so the runner deduplicates across both.
+ */
+export const NEWS_STORY_FAMILY = "news";
 
 export interface RssConnectorConfig {
   /** Newest items stored per poll. Default 30, at most 100. */
@@ -76,6 +82,8 @@ export interface FeedItem {
   outlet: string | null;
   /** The publisher's site as the feed names it (`<source url="...">` in Google News RSS, the source link in Atom), or null. */
   sourceUrl: string | null;
+  /** Whether the item carries a description or body beyond its headline. Read for feed health only; the text itself is never kept. */
+  hasDescription?: boolean;
 }
 
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_", textNodeName: "#text", cdataPropName: "#cdata", trimValues: true });
@@ -138,6 +146,7 @@ export function parseFeed(xml: string): { title: string | null; items: FeedItem[
           publishedAt: date(item.pubDate) ?? date(item["dc:date"]),
           outlet: text(item.source) ?? channelTitle,
           sourceUrl: attribute(item.source, "url"),
+          hasDescription: (text(item.description) ?? text(item["content:encoded"])) !== null,
         },
       ];
     });
@@ -163,6 +172,7 @@ export function parseFeed(xml: string): { title: string | null; items: FeedItem[
           publishedAt: date(entry.published) ?? date(entry.updated),
           outlet: text(source?.title) ?? feedTitle,
           sourceUrl: sourceLink ? text(sourceLink) : null,
+          hasDescription: (text(entry.summary) ?? text(entry.content)) !== null,
         },
       ];
     });
@@ -294,6 +304,7 @@ async function loadFeed(identifier: string, context: ConnectorContext): Promise<
 
 export const rssConnector: DataConnector = {
   name: RSS_SOURCE_NAME,
+  storyFamily: NEWS_STORY_FAMILY,
 
   async fetchForPerson(person, identifier, context) {
     if (typeof window !== "undefined") throw new Error("The RSS connector is server-only.");

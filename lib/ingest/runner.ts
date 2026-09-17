@@ -1,12 +1,12 @@
 import { connectorRegistry, type ConnectorRegistry } from "@/lib/connectors/registry";
-import type { ConnectorContext, ExcludedItem, MetricReading, RawSignal, SnapshotStore } from "@/lib/connectors/types";
+import type { ConnectorContext, ExcludedItem, FeedCatalog, FeedCatalogEntry, FeedHealthReport, MetricReading, RawSignal, SnapshotStore } from "@/lib/connectors/types";
 import type { DataSource } from "@/types";
 import type { Json } from "@/types/database";
 
 import { admitEvents, recentSince } from "./events";
 import { deriveMetric, metricSignal, observeMetric, readMetricConfigs, type MetricConfigs, type MetricObservation, type SnapshotPoint } from "./metrics";
 import { buildPublisherPolicy } from "./publishers";
-import type { IngestStore, IngestTrigger, ObservationRow, PollRow, PollStatus, SignalRow, SnapshotRow } from "./store";
+import type { FeedHealthRow, IngestStore, IngestTrigger, ObservationRow, PollRow, PollStatus, SignalRow, SnapshotRow } from "./store";
 import { STORY_DEDUP_LOOKBACK_HOURS } from "./stories";
 
 /**
@@ -50,7 +50,7 @@ import { STORY_DEDUP_LOOKBACK_HOURS } from "./stories";
  */
 
 export interface IngestLogLine {
-  event: "run" | "source" | "poll" | "observation" | "signal" | "drop" | "collapse" | "upgrade" | "exclude";
+  event: "run" | "source" | "poll" | "observation" | "signal" | "drop" | "collapse" | "upgrade" | "exclude" | "feed";
   [key: string]: unknown;
 }
 
@@ -88,6 +88,8 @@ export interface SourceRunSummary {
   duplicatesCollapsed: number;
   /** Items refused as being about a different entity sharing the subject's name. */
   excludedFiltered: number;
+  /** For a source that reads the publisher feed catalogue: what this run's fetch of it found. */
+  feeds?: { fetched: number; ok: number; failed: number; discovered: number; matched: number };
 }
 
 export interface IngestError {
@@ -218,7 +220,10 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     });
   };
 
-  let activeSources = await store.listActiveSources();
+  // Every active source, before the caller's filter: a story family spans the
+  // sources that are active, whether or not this run was asked to poll them.
+  const allActiveSources = await store.listActiveSources();
+  let activeSources = allActiveSources;
   if (requested) {
     const wanted = new Set(requested);
     activeSources = activeSources.filter((source) => wanted.has(source.name));
@@ -283,6 +288,29 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
       excludedFiltered: 0,
     };
 
+    // The story family. Sources whose events are copies of the same stories
+    // (the publisher's own feed and the aggregator's search over it) are
+    // deduplicated against each other, so one story is one signal however many
+    // doors it comes in through. A source that declares no family deduplicates
+    // against itself alone.
+    const familyIds = connector.storyFamily
+      ? allActiveSources.filter((candidate) => registry.get(candidate.name)?.storyFamily === connector.storyFamily).map((candidate) => candidate.id)
+      : [source.id];
+    if (!familyIds.includes(source.id)) familyIds.push(source.id);
+
+    // The publisher feed catalogue: loaded on first use, and what every fetch
+    // found is written back onto its row once the source has been polled, with
+    // how many of its items named a subject. Read by the connectors that share
+    // feeds; the others never ask for it.
+    const catalogue: { entries: FeedCatalogEntry[] | null } = { entries: null };
+    const feedReports = new Map<string, FeedHealthReport>();
+    const feedMatches = new Map<string, number>();
+    const feeds: FeedCatalog = {
+      list: async () => (catalogue.entries ??= await store.listFeeds()),
+      report: (health) => feedReports.set(health.id, health),
+      matched: (feedId, count) => feedMatches.set(feedId, (feedMatches.get(feedId) ?? 0) + count),
+    };
+
     for (const { person, externalIdentifier, config: personConfig } of mappings) {
       const pollStarted = Date.now();
       const pendingSnapshots: SnapshotRow[] = [];
@@ -303,6 +331,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         publishers,
         personConfig,
         exclude: (item) => excluded.push(item),
+        feeds,
       };
       const poll: Omit<PollRow, "status" | "reason" | "latencyMs" | "finishedAt"> = {
         runId,
@@ -348,7 +377,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         // already stored inside the lookback. Every drop and collapse is
         // logged with what it was dropped for or collapsed into.
         const since = recentSince(events, now, STORY_DEDUP_LOOKBACK_HOURS);
-        const recent = since ? await store.listRecentSignals(person.id, source.id, since) : [];
+        const recent = since ? await store.listRecentSignals(person.id, familyIds, since) : [];
         const admission = admitEvents({ events, person, sourceTier: source.tier, policy: publishers, recent });
         for (const { signal, publisher } of admission.blocked) {
           log({ event: "drop", run: runId, source: source.name, person: person.slug, reason: "blocked_domain", domain: publisher.domain, matched: publisher.matched, headline: signal.headline, dedupeKey: signal.dedupeKey ?? null });
@@ -524,6 +553,50 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         await store.recordPoll({ ...poll, status, reason, latencyMs, finishedAt });
       } catch (error) {
         errors.push({ source: source.name, person: person.slug, message: `poll log failed: ${errorMessage(error)}` });
+      }
+    }
+
+    // Feed health, once per source: every fetch the catalogue saw this run,
+    // logged and written back. A feed that keeps failing carries its streak so
+    // the connector can back off; any other outcome resets it.
+    if (feedReports.size > 0) {
+      const previous = new Map<string, FeedCatalogEntry>((catalogue.entries ?? []).map((entry) => [entry.id, entry]));
+      const rows: FeedHealthRow[] = [...feedReports.values()].map((health) => {
+        const failed = health.status === "error" || health.status === "not_feed";
+        return { ...health, matchedCount: feedMatches.get(health.id) ?? 0, consecutiveFailures: failed ? (previous.get(health.id)?.consecutiveFailures ?? 0) + 1 : 0 };
+      });
+      for (const row of rows) {
+        const entry = previous.get(row.id);
+        log({
+          event: "feed",
+          run: runId,
+          source: source.name,
+          feed: entry?.url ?? row.id,
+          domain: entry?.domain ?? null,
+          section: entry?.section ?? null,
+          mode: entry?.mode ?? null,
+          status: row.status,
+          httpStatus: row.httpStatus,
+          items: row.itemCount,
+          dated: row.datedCount,
+          described: row.describedCount,
+          matched: row.matchedCount,
+          newest: row.newestPublishedAt ? row.newestPublishedAt.toISOString() : null,
+          discovered: row.discoveredUrl,
+          error: row.error,
+        });
+      }
+      summary.feeds = {
+        fetched: rows.length,
+        ok: rows.filter((row) => row.status === "ok" || row.status === "not_modified").length,
+        failed: rows.filter((row) => row.status === "error" || row.status === "not_feed" || row.status === "empty" || row.status === "undated" || row.status === "no_feed_found").length,
+        discovered: rows.filter((row) => row.status === "discovered").length,
+        matched: rows.reduce((sum, row) => sum + row.matchedCount, 0),
+      };
+      try {
+        await store.recordFeedHealth(rows);
+      } catch (error) {
+        errors.push({ source: source.name, message: `feed health failed: ${errorMessage(error)}` });
       }
     }
 

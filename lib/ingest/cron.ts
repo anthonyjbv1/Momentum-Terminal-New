@@ -6,31 +6,35 @@ import type { IngestSummary } from "./runner";
  * The ingestion heartbeat — a DIFFERENT job from the Engine's, on its own
  * schedule behind its own flag.
  *
- * Vercel Cron invokes /api/ingest/cron hourly. Each invocation polls every
- * active source that is due, exactly as the manual /api/ingest does, and
- * advances no score: ingestion writes snapshots, observations and signals, and
- * the Engine is what turns a signal into a move. So this can run for days with
- * ENGINE_CRON_ENABLED false, filling the baselines, at no LLM cost.
+ * Vercel Cron invokes /api/ingest/cron every fifteen minutes (Phase 13; it was
+ * hourly before). Each invocation polls every active source that is DUE — each
+ * source keeps its own poll_interval_minutes, so a faster schedule polls the
+ * fast sources more often and leaves the quota-bound ones on their hour —
+ * exactly as the manual /api/ingest does, and advances no score: ingestion
+ * writes snapshots, observations and signals, and the Engine is what turns a
+ * signal into a move. So this can run for days with ENGINE_CRON_ENABLED false,
+ * filling the baselines, at no LLM cost, and a faster schedule costs nothing
+ * but function invocations.
  *
  * Two guards, in this order:
  *   1. the flag. INGEST_CRON_ENABLED must be exactly "true". Checked BEFORE
  *      authentication and before any work, so the endpoint answers honestly
  *      without a secret and can do nothing at all while disabled.
- *   2. overlap. An hourly poll of several sources can outlive its hour if an
- *      upstream is slow. A run still in flight (an ingest_runs row with no
- *      finished_at, started inside the staleness window) makes the next
- *      invocation skip rather than poll everything a second time. Past the
- *      window a run is presumed dead — a crashed invocation never closes its
- *      row — and no longer blocks.
+ *   2. overlap. A run still in flight (an ingest_runs row with no finished_at,
+ *      started inside the staleness window) makes the next invocation skip
+ *      rather than poll everything a second time. Past the window a run is
+ *      presumed dead — a crashed invocation never closes its row — and no
+ *      longer blocks.
  */
 
 export const INGEST_CRON_DEFAULTS = {
   /**
    * How long an unfinished run blocks the next invocation. Above the route's
    * maxDuration (60 s), so a run that is genuinely still going always wins;
-   * below the hourly schedule, so one crash costs at most one poll.
+   * below the fifteen-minute schedule, so a crashed run blocks no scheduled
+   * poll at all: by the next fire its row is already past the window.
    */
-  staleAfterMinutes: 15,
+  staleAfterMinutes: 10,
 };
 
 export interface IngestCronResult {
