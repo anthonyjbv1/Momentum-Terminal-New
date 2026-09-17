@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makePerson, makeSource } from "@/lib/__tests__/fixtures";
 
 import {
+  GAME_PASSING_YARDS_METRIC,
   SEASON_PASSING_YARDS_SNAPSHOT,
   apisportsConnector,
   envelopeErrors,
+  isExcludedStage,
   parseStatValue,
   readApiSportsConfig,
   readGame,
@@ -15,7 +17,7 @@ import {
   seasonFor,
 } from "./apisports";
 
-const NOW = new Date("2026-11-10T12:00:00.000Z");
+const NOW = new Date("2026-09-17T12:00:00.000Z");
 const person = makePerson({ slug: "patrick-mahomes", display_name: "Patrick Mahomes" });
 const PLAYER = "1197";
 const HOST = "v1.american-football.api-sports.io";
@@ -28,20 +30,22 @@ interface Call {
 interface Options {
   plan?: string;
   requests?: { current: number; limit_day: number };
-  /** Replaces the whole statistics response array. */
+  /** Replaces the whole season statistics response array. */
   statistics?: unknown[];
   games?: unknown[];
+  /** Per-game statistics responses by game id. */
+  gameStats?: Record<string, unknown[]>;
   /** An errors payload for the named path fragment, in either shape API-Sports uses. */
   errorsOn?: { path: string; errors: unknown };
   status?: number;
 }
 
 /**
- * The statistics entry exactly as the American Football host returned it for
- * player 1197 on 2026-09-17: named groups of name/value pairs, values as
- * strings with thousands separators, "yards" repeated across groups.
+ * The season statistics entry exactly as the host returned it for player
+ * 1197 on 2026-09-17: named groups of name/value pairs, values as strings
+ * with thousands separators, "yards" repeated across groups.
  */
-function grouped(passingYards: string | null = "3,587") {
+function seasonEntry(passingYards: string | null = "3,587") {
   return {
     player: { id: 1197, name: "Patrick Mahomes" },
     teams: [
@@ -68,22 +72,63 @@ function grouped(passingYards: string | null = "3,587") {
   };
 }
 
-const STATISTICS = [grouped()];
+const STATISTICS = [seasonEntry()];
 
+/** The games list as the host returned it for team 17, season 2026 (abridged): three preseason, one regular-season result, one scheduled. */
+function game(id: number, stage: string, week: string, date: string, time: string, timestamp: number | undefined, short: string, home: [number, string, number | null], away: [number, string, number | null]) {
+  return {
+    game: { id, stage, week, date: { timezone: "UTC", date, time, timestamp }, venue: { name: "x", city: "y" }, status: { short, long: short === "FT" ? "Finished" : "Not Started", timer: null } },
+    league: { id: 1, name: "NFL", season: "2026" },
+    teams: { home: { id: home[0], name: home[1] }, away: { id: away[0], name: away[1] } },
+    scores: { home: { total: home[2] }, away: { total: away[2] } },
+  };
+}
+const KC: [number, string] = [17, "Kansas City Chiefs"];
 const GAMES = [
-  {
-    game: { id: 9001, date: { date: "2026-11-09T18:00:00+00:00" }, status: { short: "FT" } },
-    teams: { home: { id: 17, name: "Kansas City Chiefs" }, away: { id: 9, name: "Denver Broncos" } },
-    scores: { home: { total: 27 }, away: { total: 20 } },
-  },
-  {
-    game: { id: 9002, date: { date: "2026-11-16T18:00:00+00:00" }, status: { short: "NS" } },
-    teams: { home: { id: 4, name: "Buffalo Bills" }, away: { id: 17, name: "Kansas City Chiefs" } },
-    scores: { home: { total: null }, away: { total: null } },
-  },
+  game(21477, "Pre Season", "Week 1", "2026-08-15", "20:00", 1786824000, "FT", [...KC, 12], [31, "Los Angeles Rams", 20]),
+  game(21508, "Pre Season", "Week 3", "2026-08-29", "20:00", undefined, "FT", [...KC, 9], [28, "Seattle Seahawks", 9]),
+  game(21528, "Regular Season", "Week 1", "2026-09-15", "20:00", undefined, "FT", [...KC, 31], [9, "Denver Broncos", 10]),
+  game(21543, "Regular Season", "Week 2", "2026-09-21", "20:00", undefined, "NS", [...KC, null], [12, "Indianapolis Colts", null]),
 ];
+const WEEK1_KICKOFF = "2026-09-15T20:00:00.000Z";
 
-/** An API-Sports double: one envelope shape, three paths, recorded calls. */
+/** Per-game player statistics for game 21528, as the host returned them: groups of PLAYERS, one entry per team. */
+function mahomesLine(yards: string = "184") {
+  return {
+    player: { id: 1197, name: "Patrick Mahomes" },
+    statistics: [
+      { name: "comp att", value: "15/27" },
+      { name: "yards", value: yards },
+      { name: "average", value: "6.8" },
+      { name: "passing touch downs", value: "2" },
+      { name: "interceptions", value: "1" },
+      { name: "sacks", value: "2-12" },
+      { name: "rating", value: "50.2" },
+      { name: "two pt", value: "0" },
+    ],
+  };
+}
+function gameStats(yards: string | null = "184", { withMahomes = true }: { withMahomes?: boolean } = {}) {
+  return [
+    {
+      team: { id: 17, name: "Kansas City Chiefs" },
+      groups: [
+        { name: "Passing", players: withMahomes ? [mahomesLine(yards as string)] : [{ player: { id: 900, name: "Gardner Minshew" }, statistics: [{ name: "yards", value: "41" }] }] },
+        {
+          name: "Rushing",
+          players: [
+            ...(withMahomes ? [{ player: { id: 1197, name: "Patrick Mahomes" }, statistics: [{ name: "total rushes", value: "7" }, { name: "yards", value: "23" }] }] : []),
+            { player: { id: 555, name: "Isiah Pacheco" }, statistics: [{ name: "total rushes", value: "18" }, { name: "yards", value: "88" }] },
+          ],
+        },
+      ],
+    },
+    { team: { id: 9, name: "Denver Broncos" }, groups: [{ name: "Passing", players: [{ player: { id: 777, name: "Bo Nix" }, statistics: [{ name: "yards", value: "201" }] }] }] },
+  ];
+}
+const GAME_STATS: Record<string, unknown[]> = { "21528": gameStats() };
+
+/** An API-Sports double: one envelope shape, four paths, recorded calls. */
 function apisportsFetch(options: Options = {}) {
   const calls: Call[] = [];
   const impl: typeof fetch = async (input, init) => {
@@ -104,20 +149,27 @@ function apisportsFetch(options: Options = {}) {
       return envelope([{ subscription: { plan: options.plan ?? "Free" }, requests: options.requests ?? { current: 12, limit_day: 100 } }], "status");
     }
     if (url.includes("/players/statistics")) return envelope(options.statistics ?? STATISTICS, "players/statistics");
+    if (url.includes("/games/statistics/players")) {
+      const id = new URL(url).searchParams.get("id") ?? "";
+      return envelope((options.gameStats ?? GAME_STATS)[id] ?? [], "games/statistics/players");
+    }
     if (url.includes("/games")) return envelope(options.games ?? GAMES, "games");
     throw new Error(`unexpected url ${url}`);
   };
-  return Object.assign(impl, { calls });
+  return Object.assign(impl, { calls, urls: (fragment: string) => calls.filter((call) => call.url.includes(fragment)).map((call) => call.url) });
 }
 
-const context = (fetch: typeof globalThis.fetch, options: { config?: Record<string, unknown>; latest?: number | null } = {}) => {
-  const recorded: Array<{ metricKey: string; value: number }> = [];
+const context = (fetch: typeof globalThis.fetch, options: { config?: Record<string, unknown>; latest?: Record<string, { value: number; recordedAt: Date }> } = {}) => {
+  const recorded: Array<{ metricKey: string; value: number; recordedAt?: Date }> = [];
   return {
     source: makeSource({ name: "apisports" }),
     config: (options.config ?? {}) as Record<string, never>,
     snapshots: {
-      latest: async (metricKey: string) => (options.latest === undefined || options.latest === null ? null : { metricKey, value: options.latest, recordedAt: NOW }),
-      record: (metricKey: string, value: number) => void recorded.push({ metricKey, value }),
+      latest: async (metricKey: string) => {
+        const hit = options.latest?.[metricKey];
+        return hit ? { metricKey, value: hit.value, recordedAt: hit.recordedAt } : null;
+      },
+      record: (metricKey: string, value: number, recordedAt?: Date) => void recorded.push(recordedAt ? { metricKey, value, recordedAt } : { metricKey, value }),
     },
     now: NOW,
     fetch,
@@ -137,7 +189,7 @@ describe("envelopeErrors", () => {
 });
 
 describe("seasonFor", () => {
-  it("names a season for the year it starts in, so January belongs to the previous one", () => {
+  it("names a season for the year it starts in (verified: season=2026 lists the 2026-27 fixtures, 2027 is empty), so January belongs to the previous one", () => {
     expect(seasonFor(new Date("2026-09-15T00:00:00Z"), null)).toBe(2026);
     expect(seasonFor(new Date("2026-12-31T00:00:00Z"), null)).toBe(2026);
     expect(seasonFor(new Date("2027-01-20T00:00:00Z"), null)).toBe(2026);
@@ -160,9 +212,9 @@ describe("parseStatValue", () => {
     expect(parseStatValue(342)).toBe(342);
   });
 
-  it("refuses anything that is not that grammar, and never returns a partial number", () => {
-    // The failure this guards against: a lenient parser reading "3,587" as 3.
-    for (const bad of ["3,58", "3,5878", ",587", "3,,587", "3 587", "3587 yards", "", "  ", "n/a", "NaN", "Infinity", "1e3", "0x10", "--10"]) {
+  it("refuses anything that is not that grammar — composites included — and never returns a partial number", () => {
+    // The failure this guards against: a lenient parser reading "3,587" as 3, or "15/27" as 15.
+    for (const bad of ["3,58", "3,5878", ",587", "3,,587", "3 587", "3587 yards", "15/27", "2-12", "", "  ", "n/a", "NaN", "Infinity", "1e3", "0x10", "--10"]) {
       expect(parseStatValue(bad), JSON.stringify(bad)).toBeNull();
     }
     expect(parseStatValue(null)).toBeNull();
@@ -181,54 +233,92 @@ describe("readStatistic", () => {
     expect(readStatistic({}, ["passing.yards"])).toBeNull();
     expect(readStatistic(undefined, ["passing.yards"])).toBeNull();
     // Array indices in a dotted path, which is how the team id is reached in the real shape.
-    expect(readStatistic(grouped(), ["team.id", "teams.0.team.id"])).toBe(17);
+    expect(readStatistic(seasonEntry(), ["team.id", "teams.0.team.id"])).toBe(17);
   });
 });
 
 describe("readGroupedStatistic", () => {
-  it("addresses a statistic by group AND name: 'yards' is passing yards only under Passing", () => {
-    expect(readGroupedStatistic(grouped(), { group: "Passing", name: "yards" })).toEqual({ status: "ok", value: 3587, raw: "3,587" });
-    expect(readGroupedStatistic(grouped(), { group: "Rushing", name: "yards" })).toEqual({ status: "ok", value: 422, raw: "422" });
-    expect(readGroupedStatistic(grouped(), { group: "Receiving", name: "receiving yards" })).toEqual({ status: "ok", value: -10, raw: "-10" });
-    // Case does not matter, the host's own spelling does.
-    expect(readGroupedStatistic(grouped(), { group: "passing", name: "YARDS" })).toMatchObject({ status: "ok", value: 3587 });
+  it("reads the SEASON shape (groups of statistics) by group AND name: 'yards' is passing yards only under Passing", () => {
+    expect(readGroupedStatistic(seasonEntry(), { group: "Passing", name: "yards" })).toEqual({ status: "ok", value: 3587, raw: "3,587" });
+    expect(readGroupedStatistic(seasonEntry(), { group: "Rushing", name: "yards" })).toEqual({ status: "ok", value: 422, raw: "422" });
+    expect(readGroupedStatistic(seasonEntry(), { group: "Receiving", name: "receiving yards" })).toEqual({ status: "ok", value: -10, raw: "-10" });
+    // Case does not matter, the host's own spelling does. A player id is harmless where there are no players.
+    expect(readGroupedStatistic(seasonEntry(), { group: "passing", name: "YARDS" }, 1197)).toMatchObject({ status: "ok", value: 3587 });
   });
 
-  it("reports an unparseable value as such, and a missing one with what is there", () => {
-    expect(readGroupedStatistic(grouped("3,58"), { group: "Passing", name: "yards" })).toEqual({ status: "unparseable", raw: "3,58" });
-    expect(readGroupedStatistic(grouped(null), { group: "Passing", name: "yards" })).toEqual({ status: "unparseable", raw: null });
-    expect(readGroupedStatistic(grouped(), { group: "Passing", name: "air yards" })).toEqual({
+  it("reads the PER-GAME shape (groups of players) with the player id selecting the line — the same lookup, no special case", () => {
+    const [chiefs, broncos] = gameStats();
+    expect(readGroupedStatistic(chiefs, { group: "Passing", name: "yards" }, 1197)).toEqual({ status: "ok", value: 184, raw: "184" });
+    expect(readGroupedStatistic(chiefs, { group: "Rushing", name: "yards" }, "1197")).toEqual({ status: "ok", value: 23, raw: "23" });
+    expect(readGroupedStatistic(chiefs, { group: "Rushing", name: "yards" }, 555)).toEqual({ status: "ok", value: 88, raw: "88" });
+    // The other team's sheet does not list him at all.
+    expect(readGroupedStatistic(broncos, { group: "Passing", name: "yards" }, 1197)).toEqual({ status: "missing", groups: ["Passing"], names: [], playerSeen: false });
+    // Composite figures are refused, never partially read.
+    expect(readGroupedStatistic(chiefs, { group: "Passing", name: "comp att" }, 1197)).toEqual({ status: "unparseable", raw: "15/27" });
+    expect(readGroupedStatistic(chiefs, { group: "Passing", name: "sacks" }, 1197)).toEqual({ status: "unparseable", raw: "2-12" });
+  });
+
+  it("reports an unparseable value as such, and a missing one with what is there and whether the player appeared", () => {
+    expect(readGroupedStatistic(seasonEntry("3,58"), { group: "Passing", name: "yards" })).toEqual({ status: "unparseable", raw: "3,58" });
+    expect(readGroupedStatistic(seasonEntry(null), { group: "Passing", name: "yards" })).toEqual({ status: "unparseable", raw: null });
+    expect(readGroupedStatistic(seasonEntry(), { group: "Passing", name: "air yards" })).toEqual({
       status: "missing",
       groups: ["Passing", "Rushing", "Receiving"],
       names: ["passing attempts", "completions", "completion pct", "yards", "yards per game", "passing touchdowns pct", "quaterback rating"],
+      playerSeen: false,
     });
-    expect(readGroupedStatistic(grouped(), { group: "Kicking", name: "yards" })).toEqual({ status: "missing", groups: ["Passing", "Rushing", "Receiving"], names: [] });
-    expect(readGroupedStatistic({ passing: { yards: 342 } }, { group: "Passing", name: "yards" })).toEqual({ status: "missing", groups: [], names: [] });
-    expect(readGroupedStatistic(undefined, { group: "Passing", name: "yards" })).toEqual({ status: "missing", groups: [], names: [] });
+    expect(readGroupedStatistic(gameStats()[0], { group: "Passing", name: "air yards" }, 1197)).toEqual({
+      status: "missing",
+      groups: ["Passing", "Rushing"],
+      names: ["comp att", "yards", "average", "passing touch downs", "interceptions", "sacks", "rating", "two pt"],
+      playerSeen: true,
+    });
+    expect(readGroupedStatistic({ passing: { yards: 342 } }, { group: "Passing", name: "yards" })).toEqual({ status: "missing", groups: [], names: [], playerSeen: false });
+    expect(readGroupedStatistic(undefined, { group: "Passing", name: "yards" })).toEqual({ status: "missing", groups: [], names: [], playerSeen: false });
   });
 });
 
 describe("readGame", () => {
-  it("reads the nested American Football shape and the hoisted one alike", () => {
-    expect(readGame(GAMES[0])?.id).toBe("9001");
-    expect(readGame({ id: 77, date: "2026-11-09T18:00:00Z", status: { short: "FT" }, scores: { home: { total: 3 }, away: { total: 0 } } })?.id).toBe("77");
+  it("reads the host's shape: the unix timestamp first, else date + time in UTC, else the bare date; stage and week carried", () => {
+    const stamped = readGame(GAMES[0])!;
+    expect(stamped).toMatchObject({ id: "21477", finished: true, stage: "Pre Season", week: "Week 1" });
+    expect(stamped.date.toISOString()).toBe("2026-08-15T20:00:00.000Z");
+    expect(readGame(GAMES[2])!.date.toISOString()).toBe(WEEK1_KICKOFF);
+    expect(readGame({ id: 77, date: "2026-11-09T18:00:00Z", status: { short: "FT" }, scores: { home: { total: 3 }, away: { total: 0 } } })).toMatchObject({ id: "77", stage: null, week: null });
     expect(readGame({ id: 78, date: { timestamp: 1_793_000_000 }, status: { short: "FT" } })?.id).toBe("78");
+    expect(readGame({ game: { id: 79, date: { date: "2026-09-15" }, status: { short: "FT" } } })!.date.toISOString()).toBe("2026-09-15T00:00:00.000Z");
   });
 
   it("marks only completed games finished, and refuses one it cannot date", () => {
-    expect(readGame(GAMES[0])?.finished).toBe(true);
-    expect(readGame(GAMES[1])?.finished).toBe(false);
+    expect(readGame(GAMES[2])?.finished).toBe(true);
+    expect(readGame(GAMES[3])?.finished).toBe(false);
     expect(readGame({ id: 1, status: { short: "FT" } })).toBeNull();
     expect(readGame({ date: "2026-11-09T18:00:00Z" })).toBeNull();
   });
 });
 
 describe("readApiSportsConfig", () => {
-  it("reads the grouped lookup from the row and falls back to the verified default", () => {
-    expect(readApiSportsConfig({}).passing_yards_stat).toEqual({ group: "Passing", name: "yards" });
+  it("reads the lookups and stages from the row and falls back to the verified defaults", () => {
+    const defaults = readApiSportsConfig({});
+    expect(defaults.passing_yards_stat).toEqual({ group: "Passing", name: "yards" });
+    expect(defaults.game_passing_yards_stat).toEqual({ group: "Passing", name: "yards" });
+    expect(defaults.paths.game_statistics).toBe("/games/statistics/players?id={game}");
+    expect(defaults.excluded_stages).toEqual(["Pre Season"]);
     expect(readApiSportsConfig({ passing_yards_stat: { group: " Passing ", name: "yards per game" } }).passing_yards_stat).toEqual({ group: "Passing", name: "yards per game" });
+    // The per-game lookup follows the season one unless set on its own.
+    expect(readApiSportsConfig({ passing_yards_stat: { group: "Passing", name: "yds" } }).game_passing_yards_stat).toEqual({ group: "Passing", name: "yds" });
+    expect(readApiSportsConfig({ game_passing_yards_stat: { group: "QB", name: "yards" } }).game_passing_yards_stat).toEqual({ group: "QB", name: "yards" });
     expect(readApiSportsConfig({ passing_yards_stat: "Passing.yards" }).passing_yards_stat).toEqual({ group: "Passing", name: "yards" });
-    expect(readApiSportsConfig({ passing_yards_stat: { group: "", name: "yards" } }).passing_yards_stat).toEqual({ group: "Passing", name: "yards" });
+    expect(readApiSportsConfig({ excluded_stages: [] }).excluded_stages).toEqual([]);
+    expect(readApiSportsConfig({ excluded_stages: "Pre Season" }).excluded_stages).toEqual(["Pre Season"]);
+  });
+
+  it("matches stages ignoring case, spaces and punctuation", () => {
+    const config = readApiSportsConfig({});
+    for (const spelling of ["Pre Season", "Preseason", "PRE-SEASON", "pre season"]) expect(isExcludedStage(spelling, config), spelling).toBe(true);
+    expect(isExcludedStage("Regular Season", config)).toBe(false);
+    expect(isExcludedStage("Post Season", config)).toBe(false);
+    expect(isExcludedStage(null, config)).toBe(false);
   });
 });
 
@@ -263,90 +353,170 @@ describe("apisportsConnector", () => {
   it("probes /status once and caches it, rather than spending the daily quota every poll", async () => {
     const fetch = apisportsFetch();
     await apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch));
-    await apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch, { latest: 3587 }));
-    expect(fetch.calls.filter((call) => call.url.includes("/status"))).toHaveLength(1);
+    await apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch));
+    expect(fetch.urls("/status")).toHaveLength(1);
   });
 
-  it("substitutes the player and season into the configured paths", async () => {
+  it("substitutes the player, season, team and game into the configured paths", async () => {
     const fetch = apisportsFetch();
     await apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch));
-    expect(fetch.calls.some((call) => call.url === `https://${HOST}/players/statistics?id=1197&season=2026`)).toBe(true);
+    expect(fetch.urls("/players/statistics")).toEqual([`https://${HOST}/players/statistics?id=1197&season=2026`]);
+    expect(fetch.urls("/games?")).toEqual([`https://${HOST}/games?season=2026&team=17`]);
+    expect(fetch.urls("/games/statistics/players")).toEqual([`https://${HOST}/games/statistics/players?id=21528`]);
   });
 
-  it("reads the season passing-yards total from the grouped shape, '3,587' as 3587, and snapshots it RAW: no metric reading", async () => {
-    const fetch = apisportsFetch();
-    const ctx = context(fetch);
-    expect(await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx)).toEqual([]);
-    expect(ctx.recorded).toEqual([{ metricKey: SEASON_PASSING_YARDS_SNAPSHOT, value: 3587 }]);
+  describe("the season total", () => {
+    it("is read from the grouped shape, '3,587' as 3587, and snapshotted RAW: never a metric reading", async () => {
+      const ctx = context(apisportsFetch());
+      const readings = await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx);
+      expect(ctx.recorded).toContainEqual({ metricKey: SEASON_PASSING_YARDS_SNAPSHOT, value: 3587 });
+      expect(readings?.map((r) => r.metricKey)).not.toContain(SEASON_PASSING_YARDS_SNAPSHOT);
+    });
+
+    it("snapshots once per change, not once per poll", async () => {
+      const unchanged = context(apisportsFetch(), { latest: { [SEASON_PASSING_YARDS_SNAPSHOT]: { value: 3587, recordedAt: NOW }, [GAME_PASSING_YARDS_METRIC]: { value: 184, recordedAt: new Date(WEEK1_KICKOFF) } } });
+      await apisportsConnector.fetchMetrics?.(person, PLAYER, unchanged);
+      expect(unchanged.recorded).toEqual([]);
+      const moved = context(apisportsFetch(), { latest: { [SEASON_PASSING_YARDS_SNAPSHOT]: { value: 3301, recordedAt: NOW }, [GAME_PASSING_YARDS_METRIC]: { value: 184, recordedAt: new Date(WEEK1_KICKOFF) } } });
+      await apisportsConnector.fetchMetrics?.(person, PLAYER, moved);
+      expect(moved.recorded).toEqual([{ metricKey: SEASON_PASSING_YARDS_SNAPSHOT, value: 3587 }]);
+    });
+
+    it("fails LOUDLY on a value that is not a number, recording nothing, rather than reading '3,58' as 3", async () => {
+      const ctx = context(apisportsFetch({ statistics: [seasonEntry("3,58")] }));
+      await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, ctx)).rejects.toThrow(/carried a passing-yards value that is not a number: "3,58" \(group "Passing", statistic "yards"\)/);
+      expect(ctx.recorded).toEqual([]);
+      await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, context(apisportsFetch({ statistics: [seasonEntry(null)] })))).rejects.toThrow(/not a number: null/);
+    });
+
+    it("names the plan, the quota, the groups and statistics present, and the tried keys when it cannot be found", async () => {
+      const fetch = apisportsFetch({ statistics: [{ teams: [{ team: { id: 17 }, groups: [{ name: "Rushing", statistics: [{ name: "yards", value: "12" }] }] }] }], plan: "Free", requests: { current: 44, limit_day: 100 } });
+      const failure = apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch));
+      await expect(failure).rejects.toThrow(/carried no passing yards/);
+      await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch))).rejects.toThrow(/plan Free, 44 of 100 requests used today/);
+      await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch))).rejects.toThrow(/no statistic "yards" in group "Passing" \(groups present: Rushing; statistics in that group: none\)/);
+      await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch))).rejects.toThrow(/passing\.yards, passing_yards, yards/);
+    });
+
+    it("still reads a keyed shape through the dotted fallbacks", async () => {
+      const ctx = context(apisportsFetch({ statistics: [{ team: { id: 17 }, passing: { yards: 342 } }] }));
+      await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx);
+      expect(ctx.recorded).toContainEqual({ metricKey: SEASON_PASSING_YARDS_SNAPSHOT, value: 342 });
+    });
   });
 
-  it("snapshots once per change, not once per poll", async () => {
-    const fetch = apisportsFetch();
-    // The same total already snapshotted — a poll between two games.
-    const unchanged = context(fetch, { latest: 3587 });
-    await apisportsConnector.fetchMetrics?.(person, PLAYER, unchanged);
-    expect(unchanged.recorded).toEqual([]);
-    // A new game moved it.
-    const moved = context(fetch, { latest: 3301 });
-    await apisportsConnector.fetchMetrics?.(person, PLAYER, moved);
-    expect(moved.recorded).toEqual([{ metricKey: SEASON_PASSING_YARDS_SNAPSHOT, value: 3587 }]);
+  describe("the per-game metric (the Phase 10 definition of game_passing_yards)", () => {
+    it("reads the one finished regular-season game from the per-game endpoint and records it AT THE GAME'S DATE", async () => {
+      const fetch = apisportsFetch();
+      const ctx = context(fetch);
+      const readings = await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx);
+      expect(readings).toEqual([{ metricKey: GAME_PASSING_YARDS_METRIC, value: 184, recordedAt: new Date(WEEK1_KICKOFF) }]);
+      // Only the counted finished game was fetched: not the preseason ones, not the scheduled one.
+      expect(fetch.urls("/games/statistics/players")).toEqual([`https://${HOST}/games/statistics/players?id=21528`]);
+    });
+
+    it("never records a game twice: a game at or before the last recorded date is not fetched again", async () => {
+      const fetch = apisportsFetch();
+      const ctx = context(fetch, { latest: { [GAME_PASSING_YARDS_METRIC]: { value: 184, recordedAt: new Date(WEEK1_KICKOFF) } } });
+      expect(await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx)).toEqual([]);
+      expect(fetch.urls("/games/statistics/players")).toEqual([]);
+    });
+
+    it("backfills several finished games oldest first: older ones queued as snapshots at their dates, the newest observed", async () => {
+      const games = [
+        ...GAMES,
+        game(21543, "Regular Season", "Week 2", "2026-09-21", "20:00", undefined, "FT", [...KC, 24], [12, "Indianapolis Colts", 17]),
+        game(21550, "Regular Season", "Week 3", "2026-09-27", "20:00", undefined, "FT", [10, "Miami Dolphins", 20], [...KC, 27]),
+      ].filter((g) => g.game.id !== 21543 || g.game.status.short === "FT");
+      const stats = { "21528": gameStats("184"), "21543": gameStats("301"), "21550": gameStats("266") };
+      const fetch = apisportsFetch({ games, gameStats: stats });
+      const ctx = context(fetch);
+      const readings = await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx);
+      expect(fetch.urls("/games/statistics/players")).toEqual([
+        `https://${HOST}/games/statistics/players?id=21528`,
+        `https://${HOST}/games/statistics/players?id=21543`,
+        `https://${HOST}/games/statistics/players?id=21550`,
+      ]);
+      expect(ctx.recorded.filter((r) => r.metricKey === GAME_PASSING_YARDS_METRIC)).toEqual([
+        { metricKey: GAME_PASSING_YARDS_METRIC, value: 184, recordedAt: new Date(WEEK1_KICKOFF) },
+        { metricKey: GAME_PASSING_YARDS_METRIC, value: 301, recordedAt: new Date("2026-09-21T20:00:00.000Z") },
+      ]);
+      expect(readings).toEqual([{ metricKey: GAME_PASSING_YARDS_METRIC, value: 266, recordedAt: new Date("2026-09-27T20:00:00.000Z") }]);
+      // Next poll, with the newest recorded: nothing to fetch.
+      const again = context(apisportsFetch({ games, gameStats: stats }), { latest: { [GAME_PASSING_YARDS_METRIC]: { value: 266, recordedAt: new Date("2026-09-27T20:00:00.000Z") } } });
+      expect(await apisportsConnector.fetchMetrics?.(person, PLAYER, again)).toEqual([]);
+    });
+
+    it("refuses a composite value LOUDLY, naming the game and the value, and records nothing for it", async () => {
+      const ctx = context(apisportsFetch({ gameStats: { "21528": gameStats("15/27") } }));
+      await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, ctx)).rejects.toThrow(/game 21528 \(Week 1, 2026-09-15\) carried a passing-yards value for player 1197 that is not a plain number: "15\/27"/);
+      expect(ctx.recorded.some((r) => r.metricKey === GAME_PASSING_YARDS_METRIC)).toBe(false);
+    });
+
+    it("skips a game the player did not appear in, without error, and fails loudly when he appears but the statistic is not where config says", async () => {
+      const dnp = context(apisportsFetch({ gameStats: { "21528": gameStats("184", { withMahomes: false }) } }));
+      expect(await apisportsConnector.fetchMetrics?.(person, PLAYER, dnp)).toEqual([]);
+      const renamed = context(apisportsFetch(), { config: { game_passing_yards_stat: { group: "Passing", name: "air yards" } } });
+      await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, renamed)).rejects.toThrow(
+        /game 21528 \(Week 1, 2026-09-15\) lists player 1197 \(patrick-mahomes\) but carries no statistic "air yards" in group "Passing" for him \(groups present: Passing, Rushing; his statistics in that group: comp att, yards, average, passing touch downs, interceptions, sacks, rating, two pt\)/,
+      );
+    });
+
+    it("handles both grouped shapes through one config-driven lookup: the per-game name can differ from the season name", async () => {
+      const ctx = context(apisportsFetch(), { config: { game_passing_yards_stat: { group: "Rushing", name: "yards" } } });
+      const readings = await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx);
+      expect(readings).toEqual([{ metricKey: GAME_PASSING_YARDS_METRIC, value: 23, recordedAt: new Date(WEEK1_KICKOFF) }]);
+      expect(ctx.recorded).toContainEqual({ metricKey: SEASON_PASSING_YARDS_SNAPSHOT, value: 3587 });
+    });
   });
 
-  it("produces no game_passing_yards reading: the per-game figure waits on its source, and a cumulative total is never a metric", async () => {
-    const fetch = apisportsFetch();
-    const ctx = context(fetch);
-    const readings = (await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx)) ?? [];
-    expect(readings).toEqual([]);
-    expect(ctx.recorded.map((r) => r.metricKey)).not.toContain("game_passing_yards");
+  describe("preseason does not count", () => {
+    it("excludes preseason games from the metric AND from the events, by stage, whatever their date", async () => {
+      const fetch = apisportsFetch();
+      const signals = await apisportsConnector.fetchForPerson(person, PLAYER, context(fetch));
+      expect(signals.map((s) => s.dedupeKey)).toEqual(["apisports:game:21528"]);
+      const readings = await apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch));
+      expect(readings?.map((r) => r.value)).toEqual([184]);
+      expect(fetch.urls("/games/statistics/players")).not.toContain(`https://${HOST}/games/statistics/players?id=21477`);
+    });
+
+    it("is configuration: an empty exclusion list counts them, a different list excludes something else", async () => {
+      const all = await apisportsConnector.fetchForPerson(person, PLAYER, context(apisportsFetch(), { config: { excluded_stages: [] } }));
+      expect(all.map((s) => s.dedupeKey)).toEqual(["apisports:game:21528", "apisports:game:21508", "apisports:game:21477"]);
+      expect(all[1].headline).toBe("Week 3: Kansas City Chiefs and Seattle Seahawks finish 9-9.");
+      const inverted = await apisportsConnector.fetchForPerson(person, PLAYER, context(apisportsFetch(), { config: { excluded_stages: ["regular-season"] } }));
+      expect(inverted.map((s) => s.dedupeKey)).toEqual(["apisports:game:21508", "apisports:game:21477"]);
+    });
   });
 
-  it("fails LOUDLY on a value that is not a number, recording nothing, rather than reading '3,58' as 3", async () => {
-    const fetch = apisportsFetch({ statistics: [grouped("3,58")] });
-    const ctx = context(fetch);
-    await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, ctx)).rejects.toThrow(/carried a passing-yards value that is not a number: "3,58" \(group "Passing", statistic "yards"\)/);
-    expect(ctx.recorded).toEqual([]);
-    const nulled = apisportsFetch({ statistics: [grouped(null)] });
-    await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, context(nulled))).rejects.toThrow(/not a number: null/);
-  });
+  describe("events", () => {
+    it("emits one signal per FINISHED counted game, keyed on the game id, with the week in the headline and the stage in the payload", async () => {
+      const signals = await apisportsConnector.fetchForPerson(person, PLAYER, context(apisportsFetch()));
+      expect(signals).toHaveLength(1);
+      expect(signals[0].dedupeKey).toBe("apisports:game:21528");
+      expect(signals[0].headline).toBe("Week 1: Kansas City Chiefs beat Denver Broncos 31-10.");
+      expect(signals[0].occurredAt.toISOString()).toBe(WEEK1_KICKOFF);
+      expect(signals[0].rawPayload).toMatchObject({ kind: "game_result", game_id: "21528", stage: "Regular Season", week: "Week 1", home_score: 31, away_score: 10 });
+    });
 
-  it("honours a lookup from the row, so a renamed statistic is a config edit", async () => {
-    const fetch = apisportsFetch();
-    const ctx = context(fetch, { config: { passing_yards_stat: { group: "Passing", name: "yards per game" } } });
-    await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx);
-    expect(ctx.recorded).toEqual([{ metricKey: SEASON_PASSING_YARDS_SNAPSHOT, value: 256.2 }]);
-  });
+    it("fetches the games list once per poll, shared by the event and metric reads", async () => {
+      const fetch = apisportsFetch();
+      const ctx = context(fetch);
+      await apisportsConnector.fetchForPerson(person, PLAYER, ctx);
+      await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx);
+      expect(fetch.urls("/games?")).toHaveLength(1);
+    });
 
-  it("still reads a keyed shape through the dotted fallbacks", async () => {
-    const fetch = apisportsFetch({ statistics: [{ team: { id: 17 }, passing: { yards: 342 } }] });
-    const ctx = context(fetch);
-    await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx);
-    expect(ctx.recorded).toEqual([{ metricKey: SEASON_PASSING_YARDS_SNAPSHOT, value: 342 }]);
-  });
-
-  it("emits one signal per FINISHED game, keyed on the game id, and never for a scheduled one", async () => {
-    const fetch = apisportsFetch();
-    const signals = await apisportsConnector.fetchForPerson(person, PLAYER, context(fetch));
-    expect(signals).toHaveLength(1);
-    expect(signals[0].dedupeKey).toBe("apisports:game:9001");
-    expect(signals[0].headline).toBe("Kansas City Chiefs beat Denver Broncos 27-20.");
-    expect(signals[0].occurredAt.toISOString()).toBe("2026-11-09T18:00:00.000Z");
-    expect(signals[0].rawPayload).toMatchObject({ kind: "game_result", game_id: "9001", home_score: 27, away_score: 20 });
-  });
-
-  it("says so when a game was drawn", async () => {
-    const drawn = [{ ...GAMES[0], scores: { home: { total: 17 }, away: { total: 17 } } }];
-    const signals = await apisportsConnector.fetchForPerson(person, PLAYER, context(apisportsFetch({ games: drawn })));
-    expect(signals[0].headline).toBe("Kansas City Chiefs and Denver Broncos finish 17-17.");
-  });
-
-  it("takes the team id from config when set, and from the grouped statistics response otherwise", async () => {
-    const fromResponse = apisportsFetch();
-    await apisportsConnector.fetchForPerson(person, PLAYER, context(fromResponse));
-    expect(fromResponse.calls.some((call) => call.url.includes("team=17"))).toBe(true);
-
-    const fromConfig = apisportsFetch({ statistics: [{ passing: { yards: 1 } }] });
-    await apisportsConnector.fetchForPerson(person, PLAYER, context(fromConfig, { config: { team_id: 99 } }));
-    expect(fromConfig.calls.some((call) => call.url.includes("team=99"))).toBe(true);
+    it("takes the team id from config when set — and then spends no season-statistics request on the event read", async () => {
+      const fromConfig = apisportsFetch();
+      await apisportsConnector.fetchForPerson(person, PLAYER, context(fromConfig, { config: { team_id: 99 } }));
+      expect(fromConfig.urls("/games?")).toEqual([`https://${HOST}/games?season=2026&team=99`]);
+      expect(fromConfig.urls("/players/statistics")).toEqual([]);
+      // Otherwise from the grouped statistics response.
+      const fromResponse = apisportsFetch();
+      await apisportsConnector.fetchForPerson(person, PLAYER, context(fromResponse));
+      expect(fromResponse.urls("/games?")).toEqual([`https://${HOST}/games?season=2026&team=17`]);
+    });
   });
 
   it("treats a 200 carrying an errors payload as a failure, not as an empty result", async () => {
@@ -354,15 +524,6 @@ describe("apisportsConnector", () => {
     // errors. Reading that as "no games" is how a connector goes quiet.
     const fetch = apisportsFetch({ errorsOn: { path: "/status", errors: { token: "Invalid API key" } } });
     await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch))).rejects.toThrow(/refused \/status.*token: Invalid API key/);
-  });
-
-  it("names the plan, the quota, the groups and statistics present, and the tried keys when the statistic cannot be found", async () => {
-    const fetch = apisportsFetch({ statistics: [{ teams: [{ team: { id: 17 }, groups: [{ name: "Rushing", statistics: [{ name: "yards", value: "12" }] }] }] }], plan: "Free", requests: { current: 44, limit_day: 100 } });
-    const failure = apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch));
-    await expect(failure).rejects.toThrow(/carried no passing yards/);
-    await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch))).rejects.toThrow(/plan Free, 44 of 100 requests used today/);
-    await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch))).rejects.toThrow(/no statistic "yards" in group "Passing" \(groups present: Rushing; statistics in that group: none\)/);
-    await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, context(fetch))).rejects.toThrow(/passing\.yards, passing_yards, yards/);
   });
 
   it("says what to change when no team id can be resolved", async () => {

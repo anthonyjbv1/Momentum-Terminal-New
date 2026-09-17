@@ -23,10 +23,10 @@ import { ConnectorError, type DataConnector, type MetricReading, type RawSignal 
  *   expressed in language the sentiment path reads. One signal per game, keyed
  *   on the game id, so re-polling a finished game never stores it twice.
  *
- *   METRIC — per-game passing yards, and only that. It is sampled ONCE PER
- *   GAME rather than once per poll: the connector returns a reading only when
- *   the figure has moved, so the baseline's `samples` count games and not
- *   hours. Read at 1.8σ above his own recent form, that is a statement about a
+ *   METRIC — per-game passing yards, and only that, read from the PER-GAME
+ *   statistics endpoint one finished game at a time and recorded AT THE
+ *   GAME'S DATE, so the baseline's `samples` count games and not hours. Read
+ *   at 1.8σ above his own recent form, that is a statement about a
  *   performance rather than about the polling schedule.
  *
  * WHAT IS DELIBERATELY NOT REGISTERED. Season cumulative totals — passing
@@ -35,39 +35,45 @@ import { ConnectorError, type DataConnector, type MetricReading, type RawSignal 
  * and one spike per week, so the standard deviation collapses toward the sd
  * floor and every game emits a maximal signal. That is not a measurement; it is
  * an expensive way of saying "a game happened", which the event says better.
- * Season completion percentage has the mirror-image problem: as a running
- * aggregate over hundreds of attempts it barely moves off its own mean, so it
- * would never leave the band no matter how the games went.
+ * The season total IS kept as a raw snapshot (no baseline, no signal), once
+ * per change, because it costs nothing and is the fallback if the per-game
+ * endpoint ever goes away.
  *
- * REQUEST BUDGET. The free plan allows 100 requests per day. This connector
- * makes at most two per poll (player statistics, fixtures) plus a /status probe
- * cached per process, and its data_sources row carries a 175-minute poll
- * interval, so it polls eight times a day: about sixteen requests, against a
- * weekly event cadence that would not reward more.
+ * PRESEASON DOES NOT COUNT. A preseason game is not a performance sample —
+ * starters play a series or two — and a preseason tie is not news. Games
+ * whose `stage` is in config.excluded_stages ("Pre Season") produce neither
+ * the metric nor an event. Filtered, not down-weighted: there is no honest
+ * weight for a game that says nothing, and no mechanism for "half news".
+ *
+ * REQUEST BUDGET. Per poll: the /status probe (cached six hours), the season
+ * statistics, the games list (fetched once and shared by the event and metric
+ * reads), and one per-game statistics call for each finished game not yet
+ * recorded — one a week in season. Behind the 175-minute poll interval that
+ * is about thirty requests a day against a Pro plan's 7,500.
  *
  * THE PATHS ARE CONFIGURATION, AND WHY. api-sports.io is unreachable from the
  * network this was written on — every domain of theirs is refused by the egress
- * proxy — so the endpoint paths and statistic field names live in
- * data_sources.config: a path that turns out wrong is a one-row update, not a
- * deploy. Every read validates the envelope and throws naming what actually
- * came back, so a wrong guess writes the truth into source_polls instead of
- * going quiet.
+ * proxy — so the endpoint paths and statistic names live in data_sources.config:
+ * a name that turns out wrong is a one-row update, not a deploy. Every read
+ * validates the envelope and throws naming what actually came back.
  *
- * WHAT THE FIRST LIVE RESPONSE TAUGHT (2026-09-17, run by hand). Player
- * statistics on the American Football host are not keyed fields. They come
- * back as named GROUPS of name/value pairs:
+ * WHAT THE FIRST LIVE RESPONSES TAUGHT (2026-09-17, run by hand). Statistics
+ * on this host are never keyed fields; they are named GROUPS of name/value
+ * pairs, in two arrangements:
  *
- *   response[0].teams[0].groups[{ name: "Passing", statistics: [{ name: "yards", value: "3,587" }, ...] }, { name: "Rushing", statistics: [{ name: "yards", value: "422" }] }, ...]
+ *   season   response[0].teams[0].groups[{ name: "Passing", statistics: [{ name: "yards", value: "3,587" }] }]
+ *   per game response[team].groups[{ name: "Passing", players: [{ player: { id: 1197 }, statistics: [{ name: "yards", value: "184" }] }] }]
  *
- * Three things follow. A statistic is addressed by GROUP and NAME, never by a
- * dotted path — "yards" alone is ambiguous across Passing, Rushing and
- * Receiving. Values are STRINGS with thousands separators, so the parser
- * accepts exactly that grammar and refuses anything else out loud ("3,587" is
- * 3587; it is never 3). And the figure is the SEASON CUMULATIVE total, which
- * this connector deliberately does not register as a metric (see above): it
- * is snapshotted raw, once per change, under `season_passing_yards`, and the
- * per-game figure `game_passing_yards` waits on a decision recorded outside
- * this file — the per-game endpoint, or a difference of the cumulative.
+ * One reader handles both: a statistic is addressed by GROUP and NAME (never
+ * a dotted path — "yards" repeats under Passing, Rushing and Receiving), and
+ * when a group lists players the player id selects among them. Values are
+ * STRINGS with thousands separators ("3,587" is 3587, never 3), and some are
+ * composite ("15/27", "2-12"): the parser accepts exactly the numeric grammar
+ * and refuses the rest out loud, so a composite figure can never be
+ * registered by accident. The season endpoint carries LAST season's totals
+ * under the current season number until enough of the new season accrues;
+ * the games and per-game endpoints are current, which is one more reason the
+ * metric comes from the per-game read.
  */
 
 export const APISPORTS_SOURCE_NAME = "apisports";
@@ -78,8 +84,10 @@ const STATUS_CACHE_MS = 6 * 3_600_000;
 export interface ApiSportsPaths {
   /** Team fixtures. {season} and {team} are substituted. */
   games: string;
-  /** Player season / per-game statistics. {season} and {player} are substituted. */
+  /** Player season statistics. {season} and {player} are substituted. */
   player_statistics: string;
+  /** Every player's statistics for one game. {game} is substituted. */
+  game_statistics: string;
 }
 
 /** Where a statistic lives in the grouped shape: the group's name and the statistic's name, both matched case-insensitively. */
@@ -92,15 +100,19 @@ export interface ApiSportsConnectorConfig {
   host: string;
   /** Season year. Null means derive it from the calendar. */
   season: number | null;
-  /** API-Sports team id, when known; otherwise taken from the player's statistics response. */
+  /** API-Sports team id, when known; otherwise taken from the player's season statistics response. */
   team_id: number | null;
   paths: ApiSportsPaths;
-  /** The season passing-yards statistic in the grouped shape the American Football host returns. */
+  /** The season passing-yards total in the season endpoint's grouped shape. */
   passing_yards_stat: GroupedStatLookup;
+  /** The per-game passing yards in the per-game endpoint's grouped shape. Defaults to passing_yards_stat. */
+  game_passing_yards_stat: GroupedStatLookup;
   /** Dotted-path fallbacks for a keyed shape, tried in order when the grouped lookup finds nothing. */
   passing_yards_keys: string[];
-  /** How many finished games back to consider for events on one poll. */
+  /** How many finished games back to consider, for events and for the metric's first backfill, on one poll. */
   recent_games: number;
+  /** Game stages that count for nothing: no event, no metric. Matched ignoring case, spaces and punctuation. */
+  excluded_stages: string[];
 }
 
 const DEFAULT_CONFIG: ApiSportsConnectorConfig = {
@@ -110,14 +122,19 @@ const DEFAULT_CONFIG: ApiSportsConnectorConfig = {
   paths: {
     games: "/games?season={season}&team={team}",
     player_statistics: "/players/statistics?id={player}&season={season}",
+    game_statistics: "/games/statistics/players?id={game}",
   },
   passing_yards_stat: { group: "Passing", name: "yards" },
+  game_passing_yards_stat: { group: "Passing", name: "yards" },
   passing_yards_keys: ["passing.yards", "passing_yards", "yards"],
   recent_games: 5,
+  excluded_stages: ["Pre Season"],
 };
 
 /** The raw snapshot key of the season cumulative figure. Not a metric: no baseline, no signal, never registered. */
 export const SEASON_PASSING_YARDS_SNAPSHOT = "season_passing_yards";
+/** The one registered metric: passing yards in one game, recorded at the game's date. */
+export const GAME_PASSING_YARDS_METRIC = "game_passing_yards";
 
 function stringOr(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
@@ -125,6 +142,10 @@ function stringOr(value: unknown, fallback: string): string {
 
 function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function stringList(value: unknown, fallback: string[]): string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string") ? (value as string[]) : fallback;
 }
 
 function lookupOr(value: unknown, fallback: GroupedStatLookup): GroupedStatLookup {
@@ -137,8 +158,8 @@ function lookupOr(value: unknown, fallback: GroupedStatLookup): GroupedStatLooku
 
 export function readApiSportsConfig(config: Record<string, unknown>): ApiSportsConnectorConfig {
   const paths = (config.paths ?? {}) as Record<string, unknown>;
-  const keys = config.passing_yards_keys;
   const recent = numberOrNull(config.recent_games);
+  const seasonStat = lookupOr(config.passing_yards_stat, DEFAULT_CONFIG.passing_yards_stat);
   return {
     host: stringOr(config.host, DEFAULT_CONFIG.host),
     season: numberOrNull(config.season),
@@ -146,11 +167,13 @@ export function readApiSportsConfig(config: Record<string, unknown>): ApiSportsC
     paths: {
       games: stringOr(paths.games, DEFAULT_CONFIG.paths.games),
       player_statistics: stringOr(paths.player_statistics, DEFAULT_CONFIG.paths.player_statistics),
+      game_statistics: stringOr(paths.game_statistics, DEFAULT_CONFIG.paths.game_statistics),
     },
-    passing_yards_stat: lookupOr(config.passing_yards_stat, DEFAULT_CONFIG.passing_yards_stat),
-    passing_yards_keys:
-      Array.isArray(keys) && keys.length > 0 && keys.every((key) => typeof key === "string") ? (keys as string[]) : DEFAULT_CONFIG.passing_yards_keys,
+    passing_yards_stat: seasonStat,
+    game_passing_yards_stat: lookupOr(config.game_passing_yards_stat, seasonStat),
+    passing_yards_keys: stringList(config.passing_yards_keys, []).length > 0 ? stringList(config.passing_yards_keys, []) : DEFAULT_CONFIG.passing_yards_keys,
     recent_games: recent !== null && recent > 0 ? Math.floor(recent) : DEFAULT_CONFIG.recent_games,
+    excluded_stages: stringList(config.excluded_stages, DEFAULT_CONFIG.excluded_stages),
   };
 }
 
@@ -159,6 +182,17 @@ export function seasonFor(now: Date, configured: number | null): number {
   if (configured !== null) return configured;
   const year = now.getUTCFullYear();
   return now.getUTCMonth() <= 1 ? year - 1 : year;
+}
+
+/** "Pre Season", "Preseason", "PRE-SEASON" are one stage. */
+function stageKey(stage: string): string {
+  return stage.toLowerCase().replace(/[^a-z]/g, "");
+}
+
+export function isExcludedStage(stage: string | null, config: ApiSportsConnectorConfig): boolean {
+  if (stage === null) return false;
+  const key = stageKey(stage);
+  return config.excluded_stages.some((excluded) => stageKey(excluded) === key);
 }
 
 // ---------------------------------------------------------------------------
@@ -215,10 +249,13 @@ export interface ApiSportsStatus {
 }
 
 let cachedStatus: { at: number; host: string; status: ApiSportsStatus } | null = null;
+/** The games list, fetched once per poll and shared by the event and metric reads. */
+const gamesCache = new Map<string, Promise<ApiSportsGame[]>>();
 
 /** For tests. */
 export function resetApiSportsStatusCache(): void {
   cachedStatus = null;
+  gamesCache.clear();
 }
 
 /**
@@ -251,7 +288,7 @@ export async function fetchApiSportsStatus(
 // Reading the shapes
 // ---------------------------------------------------------------------------
 
-/** Follows a dotted path through a nested object, e.g. "passing.yards". */
+/** Follows a dotted path through a nested object, e.g. "passing.yards" or "teams.0.team.id". */
 function dig(source: unknown, path: string): unknown {
   return path.split(".").reduce<unknown>((value, segment) => {
     if (value && typeof value === "object" && segment in (value as Record<string, unknown>)) return (value as Record<string, unknown>)[segment];
@@ -262,10 +299,12 @@ function dig(source: unknown, path: string): unknown {
 /**
  * A statistic's value, strictly. The host sends numbers as strings, with
  * thousands separators ("3,587"), sometimes negative ("-10"), sometimes with a
- * decimal ("62.7"), sometimes null. This accepts exactly that grammar — an
- * optional sign, digits grouped in threes by commas or ungrouped, an optional
- * decimal part — strips the separators and converts. Anything else is null,
- * never a partial read: "3,587" is 3587, and it can never come back as 3.
+ * decimal ("62.7"), sometimes null, and sometimes COMPOSITE ("15/27" for
+ * completions/attempts, "2-12" for sacks/yards lost). This accepts exactly
+ * the numeric grammar — an optional sign, digits grouped in threes by commas
+ * or ungrouped, an optional decimal part — strips the separators and
+ * converts. Anything else is null, never a partial read: "3,587" is 3587 and
+ * can never come back as 3, and "15/27" can never be registered as 15.
  */
 const STAT_VALUE = /^-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$/;
 
@@ -291,35 +330,54 @@ export type GroupedStatResult =
   | { status: "ok"; value: number; raw: unknown }
   /** The statistic is there and its value is not a number: say so, never guess. */
   | { status: "unparseable"; raw: unknown }
-  /** No such group / name; what IS there, so the next config edit is informed. */
-  | { status: "missing"; groups: string[]; names: string[] };
+  /** No such group / name. What IS there, so the next config edit is informed, and whether the player appeared at all. */
+  | { status: "missing"; groups: string[]; names: string[]; playerSeen: boolean };
+
+interface RawStat {
+  name?: unknown;
+  value?: unknown;
+}
 
 interface RawGroup {
   name?: unknown;
-  statistics?: Array<{ name?: unknown; value?: unknown }>;
+  statistics?: RawStat[];
+  players?: Array<{ player?: { id?: unknown }; statistics?: RawStat[] }>;
 }
 
+/** The groups of one response entry, whether they sit under `teams[]` (season) or directly on the entry (per game). */
 function groupsOf(entry: unknown): RawGroup[] {
-  const teams = (entry as { teams?: unknown } | undefined)?.teams;
-  if (!Array.isArray(teams)) return [];
-  return teams.flatMap((team) => {
-    const groups = (team as { groups?: unknown } | undefined)?.groups;
-    return Array.isArray(groups) ? (groups as RawGroup[]) : [];
-  });
+  if (!entry || typeof entry !== "object") return [];
+  const own = (entry as { groups?: unknown }).groups;
+  const teams = (entry as { teams?: unknown }).teams;
+  const nested = Array.isArray(teams)
+    ? teams.flatMap((team) => {
+        const groups = (team as { groups?: unknown } | undefined)?.groups;
+        return Array.isArray(groups) ? (groups as RawGroup[]) : [];
+      })
+    : [];
+  return [...(Array.isArray(own) ? (own as RawGroup[]) : []), ...nested];
 }
 
 const same = (a: unknown, b: string) => typeof a === "string" && a.trim().toLowerCase() === b.trim().toLowerCase();
 
 /**
- * A statistic in the grouped shape: `teams[].groups[name].statistics[name].value`.
- * Group first, because names repeat across groups ("yards" is passing,
- * rushing and receiving yards depending on which one it is under).
+ * A statistic in either grouped shape. Group first, because names repeat
+ * across groups ("yards" is passing, rushing and receiving yards depending on
+ * which one it is under). When a group lists players, `playerId` selects the
+ * one whose statistics are read; a group without players is read directly.
  */
-export function readGroupedStatistic(entry: unknown, lookup: GroupedStatLookup): GroupedStatResult {
+export function readGroupedStatistic(entry: unknown, lookup: GroupedStatLookup, playerId?: string | number): GroupedStatResult {
   const groups = groupsOf(entry);
+  const wanted = playerId === undefined ? null : String(playerId);
+  const statsOf = (group: RawGroup): RawStat[] => {
+    if (!Array.isArray(group.players)) return group.statistics ?? [];
+    return group.players.filter((entry) => wanted === null || String(entry.player?.id) === wanted).flatMap((entry) => entry.statistics ?? []);
+  };
+  const playerSeen = groups.some((group) => Array.isArray(group.players) && group.players.some((entry) => wanted === null || String(entry.player?.id) === wanted));
+
   for (const group of groups) {
     if (!same(group.name, lookup.group)) continue;
-    for (const stat of group.statistics ?? []) {
+    for (const stat of statsOf(group)) {
       if (!same(stat.name, lookup.name)) continue;
       const value = parseStatValue(stat.value);
       return value === null ? { status: "unparseable", raw: stat.value } : { status: "ok", value, raw: stat.value };
@@ -329,7 +387,8 @@ export function readGroupedStatistic(entry: unknown, lookup: GroupedStatLookup):
   return {
     status: "missing",
     groups: groups.map((group) => (typeof group.name === "string" ? group.name : "?")),
-    names: matched.flatMap((group) => (group.statistics ?? []).map((stat) => (typeof stat.name === "string" ? stat.name : "?"))),
+    names: matched.flatMap((group) => statsOf(group).map((stat) => (typeof stat.name === "string" ? stat.name : "?"))),
+    playerSeen,
   };
 }
 
@@ -337,14 +396,24 @@ export interface ApiSportsGame {
   id: string;
   date: Date;
   finished: boolean;
+  /** "Pre Season", "Regular Season", "Post Season" — as the host names them; null when absent. */
+  stage: string | null;
+  /** "Week 1", "Wild Card", ... as the host names them; null when absent. */
+  week: string | null;
   home: { name: string; score: number | null };
   away: { name: string; score: number | null };
 }
 
 interface RawGame {
-  game?: { id?: number | string; date?: { date?: string; timestamp?: number }; status?: { short?: string; long?: string } };
+  game?: {
+    id?: number | string;
+    stage?: unknown;
+    week?: unknown;
+    date?: { date?: string; time?: string; timezone?: string; timestamp?: number };
+    status?: { short?: string; long?: string };
+  };
   id?: number | string;
-  date?: string | { date?: string; timestamp?: number };
+  date?: string | { date?: string; time?: string; timezone?: string; timestamp?: number };
   status?: { short?: string; long?: string };
   teams?: { home?: { id?: number; name?: string }; away?: { id?: number; name?: string } };
   scores?: { home?: { total?: number | null }; away?: { total?: number | null } };
@@ -356,20 +425,29 @@ const FINISHED = new Set(["FT", "AOT", "POST-FT", "Finished", "Final"]);
 /**
  * Normalises one game. The American Football host nests identifiers under
  * `game` while other hosts hoist them; both spellings are accepted so that a
- * host or version change does not silently yield zero games.
+ * host or version change does not silently yield zero games. The kickoff
+ * instant prefers the unix timestamp, then date + time (the host reports them
+ * in UTC), then the bare date.
  */
 export function readGame(raw: RawGame): ApiSportsGame | null {
   const id = raw.game?.id ?? raw.id;
   if (id === undefined || id === null) return null;
-  const rawDate = raw.game?.date?.date ?? (typeof raw.date === "string" ? raw.date : raw.date?.date);
-  const timestamp = raw.game?.date?.timestamp ?? (typeof raw.date === "object" ? raw.date?.timestamp : undefined);
-  const date = rawDate ? new Date(rawDate) : typeof timestamp === "number" ? new Date(timestamp * 1000) : null;
+  const dateBlock = raw.game?.date ?? (typeof raw.date === "object" ? raw.date : undefined);
+  const rawDate = dateBlock?.date ?? (typeof raw.date === "string" ? raw.date : undefined);
+  const timestamp = dateBlock?.timestamp;
+  let date: Date | null = null;
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) date = new Date(timestamp * 1000);
+  else if (rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) && typeof dateBlock?.time === "string" && /^\d{2}:\d{2}$/.test(dateBlock.time) && (!dateBlock.timezone || dateBlock.timezone === "UTC")) {
+    date = new Date(`${rawDate}T${dateBlock.time}:00Z`);
+  } else if (rawDate) date = new Date(rawDate);
   if (!date || Number.isNaN(date.getTime())) return null;
   const short = raw.game?.status?.short ?? raw.status?.short ?? raw.game?.status?.long ?? raw.status?.long ?? "";
   return {
     id: String(id),
     date,
     finished: FINISHED.has(short),
+    stage: typeof raw.game?.stage === "string" && raw.game.stage.trim() ? raw.game.stage.trim() : null,
+    week: typeof raw.game?.week === "string" && raw.game.week.trim() ? raw.game.week.trim() : null,
     home: { name: raw.teams?.home?.name ?? "the home team", score: numberOrNull(raw.scores?.home?.total) },
     away: { name: raw.teams?.away?.name ?? "the away team", score: numberOrNull(raw.scores?.away?.total) },
   };
@@ -382,10 +460,11 @@ export function gameSignal(person: { display_name: string }, game: ApiSportsGame
   if (!game.finished || game.home.score === null || game.away.score === null) return null;
   const drawn = game.home.score === game.away.score;
   const [winner, loser] = game.home.score > game.away.score ? [game.home, game.away] : [game.away, game.home];
+  const result = drawn
+    ? `${game.home.name} and ${game.away.name} finish ${game.home.score}-${game.away.score}.`
+    : `${winner.name} beat ${loser.name} ${winner.score}-${loser.score}.`;
   return {
-    headline: drawn
-      ? `${game.home.name} and ${game.away.name} finish ${game.home.score}-${game.away.score}.`
-      : `${winner.name} beat ${loser.name} ${winner.score}-${loser.score}.`,
+    headline: game.week ? `${game.week}: ${result}` : result,
     occurredAt: game.date,
     dedupeKey: `${source}:game:${game.id}`,
     rawPayload: {
@@ -393,6 +472,8 @@ export function gameSignal(person: { display_name: string }, game: ApiSportsGame
       source,
       game_id: game.id,
       played_at: game.date.toISOString(),
+      stage: game.stage,
+      week: game.week,
       home: game.home.name,
       away: game.away.name,
       home_score: game.home.score,
@@ -432,6 +513,45 @@ function requirePlayer(person: { slug: string }, playerId: string): string {
   return trimmed;
 }
 
+async function seasonStatistics(config: ApiSportsConnectorConfig, key: string, fetchImpl: typeof fetch, player: string, season: number): Promise<unknown[]> {
+  return (await call<unknown>(fill(config.paths.player_statistics, { player, season }), config, key, fetchImpl)).response ?? [];
+}
+
+/**
+ * The team's games this season, one request per poll: the runner calls the
+ * event read and the metric read with the same `now`, and both need the list.
+ */
+function gamesFor(config: ApiSportsConnectorConfig, key: string, fetchImpl: typeof fetch, season: number, team: number, now: Date): Promise<ApiSportsGame[]> {
+  const cacheKey = `${config.host}|${season}|${team}|${now.getTime()}`;
+  let pending = gamesCache.get(cacheKey);
+  if (!pending) {
+    gamesCache.clear();
+    pending = call<RawGame>(fill(config.paths.games, { season, team }), config, key, fetchImpl).then((body) =>
+      (body.response ?? []).map(readGame).filter((game): game is ApiSportsGame => game !== null),
+    );
+    gamesCache.set(cacheKey, pending);
+  }
+  return pending;
+}
+
+/** Finished games that count: not in an excluded stage. */
+function countedGames(games: ApiSportsGame[], config: ApiSportsConnectorConfig): ApiSportsGame[] {
+  return games.filter((game) => game.finished && !isExcludedStage(game.stage, config));
+}
+
+async function resolveTeam(config: ApiSportsConnectorConfig, key: string, fetchImpl: typeof fetch, player: string, season: number, status: ApiSportsStatus): Promise<number> {
+  if (config.team_id !== null) return config.team_id;
+  const statistics = await seasonStatistics(config, key, fetchImpl, player, season);
+  const team = teamIdFrom(config, statistics);
+  if (team === null) {
+    throw new ConnectorError(
+      `API-Sports player ${player} yielded no team id on ${config.host} (plan ${status.plan ?? "unknown"}), so the fixture list cannot be addressed. ` +
+        `Set config.team_id on the data_sources row, or correct config.paths.player_statistics — the statistics response carried ${statistics.length} entr${statistics.length === 1 ? "y" : "ies"}.`,
+    );
+  }
+  return team;
+}
+
 export const apisportsConnector: DataConnector = {
   name: APISPORTS_SOURCE_NAME,
 
@@ -439,7 +559,7 @@ export const apisportsConnector: DataConnector = {
     return getApiSportsKeyOrNull() ? { ok: true } : { ok: false, reason: "APISPORTS_API_KEY is not set" };
   },
 
-  /** Events: finished games, one signal each. */
+  /** Events: finished games that count, one signal each, newest first. */
   async fetchForPerson(person, playerId, context): Promise<RawSignal[]> {
     if (typeof window !== "undefined") throw new Error("The API-Sports connector is server-only.");
     const key = requireKey();
@@ -448,20 +568,9 @@ export const apisportsConnector: DataConnector = {
 
     const status = await fetchApiSportsStatus(config, key, context.fetch, context.now.getTime());
     const season = seasonFor(context.now, config.season);
-
-    const statistics = (await call<unknown>(fill(config.paths.player_statistics, { player, season }), config, key, context.fetch)).response ?? [];
-    const team = teamIdFrom(config, statistics);
-    if (team === null) {
-      throw new ConnectorError(
-        `API-Sports player ${player} yielded no team id on ${config.host} (plan ${status.plan ?? "unknown"}), so the fixture list cannot be addressed. ` +
-          `Set config.team_id on the data_sources row, or correct config.paths.player_statistics — the statistics response carried ${statistics.length} entr${statistics.length === 1 ? "y" : "ies"}.`,
-      );
-    }
-
-    const games = (await call<RawGame>(fill(config.paths.games, { season, team }), config, key, context.fetch)).response ?? [];
-    return games
-      .map(readGame)
-      .filter((game): game is ApiSportsGame => game !== null && game.finished)
+    const team = await resolveTeam(config, key, context.fetch, player, season, status);
+    const games = await gamesFor(config, key, context.fetch, season, team, context.now);
+    return countedGames(games, config)
       .sort((a, b) => b.date.getTime() - a.date.getTime())
       .slice(0, config.recent_games)
       .map((game) => gameSignal(person, game, APISPORTS_SOURCE_NAME))
@@ -469,16 +578,19 @@ export const apisportsConnector: DataConnector = {
   },
 
   /**
-   * The season passing-yards figure, read strictly and snapshotted RAW once
-   * per change. It is the season cumulative total — the shape this connector
-   * refuses to register as a metric (a monotone step function has no usable
-   * baseline) — so it is queued as a snapshot only, with no observation and
-   * no signal, under SEASON_PASSING_YARDS_SNAPSHOT. The per-game metric,
-   * `game_passing_yards`, is not produced here until its source is settled:
-   * either the per-game statistics endpoint or a difference of this total.
+   * Metrics. Two reads:
    *
-   * Every failure is loud and names what came back: a value that is not a
-   * number, or a group / statistic that is not there and the ones that are.
+   *   1. The season total, snapshotted RAW once per change under
+   *      SEASON_PASSING_YARDS_SNAPSHOT: no observation, no signal (see the
+   *      header). Every failure names what came back.
+   *   2. Per-game passing yards, the registered metric. For each finished
+   *      counted game newer than the last recorded one (up to recent_games,
+   *      oldest first), the per-game statistics endpoint is read and the
+   *      player's figure recorded AT THE GAME'S DATE. Older games in a
+   *      backfill are queued as snapshots; the newest is the reading the
+   *      baseline observes. A game the player did not appear in is skipped;
+   *      a game where he appears but the statistic is not where config says
+   *      fails loudly, as does a value that is not a plain number.
    */
   async fetchMetrics(person, playerId, context): Promise<MetricReading[]> {
     if (typeof window !== "undefined") throw new Error("The API-Sports connector is server-only.");
@@ -488,18 +600,19 @@ export const apisportsConnector: DataConnector = {
 
     const status = await fetchApiSportsStatus(config, key, context.fetch, context.now.getTime());
     const season = seasonFor(context.now, config.season);
-    const statistics = (await call<unknown>(fill(config.paths.player_statistics, { player, season }), config, key, context.fetch)).response ?? [];
+    const statistics = await seasonStatistics(config, key, context.fetch, player, season);
     const where = `on ${config.host} for season ${season}; plan ${status.plan ?? "unknown"}, ${status.requestsToday ?? "?"} of ${status.dailyLimit ?? "?"} requests used today`;
 
-    const grouped = readGroupedStatistic(statistics[0], config.passing_yards_stat);
+    // 1. The season total, raw ------------------------------------------------
+    const grouped = readGroupedStatistic(statistics[0], config.passing_yards_stat, player);
     if (grouped.status === "unparseable") {
       throw new ConnectorError(
         `API-Sports player ${player} (${person.slug}) carried a passing-yards value that is not a number: ${JSON.stringify(grouped.raw)} ` +
           `(group "${config.passing_yards_stat.group}", statistic "${config.passing_yards_stat.name}") ${where}. Nothing was recorded.`,
       );
     }
-    const yards = grouped.status === "ok" ? grouped.value : readStatistic(statistics[0], config.passing_yards_keys);
-    if (yards === null) {
+    const seasonYards = grouped.status === "ok" ? grouped.value : readStatistic(statistics[0], config.passing_yards_keys);
+    if (seasonYards === null) {
       const seen = grouped.status === "missing" ? grouped : { groups: [], names: [] };
       throw new ConnectorError(
         `API-Sports player ${player} (${person.slug}) carried no passing yards ${where}: ` +
@@ -509,11 +622,62 @@ export const apisportsConnector: DataConnector = {
           `The statistics response held ${statistics.length} entr${statistics.length === 1 ? "y" : "ies"}; correct config.passing_yards_stat or config.paths.player_statistics on the data_sources row rather than redeploying.`,
       );
     }
+    const previousTotal = await context.snapshots.latest(SEASON_PASSING_YARDS_SNAPSHOT);
+    if (!previousTotal || previousTotal.value !== seasonYards) context.snapshots.record(SEASON_PASSING_YARDS_SNAPSHOT, seasonYards);
 
-    // Once per change, not once per poll: the total is the same number until
-    // a new game is played, and a row per hour would be a row about the cron.
-    const previous = await context.snapshots.latest(SEASON_PASSING_YARDS_SNAPSHOT);
-    if (!previous || previous.value !== yards) context.snapshots.record(SEASON_PASSING_YARDS_SNAPSHOT, yards);
-    return [];
+    // 2. Per game, the metric -------------------------------------------------
+    const team = teamIdFrom(config, statistics);
+    if (team === null) {
+      throw new ConnectorError(
+        `API-Sports player ${player} yielded no team id on ${config.host} (plan ${status.plan ?? "unknown"}), so the fixture list cannot be addressed. ` +
+          `Set config.team_id on the data_sources row, or correct config.paths.player_statistics — the statistics response carried ${statistics.length} entr${statistics.length === 1 ? "y" : "ies"}.`,
+      );
+    }
+    const games = await gamesFor(config, key, context.fetch, season, team, context.now);
+    const latest = await context.snapshots.latest(GAME_PASSING_YARDS_METRIC);
+    const unrecorded = countedGames(games, config)
+      .filter((game) => !latest || game.date.getTime() > latest.recordedAt.getTime())
+      .sort((a, b) => a.date.getTime() - b.date.getTime())
+      .slice(-config.recent_games);
+
+    const readings: Array<{ game: ApiSportsGame; value: number }> = [];
+    for (const game of unrecorded) {
+      const entries = (await call<unknown>(fill(config.paths.game_statistics, { game: game.id }), config, key, context.fetch)).response ?? [];
+      let found: GroupedStatResult | null = null;
+      let lastMissing: Extract<GroupedStatResult, { status: "missing" }> | null = null;
+      for (const entry of entries) {
+        const result = readGroupedStatistic(entry, config.game_passing_yards_stat, player);
+        if (result.status !== "missing") {
+          found = result;
+          break;
+        }
+        if (result.playerSeen) lastMissing = result;
+      }
+      if (!found) {
+        // Absent from every team's sheet: did not play. Present but not
+        // under the configured group / name: the shape moved, say so.
+        if (!lastMissing) continue;
+        throw new ConnectorError(
+          `API-Sports game ${game.id} (${game.week ?? "week ?"}, ${game.date.toISOString().slice(0, 10)}) lists player ${player} (${person.slug}) but carries no statistic ` +
+            `"${config.game_passing_yards_stat.name}" in group "${config.game_passing_yards_stat.group}" for him ` +
+            `(groups present: ${lastMissing.groups.join(", ")}; his statistics in that group: ${lastMissing.names.length > 0 ? lastMissing.names.join(", ") : "none"}). ` +
+            `Correct config.game_passing_yards_stat on the data_sources row.`,
+        );
+      }
+      if (found.status === "unparseable") {
+        throw new ConnectorError(
+          `API-Sports game ${game.id} (${game.week ?? "week ?"}, ${game.date.toISOString().slice(0, 10)}) carried a passing-yards value for player ${player} that is not a plain number: ` +
+            `${JSON.stringify(found.raw)} (group "${config.game_passing_yards_stat.group}", statistic "${config.game_passing_yards_stat.name}"). ` +
+            `Composite figures ("15/27", "2-12") are never registered. Nothing was recorded.`,
+        );
+      }
+      readings.push({ game, value: found.value });
+    }
+
+    // Older games of a backfill are snapshots at their own dates; the newest
+    // is the reading this poll observes against the baseline.
+    for (const { game, value } of readings.slice(0, -1)) context.snapshots.record(GAME_PASSING_YARDS_METRIC, value, game.date);
+    const newest = readings.at(-1);
+    return newest ? [{ metricKey: GAME_PASSING_YARDS_METRIC, value: newest.value, recordedAt: newest.game.date }] : [];
   },
 };
