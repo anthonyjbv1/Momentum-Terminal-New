@@ -47,6 +47,19 @@ import type { EngineSignal, ForceEntry, ScoredSignal } from "@/lib/engine/types"
  * volume against their own trailing volume, the same baseline the metrics
  * use, once there is history to build it from. Neutral signals (impact 0)
  * are carried in the details but never counted.
+ *
+ * ONE MOMENT, ONE READING (Phase 13+). Before either step, metric signals
+ * from one source that share an occurred_at are folded into one reading
+ * whose impact is the MEAN of their impacts (neutral ones left out). Three
+ * per-game figures of one football game are one performance, not three
+ * pieces of evidence: without the fold they would take three of the
+ * source's cap slots and read as √3 of one reading, a busier week than it
+ * was. The mean, not the strongest, so a mixed line (rating up, picks up)
+ * reads mixed. Event signals are never folded; the game's result event and
+ * its stat line stay two readings, which is where a poor line in a big win
+ * and the "commanding win" headline meet and partly cancel. The fold is
+ * config.oneReadingPerMetricMoment and the folded members stay visible in
+ * the details.
  */
 
 export function tierMultiplier(tier: number, config: EngineConfig["signals"]): number {
@@ -114,9 +127,51 @@ export function capPerSource(scored: ScoredSignal[], maxPerSource: number): { ke
   return { kept, dropped };
 }
 
+/** One moment's metric readings from one source, folded into one. */
+export interface MetricMoment {
+  source: string;
+  at: string;
+  /** The signal that stands for the moment: the strongest member. */
+  representative: string;
+  members: string[];
+  /** The mean of the members' non-zero impacts: what the moment contributes. */
+  impact: number;
+}
+
+/**
+ * Folds metric signals from one source that share an occurred_at into one
+ * reading each: the strongest member stands for the moment and carries the
+ * mean of the members' impacts. Everything else passes through untouched.
+ */
+export function foldMetricMoments(scored: ScoredSignal[]): { folded: ScoredSignal[]; moments: MetricMoment[]; foldedInto: Map<string, string> } {
+  const groups = new Map<string, ScoredSignal[]>();
+  for (const entry of scored) {
+    if (entry.impact === 0 || !isMetricSignal(entry.signal.rawPayload)) continue;
+    const key = `${entry.signal.sourceName}|${entry.signal.occurredAt.toISOString()}`;
+    groups.set(key, [...(groups.get(key) ?? []), entry]);
+  }
+  const moments: MetricMoment[] = [];
+  const foldedInto = new Map<string, string>();
+  const replacement = new Map<string, ScoredSignal>();
+  for (const [key, members] of groups) {
+    if (members.length < 2) continue;
+    const ordered = [...members].sort((a, b) => Math.abs(b.impact) - Math.abs(a.impact) || a.signal.id.localeCompare(b.signal.id));
+    const representative = ordered[0];
+    const impact = members.reduce((sum, member) => sum + member.impact, 0) / members.length;
+    const [source, at] = key.split("|");
+    moments.push({ source, at, representative: representative.signal.id, members: ordered.map((member) => member.signal.id), impact });
+    for (const member of ordered.slice(1)) foldedInto.set(member.signal.id, representative.signal.id);
+    replacement.set(representative.signal.id, { ...representative, impact });
+  }
+  const folded = scored.filter((entry) => !foldedInto.has(entry.signal.id)).map((entry) => replacement.get(entry.signal.id) ?? entry);
+  return { folded, moments, foldedInto };
+}
+
 export function signalsForce(scored: ScoredSignal[], config: EngineConfig["signals"]): ForceEntry {
-  const { kept, dropped } = capPerSource(scored, config.maxPerSourcePerTick);
+  const { folded, moments, foldedInto } = config.oneReadingPerMetricMoment ? foldMetricMoments(scored) : { folded: scored, moments: [], foldedInto: new Map<string, string>() };
+  const { kept, dropped } = capPerSource(folded, config.maxPerSourcePerTick);
   const droppedIds = new Set(dropped.map((s) => s.signal.id));
+  const momentImpact = new Map(moments.map((moment) => [moment.representative, moment.impact]));
   const raw = kept.reduce((sum, s) => sum + s.impact, 0);
   const volumeDivisor = kept.length > 1 ? Math.pow(kept.length, config.volumeExponent) : 1;
   const normalized = raw / volumeDivisor;
@@ -129,6 +184,9 @@ export function signalsForce(scored: ScoredSignal[], config: EngineConfig["signa
       countedSignals: kept.length,
       droppedBySourceCap: dropped.length,
       maxPerSourcePerTick: config.maxPerSourcePerTick,
+      oneReadingPerMetricMoment: config.oneReadingPerMetricMoment,
+      metricMoments: moments,
+      foldedIntoMoments: foldedInto.size,
       rawImpact: raw,
       volumeExponent: config.volumeExponent,
       volumeDivisor,
@@ -146,7 +204,10 @@ export function signalsForce(scored: ScoredSignal[], config: EngineConfig["signa
         impact: s.impact,
         ageHours: Math.round(s.ageHours * 10) / 10,
         freshness: Math.round(s.freshness * 1000) / 1000,
-        counted: s.impact !== 0 && !droppedIds.has(s.signal.id),
+        counted: s.impact !== 0 && !droppedIds.has(s.signal.id) && !foldedInto.has(s.signal.id),
+        // A member folded into a moment names the reading it joined; the reading names what it contributed.
+        ...(foldedInto.has(s.signal.id) ? { foldedInto: foldedInto.get(s.signal.id) } : {}),
+        ...(momentImpact.has(s.signal.id) ? { momentImpact: momentImpact.get(s.signal.id) } : {}),
         scorer: s.sentiment.scorer,
         anomaly: s.sentiment.anomaly,
         rationale: s.sentiment.rationale,

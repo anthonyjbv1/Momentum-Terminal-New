@@ -23,11 +23,33 @@ import { ConnectorError, type DataConnector, type MetricReading, type RawSignal 
  *   expressed in language the sentiment path reads. One signal per game, keyed
  *   on the game id, so re-polling a finished game never stores it twice.
  *
- *   METRIC — per-game passing yards, and only that, read from the PER-GAME
- *   statistics endpoint one finished game at a time and recorded AT THE
- *   GAME'S DATE, so the baseline's `samples` count games and not hours. Read
- *   at 1.8σ above his own recent form, that is a statement about a
- *   performance rather than about the polling schedule.
+ *   METRICS — per-game figures, read from the PER-GAME statistics endpoint
+ *   one finished game at a time and recorded AT THE GAME'S DATE, so the
+ *   baseline's `samples` count games and not hours. Read at 1.8σ above his
+ *   own recent form, that is a statement about a performance rather than
+ *   about the polling schedule. Which figures, and where each lives in the
+ *   response, is config.game_stats on the row: a metric key to a group and
+ *   name; each key then needs its own declaration in config.metrics.
+ *
+ * WHICH FIGURES, AND WHY THESE (Phase 13+). Yards alone is a thin proxy: a
+ * 184-yard, 2-TD, 1-INT, 50.2-rating line in a 31-10 win reads as mediocre on
+ * yards and as a triumph in the news. Three per-game metrics are registered:
+ *   game_passing_yards   volume; polarity +1
+ *   game_passer_rating   the performance metric; polarity +1. The league's own
+ *                        composite of completion rate, yards per attempt, TD
+ *                        rate and INT rate, bounded 0–158.3, so a bad line
+ *                        reads negative on its own without a second metric.
+ *   game_interceptions   polarity −1. The one axis the rating formula dampens
+ *                        (its INT term saturates), discrete, and the failure a
+ *                        bad game announces itself with.
+ * Passing touchdowns are NOT registered: rating already carries the TD rate
+ * and the game-result event already carries the scoring, so a fourth reading
+ * would be one more copy of the same performance. Composite values ("15/27",
+ * "2-12") are never registered by construction: the parser refuses them.
+ *
+ * ONE GAME, ONE READING. Three metrics from one game are one performance, not
+ * three pieces of evidence; the Signals force folds metric signals from one
+ * source that share a moment into one reading (lib/engine/forces/signals.ts).
  *
  * WHAT IS DELIBERATELY NOT REGISTERED. Season cumulative totals — passing
  * yards, touchdowns, completions to date — are monotone step functions: flat
@@ -38,6 +60,13 @@ import { ConnectorError, type DataConnector, type MetricReading, type RawSignal 
  * The season total IS kept as a raw snapshot (no baseline, no signal), once
  * per change, because it costs nothing and is the fallback if the per-game
  * endpoint ever goes away.
+ *
+ * WHAT THE METRIC PATH CANNOT SEE. A per-game figure is judged against the
+ * player's own trailing games and nothing else: not the score, not the
+ * opponent, not whether the team won. The result is the EVENT's to carry.
+ * The two meet only in the Signals force, where a poor line in a win and a
+ * "commanding win" headline are summed and partly cancel; nothing reconciles
+ * them, and that divergence is a limitation to expect, not a defect.
  *
  * PRESEASON DOES NOT COUNT. A preseason game is not a performance sample —
  * starters play a series or two — and a preseason tie is not news. Games
@@ -105,8 +134,14 @@ export interface ApiSportsConnectorConfig {
   paths: ApiSportsPaths;
   /** The season passing-yards total in the season endpoint's grouped shape. */
   passing_yards_stat: GroupedStatLookup;
-  /** The per-game passing yards in the per-game endpoint's grouped shape. Defaults to passing_yards_stat. */
+  /** The per-game passing yards in the per-game endpoint's grouped shape. Defaults to passing_yards_stat. The default entry of game_stats. */
   game_passing_yards_stat: GroupedStatLookup;
+  /**
+   * Every per-game metric read: metric key to where it lives in the per-game
+   * response. Each key needs a declaration in config.metrics to emit; without
+   * one it is snapshotted only. Absent: game_passing_yards alone.
+   */
+  game_stats: Record<string, GroupedStatLookup>;
   /** Dotted-path fallbacks for a keyed shape, tried in order when the grouped lookup finds nothing. */
   passing_yards_keys: string[];
   /** How many finished games back to consider, for events and for the metric's first backfill, on one poll. */
@@ -126,6 +161,7 @@ const DEFAULT_CONFIG: ApiSportsConnectorConfig = {
   },
   passing_yards_stat: { group: "Passing", name: "yards" },
   game_passing_yards_stat: { group: "Passing", name: "yards" },
+  game_stats: { game_passing_yards: { group: "Passing", name: "yards" } },
   passing_yards_keys: ["passing.yards", "passing_yards", "yards"],
   recent_games: 5,
   excluded_stages: ["Pre Season"],
@@ -133,7 +169,7 @@ const DEFAULT_CONFIG: ApiSportsConnectorConfig = {
 
 /** The raw snapshot key of the season cumulative figure. Not a metric: no baseline, no signal, never registered. */
 export const SEASON_PASSING_YARDS_SNAPSHOT = "season_passing_yards";
-/** The one registered metric: passing yards in one game, recorded at the game's date. */
+/** The default per-game metric: passing yards in one game, recorded at the game's date. The others are config.game_stats. */
 export const GAME_PASSING_YARDS_METRIC = "game_passing_yards";
 
 function stringOr(value: unknown, fallback: string): string {
@@ -156,10 +192,23 @@ function lookupOr(value: unknown, fallback: GroupedStatLookup): GroupedStatLooku
     : fallback;
 }
 
+/** config.game_stats as metric key → lookup; malformed entries are dropped, and an empty or absent object means passing yards alone. */
+function gameStatsOr(value: unknown, fallback: Record<string, GroupedStatLookup>): Record<string, GroupedStatLookup> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fallback;
+  const out: Record<string, GroupedStatLookup> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^[a-z0-9_]+$/.test(key)) continue;
+    const lookup = lookupOr(entry, { group: "", name: "" });
+    if (lookup.group && lookup.name) out[key] = lookup;
+  }
+  return Object.keys(out).length > 0 ? out : fallback;
+}
+
 export function readApiSportsConfig(config: Record<string, unknown>): ApiSportsConnectorConfig {
   const paths = (config.paths ?? {}) as Record<string, unknown>;
   const recent = numberOrNull(config.recent_games);
   const seasonStat = lookupOr(config.passing_yards_stat, DEFAULT_CONFIG.passing_yards_stat);
+  const gameYards = lookupOr(config.game_passing_yards_stat, seasonStat);
   return {
     host: stringOr(config.host, DEFAULT_CONFIG.host),
     season: numberOrNull(config.season),
@@ -170,7 +219,8 @@ export function readApiSportsConfig(config: Record<string, unknown>): ApiSportsC
       game_statistics: stringOr(paths.game_statistics, DEFAULT_CONFIG.paths.game_statistics),
     },
     passing_yards_stat: seasonStat,
-    game_passing_yards_stat: lookupOr(config.game_passing_yards_stat, seasonStat),
+    game_passing_yards_stat: gameYards,
+    game_stats: gameStatsOr(config.game_stats, { [GAME_PASSING_YARDS_METRIC]: gameYards }),
     passing_yards_keys: stringList(config.passing_yards_keys, []).length > 0 ? stringList(config.passing_yards_keys, []) : DEFAULT_CONFIG.passing_yards_keys,
     recent_games: recent !== null && recent > 0 ? Math.floor(recent) : DEFAULT_CONFIG.recent_games,
     excluded_stages: stringList(config.excluded_stages, DEFAULT_CONFIG.excluded_stages),
@@ -583,14 +633,18 @@ export const apisportsConnector: DataConnector = {
    *   1. The season total, snapshotted RAW once per change under
    *      SEASON_PASSING_YARDS_SNAPSHOT: no observation, no signal (see the
    *      header). Every failure names what came back.
-   *   2. Per-game passing yards, the registered metric. For each finished
-   *      counted game newer than the last recorded one (up to recent_games,
-   *      oldest first), the per-game statistics endpoint is read and the
-   *      player's figure recorded AT THE GAME'S DATE. Older games in a
+   *   2. The per-game metrics of config.game_stats. Each metric keeps its own
+   *      anchor (its last recorded snapshot), so a metric registered later
+   *      backfills the games the others already have. For each finished
+   *      counted game newer than SOME metric's anchor (up to recent_games,
+   *      oldest first), the per-game statistics endpoint is read ONCE and
+   *      every metric that needs the game is read from the response, the
+   *      player's figures recorded AT THE GAME'S DATE. Older games in a
    *      backfill are queued as snapshots; the newest is the reading the
    *      baseline observes. A game the player did not appear in is skipped;
-   *      a game where he appears but the statistic is not where config says
-   *      fails loudly, as does a value that is not a plain number.
+   *      a game where he appears but a statistic is not where config says
+   *      fails loudly, naming the metric, as does a value that is not a plain
+   *      number.
    */
   async fetchMetrics(person, playerId, context): Promise<MetricReading[]> {
     if (typeof window !== "undefined") throw new Error("The API-Sports connector is server-only.");
@@ -634,50 +688,69 @@ export const apisportsConnector: DataConnector = {
       );
     }
     const games = await gamesFor(config, key, context.fetch, season, team, context.now);
-    const latest = await context.snapshots.latest(GAME_PASSING_YARDS_METRIC);
-    const unrecorded = countedGames(games, config)
-      .filter((game) => !latest || game.date.getTime() > latest.recordedAt.getTime())
+    const stats = Object.entries(config.game_stats);
+    const anchors = new Map(await Promise.all(stats.map(async ([metricKey]) => [metricKey, await context.snapshots.latest(metricKey)] as const)));
+    const needs = (metricKey: string, game: ApiSportsGame) => {
+      const latest = anchors.get(metricKey) ?? null;
+      return !latest || game.date.getTime() > latest.recordedAt.getTime();
+    };
+    const wanted = countedGames(games, config)
+      .filter((game) => stats.some(([metricKey]) => needs(metricKey, game)))
       .sort((a, b) => a.date.getTime() - b.date.getTime())
       .slice(-config.recent_games);
 
-    const readings: Array<{ game: ApiSportsGame; value: number }> = [];
-    for (const game of unrecorded) {
+    const when = (game: ApiSportsGame) => `game ${game.id} (${game.week ?? "week ?"}, ${game.date.toISOString().slice(0, 10)})`;
+    const readings = new Map<string, Array<{ game: ApiSportsGame; value: number }>>(stats.map(([metricKey]) => [metricKey, []]));
+    for (const game of wanted) {
       const entries = (await call<unknown>(fill(config.paths.game_statistics, { game: game.id }), config, key, context.fetch)).response ?? [];
-      let found: GroupedStatResult | null = null;
-      let lastMissing: Extract<GroupedStatResult, { status: "missing" }> | null = null;
-      for (const entry of entries) {
-        const result = readGroupedStatistic(entry, config.game_passing_yards_stat, player);
-        if (result.status !== "missing") {
-          found = result;
-          break;
+      // Absent from every team's sheet: did not play. The check does not
+      // depend on which statistic is asked for, only on whether his line is there.
+      const playerSeen = entries.some((entry) => {
+        const result = readGroupedStatistic(entry, stats[0][1], player);
+        return result.status !== "missing" || result.playerSeen;
+      });
+      if (!playerSeen) continue;
+
+      for (const [metricKey, lookup] of stats) {
+        if (!needs(metricKey, game)) continue;
+        let found: GroupedStatResult | null = null;
+        let lastMissing: Extract<GroupedStatResult, { status: "missing" }> | null = null;
+        for (const entry of entries) {
+          const result = readGroupedStatistic(entry, lookup, player);
+          if (result.status !== "missing") {
+            found = result;
+            break;
+          }
+          if (result.playerSeen) lastMissing = result;
         }
-        if (result.playerSeen) lastMissing = result;
+        if (!found) {
+          // Present but not under the configured group / name: the shape moved, say so.
+          throw new ConnectorError(
+            `API-Sports ${when(game)} lists player ${player} (${person.slug}) but carries no statistic ` +
+              `"${lookup.name}" in group "${lookup.group}" for him (metric ${metricKey}; ` +
+              `groups present: ${lastMissing?.groups.join(", ") ?? "none"}; his statistics in that group: ${lastMissing && lastMissing.names.length > 0 ? lastMissing.names.join(", ") : "none"}). ` +
+              `Correct config.game_stats.${metricKey} on the data_sources row.`,
+          );
+        }
+        if (found.status === "unparseable") {
+          throw new ConnectorError(
+            `API-Sports ${when(game)} carried a ${metricKey} value for player ${player} that is not a plain number: ` +
+              `${JSON.stringify(found.raw)} (group "${lookup.group}", statistic "${lookup.name}"). ` +
+              `Composite figures ("15/27", "2-12") are never registered. Nothing was recorded.`,
+          );
+        }
+        readings.get(metricKey)?.push({ game, value: found.value });
       }
-      if (!found) {
-        // Absent from every team's sheet: did not play. Present but not
-        // under the configured group / name: the shape moved, say so.
-        if (!lastMissing) continue;
-        throw new ConnectorError(
-          `API-Sports game ${game.id} (${game.week ?? "week ?"}, ${game.date.toISOString().slice(0, 10)}) lists player ${player} (${person.slug}) but carries no statistic ` +
-            `"${config.game_passing_yards_stat.name}" in group "${config.game_passing_yards_stat.group}" for him ` +
-            `(groups present: ${lastMissing.groups.join(", ")}; his statistics in that group: ${lastMissing.names.length > 0 ? lastMissing.names.join(", ") : "none"}). ` +
-            `Correct config.game_passing_yards_stat on the data_sources row.`,
-        );
-      }
-      if (found.status === "unparseable") {
-        throw new ConnectorError(
-          `API-Sports game ${game.id} (${game.week ?? "week ?"}, ${game.date.toISOString().slice(0, 10)}) carried a passing-yards value for player ${player} that is not a plain number: ` +
-            `${JSON.stringify(found.raw)} (group "${config.game_passing_yards_stat.group}", statistic "${config.game_passing_yards_stat.name}"). ` +
-            `Composite figures ("15/27", "2-12") are never registered. Nothing was recorded.`,
-        );
-      }
-      readings.push({ game, value: found.value });
     }
 
-    // Older games of a backfill are snapshots at their own dates; the newest
-    // is the reading this poll observes against the baseline.
-    for (const { game, value } of readings.slice(0, -1)) context.snapshots.record(GAME_PASSING_YARDS_METRIC, value, game.date);
-    const newest = readings.at(-1);
-    return newest ? [{ metricKey: GAME_PASSING_YARDS_METRIC, value: newest.value, recordedAt: newest.game.date }] : [];
+    // Per metric: older games of a backfill are snapshots at their own dates;
+    // the newest is the reading this poll observes against the baseline.
+    const out: MetricReading[] = [];
+    for (const [metricKey, list] of readings) {
+      for (const { game, value } of list.slice(0, -1)) context.snapshots.record(metricKey, value, game.date);
+      const newest = list.at(-1);
+      if (newest) out.push({ metricKey, value: newest.value, recordedAt: newest.game.date });
+    }
+    return out;
   },
 };

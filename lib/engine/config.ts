@@ -104,6 +104,17 @@ export interface EngineConfig {
      */
     freshnessHalfLifeHours: number;
     freshnessMaxAgeHours: number;
+    /**
+     * ONE MOMENT, ONE READING (Phase 13+). Metric signals from one source
+     * that share an occurred_at are facets of one observation — the three
+     * per-game figures of one football game, the subscriber and view growth
+     * of one channel poll — not independent evidence of a busy day. When
+     * true, the force folds them into ONE reading whose impact is the mean
+     * of theirs before the per-source cap, so a game contributes its event
+     * and its stat line and never three correlated copies of the line.
+     * Event signals are never folded.
+     */
+    oneReadingPerMetricMoment: boolean;
   };
   /** The metric scorer (Phase 7): how a normalised deviation becomes confidence. */
   metrics: {
@@ -306,6 +317,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     volumeExponent: 0.5,
     freshnessHalfLifeHours: 24,
     freshnessMaxAgeHours: 168,
+    oneReadingPerMetricMoment: true,
   },
   metrics: { fullConfidenceSigma: 3, notableSigma: 2, anomalousSigma: 3 },
   marketMood: {

@@ -4,7 +4,7 @@ import { DEFAULT_ENGINE_CONFIG as CONFIG } from "./config";
 import { convictionForce, convictionImpact } from "./forces/conviction";
 import { gravityForce } from "./forces/gravity";
 import { computeMood, marketMoodForce } from "./forces/market-mood";
-import { freshnessWeight, isExpiredSignal, scoreSignals, signalFreshness, signalImpact, signalsForce, tierMultiplier } from "./forces/signals";
+import { foldMetricMoments, freshnessWeight, isExpiredSignal, scoreSignals, signalFreshness, signalImpact, signalsForce, tierMultiplier } from "./forces/signals";
 import { tradingActivityForce, windowedNetFlows } from "./forces/trading-activity";
 import { inversePairAdjustments } from "./inverse-pairs";
 import type { SentimentResult } from "./sentiment/types";
@@ -180,6 +180,121 @@ describe("Signals — freshness (Phase 12)", () => {
     // No second score-decay mechanism: the only decay of a score is λ = 0.35/h toward the target, unchanged.
     expect(CONFIG.gravity).toEqual({ lambdaPerHour: 0.35 });
     expect(gravityForce(50, 68, 1, CONFIG.gravity).impact).toBeCloseTo(18 * (1 - Math.exp(-0.35)), 6);
+  });
+});
+
+describe("Signals — one moment, one reading (Phase 13+)", () => {
+  const GAME = new Date("2026-09-15T20:00:00.000Z");
+  const metric = (id: string, key: string, polarity: 1 | -1, overrides: Partial<EngineSignal> = {}) =>
+    signal({ id, sourceName: "apisports", sourceTier: 2, occurredAt: GAME, rawPayload: { kind: "metric", metric: key, polarity, sigma: 2, scale: 1 }, ...overrides });
+  /** Mahomes, Week 1: 184 yards (a little under form), 50.2 rating (well under), 1 interception (over). */
+  const line = [metric("yards", "game_passing_yards", 1), metric("rating", "game_passer_rating", 1), metric("picks", "game_interceptions", -1)];
+  const lineSentiments = new Map<string, SentimentResult>([
+    ["yards", { label: "positive", confidence: 0.6, direction: 1 }], // +0.9
+    ["rating", { label: "negative", confidence: 0.9, direction: -1 }], // −1.35
+    ["picks", { label: "negative", confidence: 0.5, direction: -1 }], // −0.75
+  ]);
+
+  it("is on by default", () => {
+    expect(CONFIG.signals.oneReadingPerMetricMoment).toBe(true);
+  });
+
+  it("folds one game's three figures into ONE reading carrying the MEAN of their impacts, the strongest standing for it", () => {
+    const scored = scoreSignals(line, lineSentiments, CONFIG.signals, NOW);
+    const { folded, moments, foldedInto } = foldMetricMoments(scored);
+    expect(folded).toHaveLength(1);
+    expect(folded[0].signal.id).toBe("rating");
+    expect(folded[0].impact).toBeCloseTo((0.9 - 1.35 - 0.75) / 3); // −0.4: a mixed line reads mixed
+    expect(moments).toEqual([{ source: "apisports", at: GAME.toISOString(), representative: "rating", members: ["rating", "yards", "picks"], impact: expect.closeTo(-0.4, 6) }]);
+    expect([...foldedInto.entries()]).toEqual([
+      ["yards", "rating"],
+      ["picks", "rating"],
+    ]);
+
+    const force = signalsForce(scored, CONFIG.signals);
+    expect(force.details.countedSignals).toBe(1);
+    expect(force.details.foldedIntoMoments).toBe(2);
+    expect(force.details.volumeDivisor).toBe(1);
+    expect(force.impact).toBeCloseTo(-0.4);
+    const audit = force.details.signals as Array<{ id: string; counted: boolean; foldedInto?: string; momentImpact?: number; impact: number }>;
+    expect(audit.find((s) => s.id === "rating")).toMatchObject({ counted: true, momentImpact: expect.closeTo(-0.4, 6), impact: expect.closeTo(-1.35, 6) });
+    expect(audit.find((s) => s.id === "yards")).toMatchObject({ counted: false, foldedInto: "rating" });
+    expect(audit.find((s) => s.id === "picks")).toMatchObject({ counted: false, foldedInto: "rating" });
+  });
+
+  it("without the fold the same game took three cap slots and read as √3 of one reading — the busier week that was not", () => {
+    const three = [metric("a", "game_passing_yards", 1), metric("b", "game_passer_rating", 1), metric("c", "game_interceptions", -1)];
+    const same = new Map<string, SentimentResult>(three.map((s) => [s.id, { label: "positive", confidence: 0.8, direction: 1 }]));
+    const scored = scoreSignals(three, same, CONFIG.signals, NOW);
+    const old = signalsForce(scored, { ...CONFIG.signals, oneReadingPerMetricMoment: false });
+    expect(old.details.countedSignals).toBe(3);
+    expect(old.details.metricMoments).toEqual([]);
+    expect(old.impact).toBeCloseTo((3 * 1.2) / Math.sqrt(3)); // √3 × 1.2
+    const folded = signalsForce(scored, CONFIG.signals);
+    expect(folded.details.countedSignals).toBe(1);
+    expect(folded.impact).toBeCloseTo(1.2); // one reading of one game
+    // And the fold leaves a cap slot for the game's event: the "busy week" was one game.
+    expect(CONFIG.signals.maxPerSourcePerTick).toBe(3);
+  });
+
+  it("never folds the game's EVENT into its stat line: a poor line in a commanding win stays two readings that partly cancel", () => {
+    const win = signal({ id: "result", sourceName: "apisports", sourceTier: 2, occurredAt: GAME, rawPayload: { kind: "game_result", game_id: "21528", home_score: 31, away_score: 10 } });
+    const sentiments = new Map(lineSentiments);
+    sentiments.set("result", { label: "positive", confidence: 0.9, direction: 1 }); // +1.35
+    const force = signalsForce(scoreSignals([win, ...line], sentiments, CONFIG.signals, NOW), CONFIG.signals);
+    expect(force.details.countedSignals).toBe(2);
+    expect(force.details.rawImpact).toBeCloseTo(1.35 - 0.4);
+    expect(force.impact).toBeCloseTo((1.35 - 0.4) / Math.SQRT2);
+    const counted = (force.details.signals as Array<{ id: string; counted: boolean }>).filter((s) => s.counted).map((s) => s.id);
+    expect(counted.sort()).toEqual(["rating", "result"]);
+  });
+
+  it("folds by source AND moment: two games are two readings, and another source's metric at the same instant is its own", () => {
+    const week2 = new Date("2026-09-21T20:00:00.000Z");
+    const signals = [
+      metric("y1", "game_passing_yards", 1),
+      metric("r1", "game_passer_rating", 1),
+      metric("y2", "game_passing_yards", 1, { occurredAt: week2 }),
+      metric("r2", "game_passer_rating", 1, { occurredAt: week2 }),
+      metric("subs", "subscriber_count", 1, { sourceName: "youtube" }),
+    ];
+    const positive = { label: "positive" as const, confidence: 0.8, direction: 1 as const };
+    const { folded, moments } = foldMetricMoments(scoreSignals(signals, new Map(signals.map((s) => [s.id, positive])), CONFIG.signals, NOW));
+    expect(folded.map((s) => s.signal.id).sort()).toEqual(["r1", "r2", "subs"]);
+    expect(moments.map((m) => [m.source, m.at, m.members])).toEqual([
+      ["apisports", GAME.toISOString(), ["r1", "y1"]],
+      ["apisports", week2.toISOString(), ["r2", "y2"]],
+    ]);
+  });
+
+  it("leaves a neutral figure out of the mean, and a lone metric or a lone-plus-neutral pair untouched", () => {
+    const sentiments = new Map<string, SentimentResult>([
+      ["yards", { label: "neutral", confidence: 0, direction: 0 }], // inside the band: 0
+      ["rating", { label: "negative", confidence: 0.9, direction: -1 }],
+      ["picks", { label: "negative", confidence: 0.5, direction: -1 }],
+    ]);
+    const { folded, moments } = foldMetricMoments(scoreSignals(line, sentiments, CONFIG.signals, NOW));
+    expect(moments[0].members).toEqual(["rating", "picks"]);
+    expect(moments[0].impact).toBeCloseTo((-1.35 - 0.75) / 2);
+    // The neutral one passes through (impact 0, never counted); the fold did not divide by three.
+    expect(folded.map((s) => s.signal.id).sort()).toEqual(["rating", "yards"]);
+    const alone = foldMetricMoments(scoreSignals([line[1]], sentiments, CONFIG.signals, NOW));
+    expect(alone.moments).toEqual([]);
+    expect(alone.folded[0].impact).toBeCloseTo(-1.35);
+  });
+
+  it("happens before the source cap, so the fold and the cap compose: four moments of one source keep three", () => {
+    const moments = [0, 1, 2, 3].map((week) => {
+      const at = new Date(GAME.getTime() + week * 7 * 24 * 3_600_000);
+      return [metric(`y${week}`, "game_passing_yards", 1, { occurredAt: at }), metric(`r${week}`, "game_passer_rating", 1, { occurredAt: at })];
+    });
+    const signals = moments.flat();
+    const sentiments = new Map<string, SentimentResult>(signals.map((s, i) => [s.id, { label: "positive", confidence: 0.2 + i * 0.1, direction: 1 }]));
+    const force = signalsForce(scoreSignals(signals, sentiments, CONFIG.signals, NOW), CONFIG.signals);
+    expect((force.details.metricMoments as unknown[]).length).toBe(4);
+    expect(force.details.foldedIntoMoments).toBe(4);
+    expect(force.details.countedSignals).toBe(3);
+    expect(force.details.droppedBySourceCap).toBe(1);
   });
 });
 
