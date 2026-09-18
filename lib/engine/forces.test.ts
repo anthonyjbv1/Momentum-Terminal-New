@@ -140,6 +140,18 @@ describe("Signals — the person's volume weight (Phase 15)", () => {
     expect(isExpiredSignal({ ...moment, occurredAt: new Date(NOW.getTime() - 8 * 24 * 3_600_000) }, NOW, CONFIG.signals)).toBe(true);
   });
 
+  it("never weights a comment digest (Phase 18+): it is out of the denominator, so it must not draw on the weight either", () => {
+    // Its rate is the poll cadence and YouTube's like ranking, so a person with
+    // little news would otherwise have their own viewers' chatter amplified.
+    const digest = signal({ rawPayload: { kind: "comment_digest", sampled: 10, positive: 6, negative: 1 }, sourceName: "youtube_comments" });
+    expect(signalImpact(digest, positive, CONFIG.signals, NOW, 2)).toBeCloseTo(1.2);
+    expect(signalImpact(digest, positive, CONFIG.signals, NOW, 0.1)).toBeCloseTo(1.2);
+    // An article in the same tick still carries it.
+    expect(signalImpact(signal(), positive, CONFIG.signals, NOW, 2)).toBeCloseTo(2.4);
+    const scored = scoreSignals([signal({ id: "a" }), { ...digest, id: "d" }], new Map([["a", positive], ["d", positive]]), CONFIG.signals, NOW, 2);
+    expect(scored.map((s) => [s.signal.id, s.volumeWeight])).toEqual([["a", 2], ["d", 1]]);
+  });
+
   it("carries the weight and the baseline into the force's details, and the force is what it was at weight 1", () => {
     const scored = scoreSignals([signal({ id: "a" })], new Map([["a", positive]]), CONFIG.signals, NOW);
     const plain = signalsForce(scored, CONFIG.signals);

@@ -149,7 +149,7 @@ describe("person_signal_volume()", () => {
     }
   });
 
-  it("counts event signals per complete UTC day since the newest mapping, metric signals excluded, days without signals as zero", async () => {
+  it("counts events per complete UTC day since the newest mapping, sampling artifacts excluded, days without signals as zero", async () => {
     const [{ id: personId }] = await database.rows<{ id: string }>("select id from public.people where slug = 'mrbeast'");
     const [{ id: sourceId }] = await database.rows<{ id: string }>("select id from public.data_sources where name = 'rss'");
     // Tracked since ten days ago at noon: nine complete days before today.
@@ -167,24 +167,60 @@ describe("person_signal_volume()", () => {
           daysAgo,
         ],
       );
-    // Three articles nine days ago (the first complete day), one eight days ago, two metric rows seven days ago (not volume), five yesterday, two today.
+    // Three articles nine days ago (the first complete day), one eight days ago, two metric rows seven days ago (not volume), five yesterday, one today.
     for (let i = 0; i < 3; i += 1) await insert(9, i, "article");
     await insert(8, 0, "article");
     await insert(7, 0, "metric");
     await insert(7, 1, "metric");
     for (let i = 0; i < 5; i += 1) await insert(1, i, "article");
     await insert(0, 0, "article");
-    await insert(0, 1, "comment_digest");
     // Before the regime started: not evidence.
     await insert(12, 0, "article");
 
     const [row] = await database.rows<{ current_24h: string; daily: string }>("select current_24h, daily::text as daily from public.person_signal_volume(14) where person_id = $1", [personId]);
     expect(row.daily).toBe("{3,1,0,0,0,0,0,0,5}");
-    // Today's two are in the trailing 24 hours (they occurred at 06:00 UTC today), and so may be some of yesterday's depending on the clock.
-    expect(Number(row.current_24h)).toBeGreaterThanOrEqual(2);
-    expect(Number(row.current_24h)).toBeLessThanOrEqual(7);
+    // Today's one is in the trailing 24 hours (it occurred at 06:00 UTC today), and so may be some of yesterday's depending on the clock.
+    expect(Number(row.current_24h)).toBeGreaterThanOrEqual(1);
+    expect(Number(row.current_24h)).toBeLessThanOrEqual(6);
     // The window bounds the series: four days asks for the last four complete days only.
     const [short] = await database.rows<{ daily: string }>("select daily::text as daily from public.person_signal_volume(4) where person_id = $1", [personId]);
     expect(short.daily).toBe("{0,0,0,5}");
+  });
+
+  /**
+   * PHASE 18+. The denominator counts a signal only when its rate is set by
+   * the world rather than by our polling. This is that rule on real Postgres,
+   * one row per kind, against the same day.
+   */
+  it("counts events and ignores the connectors' own sampling, kind by kind", async () => {
+    const [{ id: personId }] = await database.rows<{ id: string }>("select id from public.people where slug = 'kai-cenat'");
+    const [{ id: sourceId }] = await database.rows<{ id: string }>("select id from public.data_sources where name = 'rss'");
+    await database.rows("update public.person_data_sources set created_at = (now() at time zone 'utc')::date - 4 + interval '12 hours' where person_id = $1", [personId]);
+
+    const COUNTED = ["article", "stream_summary", "game_result", "insider_filing", "stream"];
+    const UNCOUNTED = ["metric", "baseline", "comment_digest", "comment", "live_moment"];
+    const insert = (kind: string, daysAgo: number) =>
+      database.rows(
+        "insert into public.signals (person_id, data_source_id, headline, raw_payload, dedupe_key, occurred_at) values ($1, $2, $3, $4::jsonb, $5, ((now() at time zone 'utc')::date - $6::int + interval '6 hours') at time zone 'utc')",
+        [
+          personId,
+          sourceId,
+          `${kind} ${daysAgo}`,
+          JSON.stringify(kind === "metric" ? { kind, metric: "news_volume_24h", polarity: 1, sigma: 2.1, direction: 1 } : { kind }),
+          `kinds-${kind}-${daysAgo}`,
+          daysAgo,
+        ],
+      );
+    for (const kind of [...COUNTED, ...UNCOUNTED]) await insert(kind, 2);
+    // A payload with no kind at all is an event: nothing has claimed it is ours.
+    await database.rows(
+      "insert into public.signals (person_id, data_source_id, headline, raw_payload, dedupe_key, occurred_at) values ($1, $2, 'no kind', '{}'::jsonb, 'kinds-none-2', ((now() at time zone 'utc')::date - 2 + interval '6 hours') at time zone 'utc')",
+      [personId, sourceId],
+    );
+
+    const [row] = await database.rows<{ daily: string }>("select daily::text as daily from public.person_signal_volume(14) where person_id = $1", [personId]);
+    // Three complete days since the mapping; the five counted kinds plus the
+    // kindless row land on the middle one, the ten uncounted rows nowhere.
+    expect(row.daily).toBe(`{0,${COUNTED.length + 1},0}`);
   });
 });

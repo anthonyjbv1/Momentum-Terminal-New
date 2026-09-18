@@ -59,17 +59,39 @@ import { mean, standardDeviation } from "@/lib/engine/math";
  * 1,680 h window — where n stays small by construction. REVISIT THERE, around
  * eight played games (November 2026), not before.
  *
- * AND WHOEVER REVISITS: this function is shared, and a change here reaches
- * every caller —
- *   lib/ingest/metrics.ts                  the metric pipeline (the intended target)
- *   lib/ingest/metrics.ts                  the derived spike_count cutoff
- *   lib/engine/signal-volume.ts            the per-person volume weight, which
- *                                          DIVIDES BY `mean`: either robust
- *                                          rule moves it
- *   lib/engine/forces/trading-activity.ts  net order flow per window
- * The volume weight has no complete days to replay against until 2026-09-25,
- * so a robust rule must arrive as a per-call-site option with the current
- * behaviour as its default — never as a new definition of baselineDeviation.
+ * ---------------------------------------------------------------------------
+ * FOUR CALLERS. A CHANGE HERE IS A CHANGE TO ALL FOUR.
+ *
+ * This reads as one metric utility and is not. Every caller, and what each
+ * one takes from the reading:
+ *
+ *   lib/ingest/metrics.ts                  THE METRIC PIPELINE. mean, sd,
+ *                                          sigma, band, sufficient — the
+ *                                          intended target of any change here.
+ *   lib/ingest/metrics.ts                  THE DERIVED spike_count CUTOFF.
+ *                                          mean + spikeStdDevs × sdApplied, so
+ *                                          a new centre or spread silently
+ *                                          redefines what a spike is.
+ *   lib/engine/signal-volume.ts            THE PER-PERSON VOLUME WEIGHT.
+ *                                          Divides referenceSignalsPerDay by
+ *                                          the reading's MEAN. Any rule that
+ *                                          re-centres a window re-levels every
+ *                                          person's weight, and through it
+ *                                          every event signal's impact.
+ *   lib/engine/forces/trading-activity.ts  NET ORDER FLOW per window. sigma
+ *                                          and band drive the force directly.
+ *
+ * lib/engine/baseline.test.ts asserts this list against the files that import
+ * the module; adding a fifth caller fails that test until it is accounted for
+ * here. It cannot know what a new caller DOES with the reading, so whoever
+ * adds one writes that line themselves.
+ *
+ * THE RECOMMENDATION, so it is inherited rather than rediscovered: a robust
+ * rule must arrive as a PER-CALL-SITE OPTION with the current behaviour as
+ * its default — never as a new definition of baselineDeviation. The metric
+ * pipeline is the only caller with the accumulated history to justify one;
+ * the volume weight has none at all until 2026-09-25, and Trading Activity's
+ * windows are a different shape again.
  * ---------------------------------------------------------------------------
  */
 

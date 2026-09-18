@@ -3,7 +3,7 @@ import { clamp } from "@/lib/engine/math";
 import { isMetricSignal } from "@/lib/engine/sentiment/metric";
 import { isPrescoredSignal } from "@/lib/engine/sentiment/prescored";
 import type { SentimentResult } from "@/lib/engine/sentiment/types";
-import { UNWEIGHTED, describeVolume, type VolumeWeight } from "@/lib/engine/signal-volume";
+import { UNWEIGHTED, describeVolume, isUncountedSignal, type VolumeWeight } from "@/lib/engine/signal-volume";
 import type { EngineSignal, ForceEntry, ScoredSignal } from "@/lib/engine/types";
 
 /**
@@ -19,7 +19,8 @@ import type { EngineSignal, ForceEntry, ScoredSignal } from "@/lib/engine/types"
  * then moves their score by an ordinary amount whoever they are, and a day
  * of three times their usual coverage reads as three times that: a big news
  * day for them. The weight is exactly 1 until their baseline is sufficient,
- * and never applies to a metric signal.
+ * and never applies to a signal the series does not count — a metric, a
+ * comment digest, a live moment (Phase 18+, UNCOUNTED_SIGNAL_KINDS).
  *
  * FRESHNESS (Phase 12). The Engine used to score an eight-month-old article
  * exactly as one published this minute: occurred_at was loaded and never
@@ -101,12 +102,18 @@ export function isExpiredSignal(signal: Pick<EngineSignal, "occurredAt" | "rawPa
 
 /**
  * The volume weight a signal carries: the person's, for an event signal;
- * exactly 1 for a metric signal, and for a prescored live moment (Phase 16),
- * which is the platform's own sampling of a session and not coverage the
- * world produced.
+ * exactly 1 for anything the volume series does not count.
+ *
+ * Phase 18+ made the two sides one set (UNCOUNTED_SIGNAL_KINDS). Phase 16 had
+ * already taken the live moment out of both; what it left was the comment
+ * digest, counted in the denominator AND weighted here, so a person with
+ * little news would have had their own viewers' chatter amplified by their
+ * thin coverage. The metric and prescored predicates stay as the explicit
+ * statement of why those two are out; the shared list is what the
+ * denominator agrees with, and a test fails if they ever diverge.
  */
 export function signalVolumeWeight(signal: Pick<EngineSignal, "rawPayload">, volumeWeight: number): number {
-  return isMetricSignal(signal.rawPayload) || isPrescoredSignal(signal.rawPayload) ? 1 : volumeWeight;
+  return isMetricSignal(signal.rawPayload) || isPrescoredSignal(signal.rawPayload) || isUncountedSignal(signal.rawPayload) ? 1 : volumeWeight;
 }
 
 export function signalImpact(signal: EngineSignal, sentiment: SentimentResult, config: EngineConfig["signals"], now: Date, volumeWeight = 1): number {

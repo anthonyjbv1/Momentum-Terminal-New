@@ -226,6 +226,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260917211640_phase15_sixteen_subjects.sql` | The twelve unmapped people on `publisher_rss` (topics, safe aliases, disambiguation) and `rss` (a quoted-name Google News search with the same block); `person_data_sources.created_at` (the start of a person's volume regime); `person_signal_volume()` (event signals per complete day since the newest mapping, plus the trailing day; service role only) with an index on `signals (person_id, occurred_at)`; `poll_concurrency` 4 on the two news doors |
 | `20260917202622_phase14_target_drift.sql` | `people.target_attention` / `target_direction` / `target_offset` (the drifting target's state; `revert_target` documented as the seed) and `apply_engine_tick` writing them beside the score; `forbes` and `newsdata` from 60 to 55 minutes; execute on the two SECURITY DEFINER trigger functions (`positions_enforce_direction`, `trade_orders_snapshot_portfolio`) revoked from `anon` and `authenticated` |
 | `20260918015822_phase17_finnhub_non_price.sql` | The `finnhub` row activated at a 35-minute interval (off the multiple of 15 AND off the top of the hour) with `config.observe_only`, `config.insider_codes` and one metric, `company_news_volume_24h`; the nine executives mapped to their companies with the name their Form 4 files under; `observe_only_snapshots`, the view that shows a figure only while its source declares it observe-only, service role only |
+| `20260918161256_phase18plus_volume_counts_events_only.sql` | `person_signal_volume()` counts a signal only when its rate is set by the world rather than by our polling: comment digests and the legacy per-comment kind join metric, baseline and live-moment signals outside the count, so the denominator is exactly the set the volume weight multiplies (`UNCOUNTED_SIGNAL_KINDS`). Function body otherwise unchanged; `tracked_since` untouched |
 | `20260917235241_phase16_twitch_live_mode.sql` | `live_sessions` (one broadcast per source and stream id, with its running aggregates) and `live_samples` (the live ledger), both service role only; `ingest_runs.trigger` admits `live`; the `twitch` row's `config.live` block (on, two-minute samples, the thresholds) and its two session metrics (`session_peak_viewers`, `clips_per_stream_hour`, a month of sessions, five before either says anything); `person_signal_volume()` no longer counts live moments as volume |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
@@ -1377,12 +1378,84 @@ the subject, arriving by a different door.
 **Neither ships.** Comment sentiment is not worth fixing while the sample is
 like-ranked and the subject attribution is unsolved.
 
-One consequence is flagged and not changed, because it belongs to the volume
-baseline rather than to the digest: `person_signal_volume()` counts every event
-signal, digests included, so these zero-impact rows sit in the denominator of
-the person's volume weight — over 2026-09-14..17 they were 80 of MrBeast's 92
-event signals. Excluding `comment_digest` from the count is a one-line change
-to the RPC and should be decided on its own, before the baseline engages.
+One consequence was flagged and left to Phase 18+, because it belongs to the
+volume baseline rather than to the digest: `person_signal_volume()` counted
+every event signal, digests included, so these zero-impact rows sat in the
+denominator of the person's volume weight — over 2026-09-14..17 they were 80 of
+MrBeast's 92 event signals.
+
+## The volume denominator counts events, not artifacts (Phase 18+)
+
+The volume weight measures how unusual today's flow of signals is for a person,
+against their own trailing days, and multiplies every event signal's impact by
+it. So the series has to count exactly the signals the weight multiplies: a
+signal counted but not weighted dilutes everything else for free, and a signal
+weighted but not counted is amplified by a denominator it never fed. One rule
+now decides both sides, and `lib/engine/signal-volume.ts` holds it as
+`UNCOUNTED_SIGNAL_KINDS` with a test that fails if the array and the RPC's SQL
+ever disagree:
+
+> **A signal counts when its rate is set by the world, not by our polling.**
+
+Halve the poll interval and ask what changes. An article does not — a story is
+published once and deduplicated across the two news doors. A stream summary
+does not: one per broadcast. A game result: one per game. A Form 4: one per
+filing. Those are **events**. They count, and they carry the weight, and it does
+not matter that some are coverage of the person while others are the person's
+own activity — both have a rate reality sets, and both are scored, so both
+belong in the denominator that decides what a normal day is.
+
+A comment digest does change: it is emitted once per video per poll whenever
+the sampled top comments have churned, so its rate is our cadence and YouTube's
+like ranking and nothing about the person. A live moment does too: it is the
+live cron's sampling of a session, bounded by a cooldown that is itself a
+sampling parameter. Those are **artifacts** — counted nowhere, weighted never.
+It is the Phase 10 rule about a sigma describing the sampling rather than the
+subject, applied to the volume series instead of to a metric. Metric signals
+were already out (they carry their own per-metric baseline, so the weight would
+normalise them twice) and baseline signals are zero-impact seeds.
+
+Phase 16 had already settled the live moment on both sides; what it left
+unwritten was the rule, so the comment digest went on being counted *and*
+weighted. Both sides move in this phase, and the legacy per-comment kind
+(`comment`, not emitted since Phase 8+) goes with them.
+
+**The correction, per person**, as seven-day means to 2026-09-17. MrBeast is
+the only subject it moves, because nobody else holds a signal of an excluded
+kind:
+
+| | before | after |
+|---|---|---|
+| daily series | `{1,6,4,16,38,27,12}` | `{1,0,0,1,6,3,1}` |
+| mean per day | 14.86 | 1.71 |
+| implied weight | 1.346 | 2.000 (at the ceiling) |
+
+**What the correction exposed.** At `referenceSignalsPerDay` = 20 the weight now
+saturates at `maxWeight` for fifteen of the sixteen: the real roster runs at 0.3
+to 13.9 events a day, not the 3 to 100 the reference was chosen against in Phase
+15. Only `patrick-mahomes` (1.443) sits below the ceiling. When the weight
+engages it will therefore be very nearly a constant 2× on the Signals force
+rather than a normalisation. Re-deriving the reference from the roster's own
+volumes is its own decision and has not been made; the arithmetic is pinned in
+`signal-volume.test.ts` so it cannot be quietly forgotten.
+
+**Two waves, and they are not merely untidy.** `tracked_since` is untouched — the
+regime clocks stay honest — so the weight engages **2026-09-25** for the seven
+mapped in Phase 15 (adin-ross, anthony-baptiste, drake, kai-cenat,
+kendrick-lamar, mrbeast, patrick-mahomes) and **2026-09-26** for the nine
+remapped in Phase 17 (elon-musk, jeff-bezos, jensen-huang, larry-ellison,
+larry-page, mark-zuckerberg, michael-dell, sergey-brin, warren-buffett).
+Nothing displays the weight and nothing compares one person's weight to
+another's — but two surfaces compare quantities the weight feeds, and both were
+checked rather than assumed: `rankPeople` orders the board by score descending,
+and `topMovers` orders the featured strip by absolute score *change*, which is
+exactly what the weight multiplies. On 2026-09-25 six of the seven run at 2×
+while the nine still run at 1×, so for one day the strip compares weighted
+movement against unweighted. That is a real inconsistency, not a cosmetic one.
+It is also strictly better than forcing a single date, which would change every
+score's drift rate at the same instant instead of half of it; and backdating
+`tracked_since` would buy tidiness with a lie about when each person started
+being watched. The right answer is to know the date, not to move it.
 
 ## Scope so far
 
@@ -1396,6 +1469,7 @@ to the RPC and should be decided on its own, before the baseline engages.
 - **Phase 12+**: newest-first selection with a least-recently-served rotation across people, and memory event expiry (30 days, dated folds written as history, today's date and event ages in the person block).
 - **Phase 13**: publisher-direct feeds — the `publisher_feeds` catalogue read as one shared fetch per run, whole-word name matching scoped by topic, undated items refused, per-feed health and discovery written back onto the rows, the two news doors deduplicated as one story family with Google News kept as the fallback — and the ingestion cron at every fifteen minutes with every source interval off the multiple.
 - **Phase 13+**: athlete metrics beyond passing yards — `config.game_stats` on the API-Sports row (every per-game figure read from one request per game, each with its own anchor), `game_passer_rating` (+1) and `game_interceptions` (−1) registered beside yards with touchdowns and every composite figure refused, and the Signals force folding one source's metric signals of one moment into one reading carrying their mean, so a game is its event and its stat line and never three copies of the line.
+- **Phase 18+**: the volume denominator counts events, not artifacts — one rule for both sides of the weight (a signal counts when its rate is set by the world, not by our polling), `UNCOUNTED_SIGNAL_KINDS` shared between `person_signal_volume()` and the Signals force with a test that fails if they diverge, comment digests and the legacy per-comment kind out of both (MrBeast's series 14.86 → 1.71 a day, the only subject moved), the four callers of the shared baseline documented at the function and pinned by an exhaustive-import test, and two findings reported not changed: the weight saturates at its ceiling for fifteen of sixteen at the present reference, and the two-wave engagement (2026-09-25 and 2026-09-26) is one day of weighted movement ranked against unweighted on the movers strip.
 - **Phase 18**: two queued scorer-adjacent changes replayed against real data and both declined — the robust baseline spread (3,130 readings reconstructed and reclassified: winsorizing moves one, MAD moves 176 the wrong way on 773 zero-MAD windows; revisit at the per-game athlete metrics in November) and the casual-register lexicon (87 of 87 digests neutral; a casual extension would turn 74 of them positive and change 30 of the 33 news headlines it touches, two of them losing a correct negative). Nothing in the Engine's behaviour changed; the findings, the four callers of the shared baseline and the register boundary are now pinned by tests.
 - **Phase 17**: Finnhub for the nine executives, and no stock price in any score — the company's news VOLUME as a count baselined per person and the tracked person's own Form 4 filings as events (matched by name, limited to the decision codes, carrying shares and never a price); the daily close recorded through `config.observe_only`, a runner-level rule that records a reading and gives it no observation, signal, force or history, so there is no trail to unwind and enabling it is one row update; `observe_only_snapshots` for watching it; and the rest of Finnhub's non-price surface reported, not wired.
 - **Phase 16**: live mode — a broadcast followed minute by minute on its own every-minute cron (the fifteen-minute schedule cannot sample faster than itself), per broadcaster by mapping (`live_sessions`, `live_samples`, the connector's `live` capability, Twitch's `/streams` for a hundred logins in one request and `/clips` counted to the second); within-session audience surges and clip bursts as prescored events judged against the session itself (`live_moment`, the prescored scorer, free of the model and the rotation), the session's summary as an ordinary event, and peak viewers and clips per stream hour per complete session as metrics on a month of sessions; chat left unbuilt for want of a socket; and the API-Sports season total no longer gating the per-game metrics, with a notes channel for a poll that limps.

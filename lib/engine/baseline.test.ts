@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -139,13 +139,51 @@ describe("robust spread: why it is deferred", () => {
 });
 
 /**
- * PHASE 18 VERIFY 3. The four clocks are kept apart on purpose. Two consumers
- * read this file and three clocks must never: a change to the shared baseline
- * reaches the volume weight and Trading Activity, and reaches nothing else.
+ * PHASE 18 VERIFY 3 / PHASE 18+ PART 3. The four clocks are kept apart on
+ * purpose, and the shared baseline has exactly four callers. A change to the
+ * function reaches all four — including the volume weight, which has no
+ * history to replay against until 2026-09-25.
  */
 describe("the four clocks stay apart", () => {
   const source = (...parts: string[]) => readFileSync(join(__dirname, ...parts), "utf8");
   const IMPORTS_BASELINE = /from "@\/lib\/engine\/baseline"/;
+
+  /**
+   * Every caller of the shared baseline, by repository path. The docstring in
+   * baseline.ts says what each one takes from the reading; this asserts the
+   * list is complete. A fifth caller fails here until it is written down
+   * there, because the test cannot know what a new one does with the reading.
+   */
+  const CALLERS = ["lib/engine/forces/trading-activity.ts", "lib/engine/signal-volume.ts", "lib/ingest/metrics.ts"];
+
+  it("has exactly the callers its docstring accounts for", () => {
+    const root = join(__dirname, "..", "..");
+    const skip = new Set(["node_modules", ".next", ".git", "supabase", "public", "types"]);
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        if (skip.has(entry)) continue;
+        const full = join(dir, entry);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (/\.(ts|tsx)$/.test(entry) && !/\.test\.ts$/.test(entry)) files.push(full);
+      }
+    };
+    walk(root);
+    const importers = files
+      .filter((file) => IMPORTS_BASELINE.test(readFileSync(file, "utf8")))
+      .map((file) => relative(root, file))
+      .sort();
+    expect(importers).toEqual(CALLERS);
+
+    // Three files, four call sites: the metric pipeline calls it twice, once
+    // for the reading itself and once for the derived spike_count cutoff.
+    const metrics = readFileSync(join(root, "lib", "ingest", "metrics.ts"), "utf8");
+    expect(metrics.match(/baselineDeviation\(/g)).toHaveLength(2);
+    for (const caller of CALLERS) expect(source("..", "..", ...caller.split("/")), caller).toMatch(IMPORTS_BASELINE);
+    // And the docstring names each of them, so the list above is not the only record.
+    const docs = source("baseline.ts");
+    for (const caller of CALLERS) expect(docs, caller).toContain(caller);
+  });
 
   it("the volume weight and Trading Activity are on the shared baseline: a change here moves them", () => {
     expect(source("signal-volume.ts")).toMatch(IMPORTS_BASELINE);
@@ -153,6 +191,9 @@ describe("the four clocks stay apart", () => {
     // re-levels every person's volume weight with it.
     expect(source("signal-volume.ts")).toMatch(/reading\.mean/);
     expect(source("forces", "trading-activity.ts")).toMatch(IMPORTS_BASELINE);
+    // The recommendation is recorded where the next change is made, not only
+    // in the README.
+    expect(source("baseline.ts")).toMatch(/PER-CALL-SITE OPTION/);
   });
 
   it("the Signals freshness curve, memory expiry and the Gravity drift clock do not read the baseline at all", () => {
