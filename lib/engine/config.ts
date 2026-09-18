@@ -202,9 +202,54 @@ export interface EngineConfig {
      * mean, and its sigma of the trailing-24h count is carried into the
      * force's details as "how unusual today's volume is for this person".
      * Metric signals are never weighted: they carry their own baseline.
-     * TUNABLE: referenceSignalsPerDay sets the absolute scale of the force
-     * for a typical subject and is the first constant to revisit once every
-     * subject has a baseline.
+     *
+     * THE REFERENCE, RE-DERIVED 2026-09-18 FROM MEASURED VOLUME (Phase 18++).
+     * Phase 15 chose 20 against an assumed roster of 3-100 events a day. The
+     * real roster runs 0.5 to 30, so 20 put fourteen of sixteen people on the
+     * maxWeight ceiling: a near-constant 2x on the force, which normalises
+     * nobody. The value is now the GEOMETRIC MEAN of the roster's per-person
+     * daily event rate, rounded:
+     *
+     *   window              geometric mean   median   arithmetic mean
+     *   last 2 complete          3.85          3.00         6.40
+     *   last 3 complete          3.70          3.33         6.24
+     *   last 4 complete          3.50          3.25         5.43
+     *
+     * measured over the days in which the whole roster was ingesting, people
+     * with no volume at all excluded from the mean (log 0 is undefined) and
+     * reported separately. The geometric mean is the right centre because the
+     * weight is multiplicative: setting log(reference) to the mean of
+     * log(rate) centres the log-weights on zero, so as many subjects are
+     * scaled up as down and by proportionate amounts. The arithmetic mean
+     * (5.4-6.4) is dragged by one subject's game-day spikes and would push
+     * the quiet majority below 1; the median (3.0-3.3) agrees within 20 %,
+     * which is itself evidence the choice is not knife-edge. Rounded to 4.
+     *
+     * What it buys, on the three-day rates: the spread of a TYPICAL DAY's
+     * total impact across the roster falls from 14.9x (at 20) to 3.0x, and
+     * the ceiling catches five of sixteen rather than fourteen.
+     *
+     * IT WILL GO STALE AGAIN, because it is a cross-person constant inside a
+     * per-person mechanism. That is deliberate: a roster-relative reference
+     * would self-correct but couple every person's weight to every other
+     * person's — adding ten quiet subjects would cut the existing sixteen's
+     * weights by about 41 % overnight, for reasons having nothing to do with
+     * them. A fixed constant goes stale visibly instead. REVIEW WHEN EITHER
+     * more than a third of the people with a sufficient baseline sit at a
+     * bound, OR the roster's live geometric mean leaves [reference / 2,
+     * reference x 2]. Both are on /admin under Signal volume, and
+     * volumeSpread() in lib/engine/signal-volume.ts computes them.
+     *
+     * THE BOUNDS, examined with the reference (Phase 18++). maxWeight 2 now
+     * binds below 2 events a day, where a person's rate is estimated from a
+     * handful of events and its relative error is large: it is a variance
+     * guard on the subjects we know least about, which is what a cap should
+     * be, and at 20 it had become the mechanism itself. minWeight 0.1 binds
+     * above 40 events a day and nobody is close; a floor that never fires is
+     * a floor doing its job, and it remains the guard against a runaway
+     * connector reading as a person with no news.
+     *
+     * TUNABLE, and overridable without a code change: ENGINE_VOLUME_REFERENCE.
      */
     volume: {
       referenceSignalsPerDay: number;
@@ -431,7 +476,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     freshnessHalfLifeHours: 24,
     freshnessMaxAgeHours: 168,
     oneReadingPerMetricMoment: true,
-    volume: { referenceSignalsPerDay: 20, windowDays: 14, minSamples: 7, sdFloor: 2, thresholdStdDevs: 1, minWeight: 0.1, maxWeight: 2 },
+    volume: { referenceSignalsPerDay: 4, windowDays: 14, minSamples: 7, sdFloor: 2, thresholdStdDevs: 1, minWeight: 0.1, maxWeight: 2 },
   },
   metrics: { fullConfidenceSigma: 3, notableSigma: 2, anomalousSigma: 3 },
   live: { notableConfidence: 0.5, anomalousConfidence: 0.9 },
@@ -533,6 +578,15 @@ export interface EngineEnvOverrides {
    * turns it on, like the two cron flags; anything else leaves it off.
    */
   targetDriftEnabled?: string | undefined;
+  /**
+   * ENGINE_VOLUME_REFERENCE. The per-person volume weight's reference rate
+   * (signals.volume.referenceSignalsPerDay, default 4, derived from the
+   * roster's measured geometric mean). This one is EXPECTED to need
+   * re-deriving as subjects and sources are added, so it can be re-set here
+   * rather than waiting on a code change; the default stands until it is. A
+   * positive number, decimals allowed; anything else is ignored.
+   */
+  volumeReference?: string | undefined;
 }
 
 /** A strictly positive integer from a raw environment string, or null. */
@@ -549,12 +603,26 @@ export function parseExactTrue(raw: string | undefined): boolean {
   return typeof raw === "string" && raw.trim() === "true";
 }
 
+/** A strictly positive finite number from a raw environment string, or null. Decimals allowed. */
+export function parsePositiveNumber(raw: string | undefined): number | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!/^\d*\.?\d+$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 /** DEFAULT_ENGINE_CONFIG with any environment overrides applied. */
 export function engineConfigFromEnv(env: EngineEnvOverrides, base: EngineConfig = DEFAULT_ENGINE_CONFIG): EngineConfig {
   const overrides: DeepPartial<EngineConfig> = {};
   const minPopulatedWindows = parsePositiveInteger(env.tradingMinPopulatedWindows);
   if (minPopulatedWindows !== null) overrides.tradingActivity = { minPopulatedWindows };
   if (parseExactTrue(env.targetDriftEnabled)) overrides.targetDrift = { enabled: true };
+  const volumeReference = parsePositiveNumber(env.volumeReference);
+  // withEngineConfig merges ONE level deep, so a nested section has to be
+  // handed over whole: `{ volume: { referenceSignalsPerDay } }` alone would
+  // replace the volume block and lose minSamples, the bounds and the rest.
+  if (volumeReference !== null) overrides.signals = { volume: { ...base.signals.volume, referenceSignalsPerDay: volumeReference } };
   return withEngineConfig(overrides, base);
 }
 
@@ -566,6 +634,9 @@ export function describeEngineOverrides(config: EngineConfig, base: EngineConfig
   }
   if (config.targetDrift.enabled !== base.targetDrift.enabled) {
     out.push(`targetDrift.enabled = ${config.targetDrift.enabled} (default ${base.targetDrift.enabled})`);
+  }
+  if (config.signals.volume.referenceSignalsPerDay !== base.signals.volume.referenceSignalsPerDay) {
+    out.push(`signals.volume.referenceSignalsPerDay = ${config.signals.volume.referenceSignalsPerDay} (default ${base.signals.volume.referenceSignalsPerDay})`);
   }
   return out;
 }

@@ -205,6 +205,6 @@ describe("the four clocks stay apart", () => {
     expect(config).toMatch(/freshnessHalfLifeHours: 24/);
     expect(config).toMatch(/maxEventAgeDays: 30/);
     expect(config).toMatch(/targetDrift: \{ enabled: false, halfLifeHours: 336/);
-    expect(config).toMatch(/volume: \{ referenceSignalsPerDay: 20, windowDays: 14, minSamples: 7/);
+    expect(config).toMatch(/volume: \{ referenceSignalsPerDay: 4, windowDays: 14, minSamples: 7/);
   });
 });

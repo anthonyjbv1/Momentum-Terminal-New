@@ -198,9 +198,110 @@ export function EngineSection({ report, now }: { report: EngineReport; now: numb
               </>
             )}
           </div>
+
+          <VolumeBlock volume={report.volume} />
         </div>
       </div>
     </Panel>
+  );
+}
+
+/**
+ * THE VOLUME WEIGHT, AND WHETHER ITS REFERENCE IS STALE (Phase 18++).
+ *
+ * The reference is a cross-person constant inside a per-person mechanism, so
+ * it goes stale whenever the roster or its sources change — and it did, for
+ * three phases, invisibly, until fourteen of sixteen people sat on the ceiling
+ * and the weight had become a constant multiplier. Two symptoms are shown here
+ * rather than left latent: the share of engaged people on a bound, and how far
+ * the roster's own geometric mean has moved from the reference. Either one
+ * crossing is the signal to re-derive. `Engaged` is also how the two-wave
+ * transition of 2026-09-25 / 09-26 is watched rather than inferred.
+ */
+function VolumeBlock({ volume }: { volume: EngineReport["volume"] }) {
+  const review = volume.boundedShareHigh || volume.referenceDrifted;
+  return (
+    <div>
+      <p className="adm-sub">Signal volume</p>
+      <Stats>
+        <Stat
+          label="Weight engaged"
+          value={`${num(volume.engaged)} / ${num(volume.people)}`}
+          sub="seven complete days after a person's newest mapping"
+          tone={volume.engaged === 0 ? "plain" : "info"}
+        />
+        <Stat label="Reference" value={num(volume.reference, 2)} sub="events a day; the roster's geometric mean when last derived" />
+        <Stat
+          label="Roster now"
+          value={volume.liveGeometricMean === null ? "—" : num(volume.liveGeometricMean, 2)}
+          sub="live geometric mean of the engaged"
+          tone={volume.referenceDrifted ? "warn" : "plain"}
+        />
+        <Stat
+          label="On a bound"
+          value={num(volume.atCeiling + volume.atFloor)}
+          sub={`${num(volume.atCeiling)} at ${num(volume.maxWeight, 2)}, ${num(volume.atFloor)} at ${num(volume.minWeight, 2)}`}
+          tone={volume.boundedShareHigh ? "warn" : "plain"}
+        />
+      </Stats>
+      {volume.rows.length === 0 ? (
+        <Empty>No active people.</Empty>
+      ) : (
+        <>
+          <Scroll>
+            <table className="adm-t">
+              <thead>
+                <tr>
+                  <th>Person</th>
+                  <th className="n">Typical / day</th>
+                  <th className="n">Days</th>
+                  <th className="n">Weight</th>
+                  <th>State</th>
+                </tr>
+              </thead>
+              <tbody>
+                {volume.rows.map((row) => (
+                  <tr key={row.slug}>
+                    <td>
+                      {row.displayName} <span className="adm-dim adm-k">{row.slug}</span>
+                    </td>
+                    <td className="n">{row.typicalPerDay === null ? "—" : num(row.typicalPerDay, 2)}</td>
+                    <td className="n">{num(row.samples)}</td>
+                    <td className="n">{num(row.weight, 3)}</td>
+                    <td>
+                      {!row.engaged ? (
+                        <Badge>not engaged</Badge>
+                      ) : row.bound === "ceiling" ? (
+                        <Badge tone="warn">capped</Badge>
+                      ) : row.bound === "floor" ? (
+                        <Badge tone="warn">floored</Badge>
+                      ) : (
+                        <Badge tone="ok">scaling</Badge>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Scroll>
+          <p className="adm-note">
+            Every event signal&rsquo;s impact is multiplied by <b>Weight</b> = reference ÷ the person&rsquo;s own typical events a day, bounded to [
+            {num(volume.minWeight, 2)}, {num(volume.maxWeight, 2)}]. It is exactly 1 and <b>not engaged</b> until seven complete days exist, so the roster crosses
+            over in waves as each person&rsquo;s mapping clock matures. <b>Capped</b> or <b>floored</b> means a bound is deciding the weight rather than the
+            person&rsquo;s own volume.
+            {review ? (
+              <>
+                {" "}
+                <b>Re-derive the reference.</b>{" "}
+                {volume.boundedShareHigh ? "More than a third of the engaged are on a bound. " : ""}
+                {volume.referenceDrifted ? `The roster's geometric mean (${volume.liveGeometricMean}) has left [${volume.reference / 2}, ${volume.reference * 2}]. ` : ""}
+                Set ENGINE_VOLUME_REFERENCE, or change the default in lib/engine/config.ts.
+              </>
+            ) : null}
+          </p>
+        </>
+      )}
+    </div>
   );
 }
 

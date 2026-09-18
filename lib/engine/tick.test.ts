@@ -255,9 +255,9 @@ describe("Engine tick — the person's volume weight", () => {
       seed({
         signals: [praise("d1", "p-drake"), praise("k1", "p-kendrick"), praise("m1", "p-mrbeast")],
         signalVolume: {
-          "p-drake": { trackedSince: NOW, current24h: 10, daily: week(10) }, // half the reference: double
-          "p-mrbeast": { trackedSince: NOW, current24h: 80, daily: week(80) }, // four times: a quarter
-          "p-kendrick": { trackedSince: NOW, current24h: 80, daily: [80, 80, 80] }, // three days: not yet
+          "p-drake": { trackedSince: NOW, current24h: 2, daily: week(2) }, // half the reference: double
+          "p-mrbeast": { trackedSince: NOW, current24h: 16, daily: week(16) }, // four times: a quarter
+          "p-kendrick": { trackedSince: NOW, current24h: 16, daily: [16, 16, 16] }, // three days: not yet
         },
       }),
     );
@@ -278,7 +278,7 @@ describe("Engine tick — the person's volume weight", () => {
       ["m1", 0.3],
     ]);
     const event = store.scoreEvents.find((e) => e.personId === "p-mrbeast" && e.force === "signals")!;
-    expect(event.details).toMatchObject({ volumeWeight: 0.25, volume: { sufficient: true, samples: 7, meanPerDay: 80 } });
+    expect(event.details).toMatchObject({ volumeWeight: 0.25, volume: { sufficient: true, samples: 7, meanPerDay: 16 } });
     const thin = store.scoreEvents.find((e) => e.personId === "p-kendrick" && e.force === "signals")!;
     expect(thin.details).toMatchObject({ volumeWeight: 1, volume: { sufficient: false, samples: 3 } });
   });

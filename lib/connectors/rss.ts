@@ -182,16 +182,45 @@ export function parseFeed(xml: string): { title: string | null; items: FeedItem[
   throw new ConnectorError("Feed is neither RSS 2.0 nor Atom");
 }
 
+/**
+ * A DATE WE CAN BELIEVE (Phase 18++).
+ *
+ * Two holes, opposite in direction, both closed here. An item with no date at
+ * all used to be stamped with the poll's own clock, which made it maximally
+ * FRESH — the worst possible reading for something we know nothing about. And
+ * an item whose date parsed to the epoch was taken at face value: Google News
+ * emits `Thu, 01 Jan 1970 00:00:00 GMT` for an entry that has no publication
+ * date, such as a publisher's standing profile page, and one of those
+ * ("Sergey Brin - Forbes", forbes.com) reached production on 2026-09-17 dated
+ * 1970-01-01.
+ *
+ * publisher_rss has refused undated items since Phase 13. This is the same
+ * rule at the aggregator door: an item without a date we can believe is not
+ * stored at all, rather than guessed at from either end. The metric side was
+ * already safe — newsVolume() only ever counted dated items inside its window.
+ */
+export const EARLIEST_PLAUSIBLE_PUBLISHED_AT = Date.UTC(2000, 0, 1);
+/** A feed clock a few minutes ahead of ours is not a future article. */
+export const FUTURE_TOLERANCE_MS = 10 * 60_000;
+
+export function hasBelievableDate(item: FeedItem, now: Date): boolean {
+  if (item.publishedAt === null) return false;
+  const at = item.publishedAt.getTime();
+  return at >= EARLIEST_PLAUSIBLE_PUBLISHED_AT && at <= now.getTime() + FUTURE_TOLERANCE_MS;
+}
+
 export function articleSignal(item: FeedItem, now: Date): RawSignal | null {
   const key = item.guid ?? item.link;
   if (!key) return null;
+  if (!hasBelievableDate(item, now)) return null;
+  const publishedAt = item.publishedAt as Date;
   const headline = stripOutletSuffix(item.title, item.outlet);
   const publisher = publisherDomainOf(item);
   return {
     headline,
     story: headline,
     publisherDomain: publisher.domain,
-    occurredAt: item.publishedAt ?? now,
+    occurredAt: publishedAt,
     dedupeKey: `rss:${key}`,
     rawPayload: {
       kind: "article",
@@ -200,7 +229,7 @@ export function articleSignal(item: FeedItem, now: Date): RawSignal | null {
       title: item.title,
       link: item.link,
       guid: item.guid,
-      publishedAt: item.publishedAt ? item.publishedAt.toISOString() : null,
+      publishedAt: publishedAt.toISOString(),
       source_url: item.sourceUrl,
       publisher_domain: publisher.domain,
       publisher_domain_from: publisher.from,
@@ -311,10 +340,13 @@ export const rssConnector: DataConnector = {
     if (!identifier.trim()) throw new ConnectorError(`No feed configured for ${person.slug}`);
     const config = readRssConfig(context.config);
     const feed = await loadFeed(identifier, context);
-    return feed.items
-      .slice(0, config.max_items)
-      .map((item) => articleSignal(item, context.now))
-      .filter((signal): signal is RawSignal => signal !== null);
+    const considered = feed.items.slice(0, config.max_items);
+    const signals = considered.map((item) => articleSignal(item, context.now)).filter((signal): signal is RawSignal => signal !== null);
+    // A refusal that is only a missing row is a refusal nobody sees: the one
+    // epoch-dated item of 2026-09-17 sat in production for a day unnoticed.
+    const undated = considered.filter((item) => !hasBelievableDate(item, context.now)).length;
+    if (undated > 0) context.note?.(`${undated} of ${considered.length} items refused: no believable publication date`);
+    return signals;
   },
 
   async fetchMetrics(person, identifier, context): Promise<MetricReading[]> {

@@ -5,7 +5,7 @@ import { fakeFetchRoutes, makePerson, makeSource } from "@/lib/__tests__/fixture
 import { buildPublisherPolicy } from "@/lib/ingest/publishers";
 import { personNames } from "@/lib/ingest/stories";
 
-import { articleSignal, feedUrlFor, newsVolume, parseFeed, readRssConfig, resetFeedCache, rssConnector, type FeedItem } from "./rss";
+import { EARLIEST_PLAUSIBLE_PUBLISHED_AT, FUTURE_TOLERANCE_MS, articleSignal, feedUrlFor, hasBelievableDate, newsVolume, parseFeed, readRssConfig, resetFeedCache, rssConnector, type FeedItem } from "./rss";
 import { ConnectorError } from "./types";
 
 const NOW = new Date("2026-09-12T12:00:00.000Z");
@@ -86,7 +86,7 @@ describe("parseFeed", () => {
 describe("articleSignal and newsVolume", () => {
   const items = parseFeed(RSS).items;
 
-  it("keys on the guid, then the link, dates by pubDate or the run, and names the publisher and the story", () => {
+  it("keys on the guid, then the link, refuses an item with no believable date, and names the publisher and the story", () => {
     const first = articleSignal(items[0], NOW)!;
     // The outlet suffix Google News appends is not part of the headline; the publisher comes from the source URL, never the Google News link.
     expect(first).toMatchObject({ headline: "MrBeast opens a theme park", story: "MrBeast opens a theme park", publisherDomain: "example.com", dedupeKey: "rss:one-guid", occurredAt: new Date("2026-09-12T10:30:00Z") });
@@ -110,9 +110,34 @@ describe("articleSignal and newsVolume", () => {
     const atom = articleSignal(parseFeed(ATOM).items[0], NOW)!;
     expect(atom).toMatchObject({ publisherDomain: "outlet.example", headline: "Drake announces a tour" });
     expect(atom.rawPayload).toMatchObject({ publisher_domain: "outlet.example", publisher_domain_from: "link" });
-    expect(articleSignal(items[2], NOW)!.occurredAt).toBe(NOW);
+    // Phase 18++: an item without a date we can believe is refused outright
+    // rather than stamped with the run's clock, which made it maximally FRESH.
+    expect(articleSignal(items[2], NOW)).toBeNull();
     expect(articleSignal({ title: "x", link: null, guid: null, publishedAt: null, outlet: null, sourceUrl: null }, NOW)).toBeNull();
     expect(personNames(person)).toEqual(["MrBeast", "James Stephen Donaldson"]);
+  });
+
+  /**
+   * PHASE 18++. The two date holes, one realised and one latent, both closed.
+   * Google News emits the epoch for an entry with no publication date — a
+   * publisher's standing profile page, say — and one of those ("Sergey Brin -
+   * Forbes", forbes.com) reached production on 2026-09-17 dated 1970-01-01.
+   * The other direction was worse: an item with no date at all was stamped
+   * with the run's clock, making the least trustworthy item the freshest.
+   */
+  it("refuses an item whose date we cannot believe: none at all, the epoch, or the far future", () => {
+    const item = (publishedAt: Date | null): FeedItem => ({ title: "Sergey Brin - Forbes", link: "https://news.google.com/rss/articles/x", guid: "x", publishedAt, outlet: "Forbes", sourceUrl: "https://www.forbes.com" });
+    expect(hasBelievableDate(item(null), NOW)).toBe(false);
+    expect(hasBelievableDate(item(new Date(0)), NOW)).toBe(false);
+    expect(hasBelievableDate(item(new Date("1999-12-31T23:59:59Z")), NOW)).toBe(false);
+    expect(hasBelievableDate(item(new Date(NOW.getTime() + 60 * 60_000)), NOW)).toBe(false);
+    // The boundaries: the floor itself and a feed clock a few minutes fast.
+    expect(hasBelievableDate(item(new Date(EARLIEST_PLAUSIBLE_PUBLISHED_AT)), NOW)).toBe(true);
+    expect(hasBelievableDate(item(new Date(NOW.getTime() + FUTURE_TOLERANCE_MS - 1)), NOW)).toBe(true);
+    // And the refusal reaches the signal, so nothing epoch-dated is stored.
+    expect(articleSignal(item(new Date(0)), NOW)).toBeNull();
+    expect(articleSignal(item(null), NOW)).toBeNull();
+    expect(articleSignal(item(new Date("2026-09-12T10:30:00Z")), NOW)).not.toBeNull();
   });
 
   it("counts dated items inside the trailing window only", () => {

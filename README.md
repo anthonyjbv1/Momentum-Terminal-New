@@ -1457,6 +1457,143 @@ score's drift rate at the same instant instead of half of it; and backdating
 `tracked_since` would buy tidiness with a lie about when each person started
 being watched. The right answer is to know the date, not to move it.
 
+## The volume reference, re-derived before it engaged (Phase 18++)
+
+Phase 15 set `referenceSignalsPerDay` = 20 against an ASSUMED roster of 3–100
+events a day. The real roster, measured once the denominator was correct, runs
+0.5 to 30. At 20 the ceiling decided fourteen of sixteen weights, so when the
+mechanism engaged on 2026-09-25 it would have been a near-constant 2× on the
+Signals force — a global gain, not a normalisation, and the seeded-target
+failure in a new costume.
+
+### The derivation
+
+The reference is now the **geometric mean of the roster's per-person daily
+event rate**, measured over the complete days in which the whole roster was
+ingesting, people with no volume at all excluded from the mean (log 0 is
+undefined) and reported separately:
+
+| window | geometric mean | median | arithmetic mean |
+|---|---|---|---|
+| last 2 complete days | 3.85 | 3.00 | 6.40 |
+| last 3 complete days | 3.70 | 3.33 | 6.24 |
+| last 4 complete days | 3.50 | 3.25 | 5.43 |
+
+**Rounded to 4.** The geometric mean is the right centre because the weight is
+multiplicative: setting log(reference) to the mean of log(rate) centres the
+log-weights on zero, so as many subjects are scaled up as down and by
+proportionate amounts. The arithmetic mean is dragged by one subject's game-day
+spikes — Patrick Mahomes runs 30 a day across an NFL weekend and 1 on a Tuesday
+— and would push the quiet majority below 1. The median agrees within 20 %,
+which is itself evidence the choice is not knife-edge. The geometric mean is
+also stable across the three windows (3.50–3.85) where the arithmetic mean is
+not (5.43–6.40).
+
+### The weight table
+
+Three-complete-day rates to 2026-09-17, the same measurement the reference came
+from:
+
+| slug | typical / day | weight at 20 | **weight at 4** |
+|---|---|---|---|
+| patrick-mahomes | 30.33 | 0.659 | **0.132** |
+| jensen-huang | 10.33 | 1.935 | **0.387** |
+| elon-musk | 9.67 | 2.000 | **0.414** |
+| drake | 9.33 | 2.000 | **0.429** |
+| mark-zuckerberg | 8.33 | 2.000 | **0.480** |
+| warren-buffett | 6.00 | 2.000 | **0.667** |
+| kai-cenat | 4.67 | 2.000 | **0.857** |
+| mrbeast | 3.33 | 2.000 | **1.200** |
+| larry-ellison | 2.67 | 2.000 | **1.500** |
+| jeff-bezos | 2.33 | 2.000 | **1.714** |
+| sergey-brin | 2.00 | 2.000 | **2.000** (exactly at it) |
+| larry-page | 1.67 | 2.000 | **2.000** (capped) |
+| michael-dell | 1.67 | 2.000 | **2.000** (capped) |
+| adin-ross | 0.67 | 2.000 | **2.000** (capped) |
+| kendrick-lamar | 0.67 | 2.000 | **2.000** (capped) |
+| anthony-baptiste | 0.00 | 2.000 | **2.000** (no volume) |
+
+**Does it discriminate?** That is the test, and it is what the tests in
+`signal-volume.test.ts` assert. A typical day's total impact — rate × weight,
+which perfect normalisation would make equal for everyone — spanned **14.9×**
+across the roster at 20 and spans **3.0×** at 4. The ceiling decides six weights
+rather than fourteen, of which four are genuinely clamped. And it has not
+flattened either: the weights still span more than 10×, so they are saying
+something about each person rather than nothing.
+
+### The bounds, examined with the reference
+
+`maxWeight` 2 now binds below **2 events a day**, where a person's rate is
+estimated from a handful of events and its relative error is large — so it is a
+variance guard on the subjects we know least about, which is what a cap should
+be. At 20 it had stopped being a guard and become the mechanism. `minWeight`
+0.1 binds above **40 events a day** and nobody is close; a floor that never
+fires is a floor doing its job, and it remains the guard against a runaway
+connector reading as a person with no news. Both stay as they are.
+
+### Fixed, not roster-relative
+
+A roster-relative reference (the live geometric mean, recomputed each tick)
+would never go stale — and would couple every person's weight to every other
+person's. Adding ten quiet subjects at 0.5 a day to today's roster drops the
+live geometric mean from 4.0 to about 0.9, so **every existing subject's weight
+would fall by more than a factor of four overnight**, for reasons that have
+nothing to do with them, and their score history would stop being comparable
+across a roster change. That is precisely what the per-person design exists to
+avoid. A fixed constant goes stale instead — but *visibly*, and re-deriving it
+is a dated, deliberate act.
+
+So the reference stays fixed, and the staleness is made observable rather than
+latent. **`/admin` → Engine state → Signal volume** shows every person's typical
+rate, weight and whether a bound is deciding it, plus four figures: how many
+weights have engaged, the reference, the roster's live geometric mean, and how
+many sit on a bound. **Re-derive when either symptom crosses:**
+
+1. more than **a third** of the engaged people sit on a bound, or
+2. the roster's live geometric mean leaves **[reference ÷ 2, reference × 2]**.
+
+Sensitivity, so the trigger is not a mystery: the reference moves with the
+*typical* subject, not the loudest. Adding N subjects at rate r to a roster of M
+shifts log(reference) by (N / (M+N)) × (log r − log reference) — ten quiet
+subjects on sixteen is a −78 % move, three new sources doubling three people's
+rates is about +15 %. Roster changes move it far more than source changes.
+`ENGINE_VOLUME_REFERENCE` re-sets it without a code change.
+
+### The two-wave transient
+
+The weight engages **2026-09-25** for the seven mapped in Phase 15 and
+**2026-09-26** for the nine remapped in Phase 17. `Weight engaged` on the admin
+panel counts it live. Nothing is suppressed for that day and nothing should be:
+`topMovers` ranks by absolute score change, so for one day it compares weighted
+movement against unweighted — but hiding the strip would remove the evidence
+while the inconsistency happens, and annotating it would put an Engine
+implementation detail on a subject-facing surface for one day. The board is
+paper-traded and under an auth gate; the honest handling is to watch the
+transient in the console, which is now possible, and leave the public surface
+telling the truth about what the Engine actually did.
+
+### Two loose items
+
+**Finnhub is live.** The key was set; 36 ok polls in the three hours to 16:45
+UTC, nine executives, 36 observations, no Form 4s in the window. **BRK.B is
+Finnhub's spelling for Berkshire Hathaway** and it resolves: 7 readings of
+company news volume between 8 and 23 items a day. Page and Brin both read GOOGL
+and carry identical values, as designed.
+
+**The epoch-dated article.** Google News emits `Thu, 01 Jan 1970 00:00:00 GMT`
+for an entry with no publication date — a publisher's standing profile page —
+and one such item ("Sergey Brin - Forbes", forbes.com) was stored on 2026-09-17
+dated 1970-01-01. `rss.ts` now refuses any item whose date it cannot believe
+(missing, before 2000, or more than ten minutes in the future), the same rule
+`publisher_rss` has applied since Phase 13, and the poll carries a note saying
+how many were refused rather than dropping them silently. The opposite hole was
+worse and also closed: an undated item used to be stamped with the run's clock,
+making the least trustworthy item the *freshest*. Of 651 stored articles exactly
+**one** has the defect (that one) and **none** were stamped with the run — the
+`?? now` path was latent rather than realised. The stored row is left in place;
+it sits outside every freshness and volume window and removing production rows
+is not something this phase was asked to do.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -1469,6 +1606,7 @@ being watched. The right answer is to know the date, not to move it.
 - **Phase 12+**: newest-first selection with a least-recently-served rotation across people, and memory event expiry (30 days, dated folds written as history, today's date and event ages in the person block).
 - **Phase 13**: publisher-direct feeds — the `publisher_feeds` catalogue read as one shared fetch per run, whole-word name matching scoped by topic, undated items refused, per-feed health and discovery written back onto the rows, the two news doors deduplicated as one story family with Google News kept as the fallback — and the ingestion cron at every fifteen minutes with every source interval off the multiple.
 - **Phase 13+**: athlete metrics beyond passing yards — `config.game_stats` on the API-Sports row (every per-game figure read from one request per game, each with its own anchor), `game_passer_rating` (+1) and `game_interceptions` (−1) registered beside yards with touchdowns and every composite figure refused, and the Signals force folding one source's metric signals of one moment into one reading carrying their mean, so a game is its event and its stat line and never three copies of the line.
+- **Phase 18++**: the volume reference re-derived from measured data before it engages — `referenceSignalsPerDay` 20 → 4, the geometric mean of the roster's own daily rates (the typical-day impact spread falls 14.9× → 3.0×, the ceiling decides six weights rather than fourteen), the bounds examined and kept, fixed chosen over roster-relative with the coupling cost quantified, `ENGINE_VOLUME_REFERENCE` for a re-derivation without a code change, the staleness made visible on /admin (per-person weight, capped state, engaged count, the roster's live geometric mean and the two review triggers), and the Google News epoch-date hole closed in both directions.
 - **Phase 18+**: the volume denominator counts events, not artifacts — one rule for both sides of the weight (a signal counts when its rate is set by the world, not by our polling), `UNCOUNTED_SIGNAL_KINDS` shared between `person_signal_volume()` and the Signals force with a test that fails if they diverge, comment digests and the legacy per-comment kind out of both (MrBeast's series 14.86 → 1.71 a day, the only subject moved), the four callers of the shared baseline documented at the function and pinned by an exhaustive-import test, and two findings reported not changed: the weight saturates at its ceiling for fifteen of sixteen at the present reference, and the two-wave engagement (2026-09-25 and 2026-09-26) is one day of weighted movement ranked against unweighted on the movers strip.
 - **Phase 18**: two queued scorer-adjacent changes replayed against real data and both declined — the robust baseline spread (3,130 readings reconstructed and reclassified: winsorizing moves one, MAD moves 176 the wrong way on 773 zero-MAD windows; revisit at the per-game athlete metrics in November) and the casual-register lexicon (87 of 87 digests neutral; a casual extension would turn 74 of them positive and change 30 of the 33 news headlines it touches, two of them losing a correct negative). Nothing in the Engine's behaviour changed; the findings, the four callers of the shared baseline and the register boundary are now pinned by tests.
 - **Phase 17**: Finnhub for the nine executives, and no stock price in any score — the company's news VOLUME as a count baselined per person and the tracked person's own Form 4 filings as events (matched by name, limited to the decision codes, carrying shares and never a price); the daily close recorded through `config.observe_only`, a runner-level rule that records a reading and gives it no observation, signal, force or history, so there is no trail to unwind and enabling it is one row update; `observe_only_snapshots` for watching it; and the rest of Finnhub's non-price surface reported, not wired.

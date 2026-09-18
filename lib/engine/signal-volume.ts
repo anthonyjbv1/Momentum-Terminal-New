@@ -162,6 +162,94 @@ export function readSignalVolumeRow(row: PersonSignalVolumeRow): [string, Person
   ];
 }
 
+// ---------------------------------------------------------------------------
+// The spread, for the operator (Phase 18++)
+// ---------------------------------------------------------------------------
+
+/**
+ * WHY THIS EXISTS. referenceSignalsPerDay is a cross-person constant inside a
+ * per-person mechanism, so it goes stale whenever the roster or its sources
+ * change — and it went stale silently for three phases, until fourteen of
+ * sixteen people sat on the ceiling and the weight had quietly become a
+ * constant multiplier. A roster-relative reference would self-correct but
+ * would couple every person's weight to every other person's, which is the
+ * thing the per-person design exists to avoid. So the reference stays fixed
+ * and the staleness is made VISIBLE instead: these two symptoms are on
+ * /admin, and either one crossing is the signal to re-derive.
+ */
+export interface VolumeSpreadRow {
+  personId: string;
+  /** Complete days of history behind the reading. */
+  samples: number;
+  /** The weight the tick would apply right now. Exactly 1 while the baseline is thin. */
+  weight: number;
+  /** The person's own typical events per day, or null until the baseline is sufficient. */
+  typicalPerDay: number | null;
+  /** Whether the baseline is sufficient — whether the weight is doing anything at all. */
+  engaged: boolean;
+  /** Which bound the weight is sitting on, if either. */
+  bound: "ceiling" | "floor" | null;
+}
+
+export interface VolumeSpread {
+  reference: number;
+  minWeight: number;
+  maxWeight: number;
+  rows: VolumeSpreadRow[];
+  /** People whose baseline is sufficient: the weight is live for them. */
+  engaged: number;
+  people: number;
+  atCeiling: number;
+  atFloor: number;
+  /**
+   * The geometric mean of the engaged people's typical rates — what the
+   * reference would be if it were re-derived today. null until somebody is
+   * engaged with a non-zero rate.
+   */
+  liveGeometricMean: number | null;
+  /** More than a third of the engaged people are sitting on a bound. */
+  boundedShareHigh: boolean;
+  /** The live geometric mean has left [reference / 2, reference x 2]. */
+  referenceDrifted: boolean;
+}
+
+/** Either symptom crossing is the signal to re-derive the reference. */
+export const BOUNDED_SHARE_REVIEW_THRESHOLD = 1 / 3;
+export const REFERENCE_DRIFT_FACTOR = 2;
+
+export function volumeSpread(volumes: Map<string, PersonSignalVolume>, config: EngineConfig["signals"]["volume"]): VolumeSpread {
+  const rows: VolumeSpreadRow[] = [...volumes.entries()]
+    .map(([personId, volume]) => {
+      const computed = volumeWeight(volume, config);
+      const engaged = computed.reading?.sufficient === true;
+      const typicalPerDay = engaged && computed.reading ? round(Math.max(computed.reading.mean, 0), 2) : null;
+      const bound = !engaged ? null : computed.weight >= config.maxWeight ? "ceiling" : computed.weight <= config.minWeight ? "floor" : null;
+      return { personId, samples: computed.reading?.samples ?? 0, weight: computed.weight, typicalPerDay, engaged, bound } satisfies VolumeSpreadRow;
+    })
+    .sort((a, b) => (b.typicalPerDay ?? -1) - (a.typicalPerDay ?? -1) || a.personId.localeCompare(b.personId));
+
+  const engagedRows = rows.filter((row) => row.engaged);
+  const positive = engagedRows.map((row) => row.typicalPerDay ?? 0).filter((rate) => rate > 0);
+  const liveGeometricMean = positive.length > 0 ? round(Math.exp(positive.reduce((total, rate) => total + Math.log(rate), 0) / positive.length), 3) : null;
+  const bounded = engagedRows.filter((row) => row.bound !== null).length;
+
+  return {
+    reference: config.referenceSignalsPerDay,
+    minWeight: config.minWeight,
+    maxWeight: config.maxWeight,
+    rows,
+    engaged: engagedRows.length,
+    people: rows.length,
+    atCeiling: engagedRows.filter((row) => row.bound === "ceiling").length,
+    atFloor: engagedRows.filter((row) => row.bound === "floor").length,
+    liveGeometricMean,
+    boundedShareHigh: engagedRows.length > 0 && bounded / engagedRows.length > BOUNDED_SHARE_REVIEW_THRESHOLD,
+    referenceDrifted:
+      liveGeometricMean !== null &&
+      (liveGeometricMean < config.referenceSignalsPerDay / REFERENCE_DRIFT_FACTOR || liveGeometricMean > config.referenceSignalsPerDay * REFERENCE_DRIFT_FACTOR),
+  };
+}
+
 /** What the force's details carry about the volume, rounded for the audit trail. */
 export function describeVolume(volume: VolumeWeight): Record<string, unknown> | null {
   if (!volume.reading) return null;

@@ -1,8 +1,9 @@
 import "server-only";
 
-import { DEFAULT_ENGINE_CONFIG } from "@/lib/engine/config";
+import { DEFAULT_ENGINE_CONFIG, engineConfigFromEnv } from "@/lib/engine/config";
+import { readSignalVolumeRow, volumeSpread, type PersonSignalVolume, type VolumeSpread, type VolumeSpreadRow } from "@/lib/engine/signal-volume";
 import { HIGH_IMPACT_THRESHOLD } from "@/lib/feed/feed-model";
-import { isEngineCronEnabled, isIngestCronEnabled, isTargetDriftEnabled } from "@/lib/env";
+import { getEngineEnvOverrides, isEngineCronEnabled, isIngestCronEnabled, isTargetDriftEnabled } from "@/lib/env";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 import { requireAdmin } from "./auth";
@@ -540,6 +541,12 @@ export interface EngineReport {
     activeSources: number;
     lastTickAt: string | null;
   }>;
+  /**
+   * The per-person volume weight and the two symptoms of a stale reference
+   * (Phase 18++). `engaged` counts the people the weight is live for, which
+   * is how the 2026-09-25 / 09-26 transition is watched rather than inferred.
+   */
+  volume: Omit<VolumeSpread, "rows"> & { rows: Array<VolumeSpreadRow & { slug: string; displayName: string }> };
 }
 
 function readTickWork(summary: unknown): TickWork | null {
@@ -578,6 +585,15 @@ export async function readEngine(): Promise<EngineReport> {
     .eq("processed", false)
     .in("person_id", (people.data ?? []).map((person) => person.id));
   if (backlog.error) throw new Error(`backlog: ${backlog.error.message}`);
+
+  // The volume weight, as the next tick would compute it: the same RPC and
+  // the same config the tick reads, so the console cannot drift from it.
+  const config = engineConfigFromEnv(getEngineEnvOverrides());
+  const volumeRows = await client.rpc("person_signal_volume", { p_days: config.signals.volume.windowDays });
+  if (volumeRows.error) throw new Error(`person_signal_volume: ${volumeRows.error.message}`);
+  const volumes = new Map<string, PersonSignalVolume>((volumeRows.data ?? []).map(readSignalVolumeRow));
+  const spread = volumeSpread(volumes, config.signals.volume);
+  const nameByPerson = new Map((people.data ?? []).map((person) => [person.id, { slug: person.slug, displayName: person.display_name }]));
 
   const rows = ticks.data ?? [];
   const durations = rows.map((tick) => (tick.finished_at && tick.started_at ? new Date(tick.finished_at).getTime() - new Date(tick.started_at).getTime() : null)).filter((ms): ms is number => ms !== null);
@@ -618,6 +634,12 @@ export async function readEngine(): Promise<EngineReport> {
       activeSources: sourcesByPerson.get(person.id) ?? 0,
       lastTickAt: person.last_tick_at,
     })),
+    volume: {
+      ...spread,
+      rows: spread.rows
+        .filter((row) => nameByPerson.has(row.personId))
+        .map((row) => ({ ...row, slug: nameByPerson.get(row.personId)!.slug, displayName: nameByPerson.get(row.personId)!.displayName })),
+    },
   };
 }
 

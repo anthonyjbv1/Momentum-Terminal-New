@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_ENGINE_CONFIG, describeEngineOverrides, engineConfigFromEnv, parseExactTrue, parsePositiveInteger } from "./config";
+import { DEFAULT_ENGINE_CONFIG, describeEngineOverrides, engineConfigFromEnv, parseExactTrue, parsePositiveInteger, parsePositiveNumber } from "./config";
 import { CRON_DEFAULTS } from "./cron";
 import { CALLS_PER_PERSON_PER_TICK } from "./sentiment/budget";
 import { CALL_OVERHEAD_MS } from "./sentiment/llm";
@@ -96,6 +96,28 @@ describe("Phase 14 invariants", () => {
     expect(parseExactTrue("true")).toBe(true);
     expect(parseExactTrue(undefined)).toBe(false);
     expect(describeEngineOverrides(engineConfigFromEnv({ targetDriftEnabled: "true" }))).toEqual(["targetDrift.enabled = true (default false)"]);
+  });
+
+  /**
+   * PHASE 18++. The volume reference is the one tunable that is EXPECTED to
+   * need re-deriving as subjects and sources are added, so it has an override
+   * — otherwise the next re-derivation waits on a deploy, and a constant that
+   * is awkward to change is a constant that stays stale.
+   */
+  it("takes the volume reference from ENGINE_VOLUME_REFERENCE, decimals included, and ignores anything malformed", () => {
+    expect(signals.volume.referenceSignalsPerDay).toBe(4);
+    expect(engineConfigFromEnv({}).signals.volume.referenceSignalsPerDay).toBe(4);
+    expect(engineConfigFromEnv({ volumeReference: "3.7" }).signals.volume.referenceSignalsPerDay).toBe(3.7);
+    expect(engineConfigFromEnv({ volumeReference: " 12 " }).signals.volume.referenceSignalsPerDay).toBe(12);
+    for (const bad of ["", "0", "-2", "abc", "4x", "1e3", "NaN", "Infinity"]) {
+      expect(engineConfigFromEnv({ volumeReference: bad }).signals.volume.referenceSignalsPerDay, bad).toBe(4);
+    }
+    expect(parsePositiveNumber("0.5")).toBe(0.5);
+    expect(parsePositiveNumber(undefined)).toBeNull();
+    expect(describeEngineOverrides(engineConfigFromEnv({ volumeReference: "3" }))).toEqual(["signals.volume.referenceSignalsPerDay = 3 (default 4)"]);
+    // The override touches nothing else in the block.
+    const overridden = engineConfigFromEnv({ volumeReference: "3" }).signals.volume;
+    expect(overridden).toEqual({ ...signals.volume, referenceSignalsPerDay: 3 });
   });
 
   it("names the drift rate, the bound and the coverage rate as tunables: half-life 14 days, ±8 points, 0.2 points an hour", () => {

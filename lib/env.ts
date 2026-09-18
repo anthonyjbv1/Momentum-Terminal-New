@@ -123,9 +123,18 @@ export function getEngineSecretOrNull(): string | null {
  *                                         guard (code default 30, unchanged)
  *   ENGINE_TARGET_DRIFT_ENABLED           the drifting Gravity target (Phase
  *                                         14); exactly "true" turns it on
+ *   ENGINE_VOLUME_REFERENCE               the volume weight's reference rate
+ *                                         (code default 4, derived from the
+ *                                         roster's measured geometric mean);
+ *                                         expected to need re-deriving as
+ *                                         subjects and sources are added
  */
-export function getEngineEnvOverrides(): { tradingMinPopulatedWindows: string | undefined; targetDriftEnabled: string | undefined } {
-  return { tradingMinPopulatedWindows: process.env.ENGINE_TRADING_MIN_POPULATED_WINDOWS, targetDriftEnabled: process.env.ENGINE_TARGET_DRIFT_ENABLED };
+export function getEngineEnvOverrides(): { tradingMinPopulatedWindows: string | undefined; targetDriftEnabled: string | undefined; volumeReference: string | undefined } {
+  return {
+    tradingMinPopulatedWindows: process.env.ENGINE_TRADING_MIN_POPULATED_WINDOWS,
+    targetDriftEnabled: process.env.ENGINE_TARGET_DRIFT_ENABLED,
+    volumeReference: process.env.ENGINE_VOLUME_REFERENCE,
+  };
 }
 
 /**
