@@ -108,3 +108,64 @@ describe("sentiment registry", () => {
     await expect(fake.scoreSignal(input("anything"))).resolves.toMatchObject({ direction: -1 });
   });
 });
+
+/**
+ * PHASE 18. The lexicon reads the news register and not the creator-comment
+ * one, and that is a decision, not an oversight: scoreHeadline is one shared
+ * function, so casual vocabulary added for comment digests lands on every news
+ * headline too. These are the real production headlines a candidate casual
+ * extension was replayed against — 30 of the 33 it touched changed direction.
+ * They are pinned here so an extension has to face them first.
+ *
+ * The full replay and the recommendation are in lib/ingest/comments.ts.
+ */
+describe("the register boundary: casual vocabulary would misread these real headlines", () => {
+  it("keeps the negative reading of headlines where a casual positive term appears", () => {
+    // "fire" is praise in a comment and the opposite in both of these.
+    for (const headline of [
+      "Officials Under Fire for Missing Travis Kelce Penalty on Patrick Mahomes TD Run",
+      "Adin Ross Wants 'Investigation' Into Ray J vs. Supa Hot Fire Fight",
+    ]) {
+      expect(scoreHeadline(headline).direction, headline).toBe(-1);
+    }
+  });
+
+  it("stays neutral on headlines a casual lexicon would read as praise", () => {
+    for (const headline of [
+      "Sergey Brin fights fire with fire — and two ballot initiatives",
+      "MrBeast's 'God King' problem",
+      "Who Made the Guest List for King Charles III’s AI Summit",
+      "King Green Reveals $1.2M UFC Earnings, Mocks Adin Ross and BrandRisk Pay",
+      "Video: Kai Cenat on Quitting Streaming at His Peak to Start a Fashion Brand",
+      "Kendrick Lamar According to C. S. Lewis: Epic Poetry “Reincarnated” as Hip-Hop",
+      "Warren Buffett Has More Than 50% of His Portfolio in These 3 Stocks. Which One Is the Best Buy Today?",
+    ]) {
+      expect(scoreHeadline(headline).direction, headline).toBe(0);
+    }
+  });
+
+  it("stays neutral on headlines a casual lexicon would read as an insult", () => {
+    for (const headline of [
+      "‘The village idiot could have made it’: Warren Buffett’s dead-simple playbook to supercharge your retirement now",
+      "MrBeast Raps About His Millions on Lil Baby's \"Dead Fresh\" Remix",
+      "Heed Warren Buffett's Advice: The Time to Be Fearful When Others Are Greedy Has Arrived on Wall Street",
+      "Bears news: GM Ryan Poles' 'boring' takeaway from Patrick Mahomes' Caleb Williams advice",
+    ]) {
+      expect(scoreHeadline(headline).direction, headline).toBe(0);
+    }
+  });
+
+  it("reads real viewer comments as neutral, which is why every digest in production is mixed", () => {
+    // Six of the 96 distinct comments behind the 87 stored digests.
+    for (const comment of [
+      "Can we appreciate the camera crew? They are surviving the same extreme place without getting any credit. Legends behind the camera❤❤❤",
+      "This was insane! The jungle part was crazy 🔥",
+      "salute for cameraman they are the true legends and the best survivors",
+      "El Goat de Youtube!!! Que alegría que gente cómo tu invierta tanto en hacer tan buen contenido",
+      "Bro is making movie productions now💀",
+      "Congrats on the 1000 video🎉🎉",
+    ]) {
+      expect(scoreHeadline(comment).direction, comment).toBe(0);
+    }
+  });
+});

@@ -1250,6 +1250,140 @@ Phase 10 refused concurrent viewers as an hourly metric because a reading taken 
 
 **Observability.** Every fire logs a `[live]` check line; every sample, moment, observation and session change is a line and a row (`live_samples`, `live_sessions`); `/admin` lists open and recent sessions. A connector may now also leave a **note** on an otherwise ok poll (`context.note`), written onto the poll row's reason and logged, for a fallback read that came back empty; the API-Sports connector uses it for the season-total endpoint, which stopped gating the per-game metrics in this phase.
 
+## Two queued changes, replayed and declined (Phase 18)
+
+Both had been deferred for want of data. There is data now, and it says not to
+ship either. Nothing in the Engine's behaviour changed in this phase; what
+changed is that the two questions are answered in the code that raised them
+(`lib/engine/baseline.ts`, `lib/ingest/comments.ts`) with their numbers attached.
+
+### The robust baseline spread
+
+`baselineDeviation` uses the population mean and sd of the trailing window, so
+one extreme reading shifts both for the whole window and every ordinary move
+after it reads as fewer sigmas. The two candidate fixes — winsorize the window
+at ±3 sd, or swap mean/sd for median and 1.4826 × MAD — were replayed against
+**3,130 readings across 14 metrics** (2026-09-14 to 2026-09-18) by
+reconstructing each reading's own window from `raw_metric_observations`. The
+reconstruction reproduced the stored classification on **3,130 of 3,130**.
+
+| rule | readings that emit | reclassified |
+|---|---|---|
+| current (mean / sd) | 662 | — |
+| winsorized at ±3 sd | 663 | 1 |
+| median / 1.4826 × MAD | 604 | 176 (117 lost, 59 gained) |
+
+Winsorizing is a no-op at this volume: its one difference is
+`patrick-mahomes / news_volume_24h` at 2026-09-18 06:45, where the mean moves
+37.5566 → 37.5496 and the sd 9.5671 → 9.5458, carrying |sigma| 0.9989 → 1.0004
+across the deadband edge. MAD is actively worse: **773 of the windows have a
+MAD of exactly 0**, because these are small-integer counts whose median
+absolute deviation collapses once half the window shares a value, and a zero
+MAD falls through to the constant `sd_floor` — the metric stops being
+normalised against itself at all. Deferred, with a named revisit: the per-game
+athlete metrics (`min_samples` 8 over 1,680 h) are the one family whose window
+never fills, so around eight played games, in November.
+
+The replay, to re-run it later (service role; `sd_floor` comes off each source's
+`config.metrics`, the deadband is 1.0 σ for every metric, and each reading's
+window is rebuilt from the observations inside its own `window_hours`):
+
+```sql
+with cfg as (
+  select d.id as sid, m.key as mk, (m.value->>'sd_floor')::numeric as sd_floor
+    from public.data_sources d, lateral jsonb_each(d.config->'metrics') m(key, value)
+), obs as (
+  select o.id, o.person_id, o.data_source_id, o.metric_key, o.recorded_at, o.observed,
+         o.samples, o.min_samples, o.window_hours, o.outcome, c.sd_floor
+    from public.raw_metric_observations o
+    join cfg c on c.sid = o.data_source_id and c.mk = o.metric_key
+   where o.observed is not null
+), pairs as (          -- every reading's own trailing window, the reading included
+  select a.id, b.observed as pt
+    from obs a join obs b
+      on b.person_id = a.person_id and b.data_source_id = a.data_source_id
+     and b.metric_key = a.metric_key and b.recorded_at <= a.recorded_at
+     and b.recorded_at >= a.recorded_at - (a.window_hours * interval '1 hour')
+), s1 as (
+  select p.id, avg(p.pt) as mean, coalesce(stddev_pop(p.pt), 0) as sd,
+         percentile_cont(0.5) within group (order by p.pt) as med
+    from pairs p group by p.id
+), s2 as (
+  select p.id,
+         avg(least(greatest(p.pt, s1.mean - 3*s1.sd), s1.mean + 3*s1.sd)) as wmean,
+         coalesce(stddev_pop(least(greatest(p.pt, s1.mean - 3*s1.sd), s1.mean + 3*s1.sd)), 0) as wsd,
+         percentile_cont(0.5) within group (order by abs(p.pt - s1.med)) as mad
+    from pairs p join s1 on s1.id = p.id group by p.id
+), c as (
+  select o.metric_key, o.outcome,
+         (o.samples >= o.min_samples and abs(o.observed - s1.mean)  > greatest(s1.sd,  o.sd_floor))          as emit_now,
+         (o.samples >= o.min_samples and abs(o.observed - s2.wmean) > greatest(s2.wsd, o.sd_floor))          as emit_wins,
+         (o.samples >= o.min_samples and abs(o.observed - s1.med)   > greatest(1.4826*s2.mad, o.sd_floor))   as emit_mad,
+         (o.samples >= o.min_samples and s2.mad = 0)                                                         as mad_zero
+    from obs o join s1 on s1.id = o.id join s2 on s2.id = o.id
+)
+select metric_key, count(*) as observations,
+       count(*) filter (where (outcome = 'emitted') = emit_now) as reconstruction_agrees,
+       count(*) filter (where emit_now)  as emit_current,
+       count(*) filter (where emit_wins) as emit_winsorized,
+       count(*) filter (where emit_mad)  as emit_mad,
+       count(*) filter (where mad_zero)  as zero_mad_windows
+  from c group by 1 order by 2 desc;
+```
+
+**The separation holds, and it is narrower than it looks.** `baselineDeviation`
+has four callers: the metric pipeline, the derived `spike_count` cutoff, the
+per-person volume weight and the Trading Activity force. The volume weight
+divides `referenceSignalsPerDay` by the reading's **mean**, so either robust
+rule, applied inside the shared function, would silently re-level every
+person's volume weight — and there are no complete days to replay that against
+until 2026-09-25. The Signals freshness curve (24 h), memory expiry (30 days)
+and the Gravity drift clock (336 h) do not read the file at all. All of that is
+pinned by tests in `lib/engine/baseline.test.ts`; a future robust rule has to
+arrive as a per-call-site option with today's behaviour as its default.
+
+### The casual-register lexicon
+
+Phase 8+ predicted the keyword lexicon would read news and not viewer comments.
+It does: **87 of 87 digests in production read "are mixed" at 0.000 impact**,
+and 851 of the 870 sampled comment slots (96 distinct comments, 3 videos, one
+mapped person) score neutral. Comment volume is carrying that signal alone.
+
+Extending the lexicon was replayed with a candidate casual list (goat, legend,
+insane/crazy/wild, fire, respect, congrats, best/king/hero, love, praise emoji;
+mid/trash/flop/fell-off/scam/💀). It lifts the corpus from 5 positive comments
+to 53 and would turn **74 of the 87 digests positive**, average margin 0.385,
+none negative. It fails on both registers at once. `scoreHeadline` is one
+shared function, so of the 623 stored articles the 33 containing a candidate
+term change direction 30 times — two of them **losing a correct negative**
+("Officials Under Fire for Missing Travis Kelce Penalty", "Adin Ross Wants
+'Investigation' Into Ray J vs. Supa Hot Fire Fight") and several inheriting a
+wrong one ("Sergey Brin fights fire with fire", "MrBeast's 'God King' problem",
+"Warren Buffett's dead-simple playbook", "The Time to Be Fearful When Others
+Are Greedy"). Those readings are now pinned in
+`lib/engine/sentiment/rules.test.ts`. And on the comment side, the largest class
+it newly catches is praise for the **camera crew** — the example the digest was
+built to exclude.
+
+Letting the LLM grade the digest costs about **$0.55 a month** on Haiku 4.5 at
+the current 14.5 digests a day (~$9 a month if all sixteen subjects were mapped
+for comments; roughly five times that on Opus 5). Affordable, and it would read
+the register correctly — but it does not fix what is wrong. YouTube's top
+comments are ranked by likes, so the sample is positively selected by
+construction, and a perfectly graded digest is a better-measured one-sided
+reading: the Phase 10 rule about a sigma describing the sampling rather than
+the subject, arriving by a different door.
+
+**Neither ships.** Comment sentiment is not worth fixing while the sample is
+like-ranked and the subject attribution is unsolved.
+
+One consequence is flagged and not changed, because it belongs to the volume
+baseline rather than to the digest: `person_signal_volume()` counts every event
+signal, digests included, so these zero-impact rows sit in the denominator of
+the person's volume weight — over 2026-09-14..17 they were 80 of MrBeast's 92
+event signals. Excluding `comment_digest` from the count is a one-line change
+to the RPC and should be decided on its own, before the baseline engages.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -1262,6 +1396,7 @@ Phase 10 refused concurrent viewers as an hourly metric because a reading taken 
 - **Phase 12+**: newest-first selection with a least-recently-served rotation across people, and memory event expiry (30 days, dated folds written as history, today's date and event ages in the person block).
 - **Phase 13**: publisher-direct feeds — the `publisher_feeds` catalogue read as one shared fetch per run, whole-word name matching scoped by topic, undated items refused, per-feed health and discovery written back onto the rows, the two news doors deduplicated as one story family with Google News kept as the fallback — and the ingestion cron at every fifteen minutes with every source interval off the multiple.
 - **Phase 13+**: athlete metrics beyond passing yards — `config.game_stats` on the API-Sports row (every per-game figure read from one request per game, each with its own anchor), `game_passer_rating` (+1) and `game_interceptions` (−1) registered beside yards with touchdowns and every composite figure refused, and the Signals force folding one source's metric signals of one moment into one reading carrying their mean, so a game is its event and its stat line and never three copies of the line.
+- **Phase 18**: two queued scorer-adjacent changes replayed against real data and both declined — the robust baseline spread (3,130 readings reconstructed and reclassified: winsorizing moves one, MAD moves 176 the wrong way on 773 zero-MAD windows; revisit at the per-game athlete metrics in November) and the casual-register lexicon (87 of 87 digests neutral; a casual extension would turn 74 of them positive and change 30 of the 33 news headlines it touches, two of them losing a correct negative). Nothing in the Engine's behaviour changed; the findings, the four callers of the shared baseline and the register boundary are now pinned by tests.
 - **Phase 17**: Finnhub for the nine executives, and no stock price in any score — the company's news VOLUME as a count baselined per person and the tracked person's own Form 4 filings as events (matched by name, limited to the decision codes, carrying shares and never a price); the daily close recorded through `config.observe_only`, a runner-level rule that records a reading and gives it no observation, signal, force or history, so there is no trail to unwind and enabling it is one row update; `observe_only_snapshots` for watching it; and the rest of Finnhub's non-price surface reported, not wired.
 - **Phase 16**: live mode — a broadcast followed minute by minute on its own every-minute cron (the fifteen-minute schedule cannot sample faster than itself), per broadcaster by mapping (`live_sessions`, `live_samples`, the connector's `live` capability, Twitch's `/streams` for a hundred logins in one request and `/clips` counted to the second); within-session audience surges and clip bursts as prescored events judged against the session itself (`live_moment`, the prescored scorer, free of the model and the rotation), the session's summary as an ordinary event, and peak viewers and clips per stream hour per complete session as metrics on a month of sessions; chat left unbuilt for want of a socket; and the API-Sports season total no longer gating the per-game metrics, with a notes channel for a poll that limps.
 - **Phase 15**: every subject on the two news doors — the twelve unmapped people on `publisher_rss` and `rss` with topics, safe aliases and disambiguation per name; the per-person signal-volume weight on the shared baseline (`person_signal_volume()`, `config.signals.volume`, engaging seven complete days after a person's newest mapping); the ingestion runner polling a source's people `poll_concurrency` at a time; and the other sources reported, not wired.

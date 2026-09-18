@@ -99,3 +99,71 @@ describe("one implementation", () => {
     expect(source).not.toMatch(/standardDeviation|\bmean\(/);
   });
 });
+
+/**
+ * PHASE 18. The robust-spread replay recommended deferring the change again;
+ * these pin the two facts that recommendation rests on, so a later attempt has
+ * to confront them rather than rediscover them.
+ */
+describe("robust spread: why it is deferred", () => {
+  const median = (values: number[]) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const middle = sorted.length / 2;
+    return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[Math.floor(middle)];
+  };
+
+  it("MAD degenerates to zero on the small-integer count windows these metrics actually produce", () => {
+    // A real shape: a weekly total that barely moves. Half the window shares a
+    // value, so the median absolute deviation is 0 and sdApplied would collapse
+    // to the constant sd floor — the series would stop being normalised against
+    // itself. 773 of the 3,130 replayed windows look like this.
+    const window = [14, 14, 14, 14, 14, 14, 15, 13, 14, 20];
+    expect(median(window.map((value) => Math.abs(value - median(window))))).toBe(0);
+
+    // The shipped rule still has a usable spread on the same window.
+    const reading = baselineDeviation({ current: 20, baseline: window }, { minSamples: 5, sdFloor: 1, thresholdStdDevs: 1 });
+    expect(reading.sd).toBeGreaterThan(1);
+    expect(reading.sdApplied).toBe(reading.sd);
+  });
+
+  it("winsorizing at ±3 sd moves the one real reading it changes only across the deadband edge", () => {
+    // patrick-mahomes / news_volume_24h at 2026-09-18 06:45, the single
+    // classification that changed in 3,130 replayed readings:
+    // mean 37.5566 -> 37.5496, sd 9.5671 -> 9.5458, observed 28.
+    const sigmaNow = (28 - 37.5566) / 9.5671;
+    const sigmaWinsorized = (28 - 37.5496) / 9.5458;
+    expect(Math.abs(sigmaNow)).toBeLessThan(1);
+    expect(Math.abs(sigmaWinsorized)).toBeGreaterThan(1);
+    expect(Math.abs(Math.abs(sigmaWinsorized) - Math.abs(sigmaNow))).toBeLessThan(0.002);
+  });
+});
+
+/**
+ * PHASE 18 VERIFY 3. The four clocks are kept apart on purpose. Two consumers
+ * read this file and three clocks must never: a change to the shared baseline
+ * reaches the volume weight and Trading Activity, and reaches nothing else.
+ */
+describe("the four clocks stay apart", () => {
+  const source = (...parts: string[]) => readFileSync(join(__dirname, ...parts), "utf8");
+  const IMPORTS_BASELINE = /from "@\/lib\/engine\/baseline"/;
+
+  it("the volume weight and Trading Activity are on the shared baseline: a change here moves them", () => {
+    expect(source("signal-volume.ts")).toMatch(IMPORTS_BASELINE);
+    // It divides by the reading's mean, so any rule that re-centres the window
+    // re-levels every person's volume weight with it.
+    expect(source("signal-volume.ts")).toMatch(/reading\.mean/);
+    expect(source("forces", "trading-activity.ts")).toMatch(IMPORTS_BASELINE);
+  });
+
+  it("the Signals freshness curve, memory expiry and the Gravity drift clock do not read the baseline at all", () => {
+    for (const file of [["forces", "signals.ts"], ["memory", "update.ts"], ["target-drift.ts"]]) {
+      expect(source(...file), file.join("/")).not.toMatch(IMPORTS_BASELINE);
+    }
+    // Each clock keeps its own constant, and they are all different numbers.
+    const config = source("config.ts");
+    expect(config).toMatch(/freshnessHalfLifeHours: 24/);
+    expect(config).toMatch(/maxEventAgeDays: 30/);
+    expect(config).toMatch(/targetDrift: \{ enabled: false, halfLifeHours: 336/);
+    expect(config).toMatch(/volume: \{ referenceSignalsPerDay: 20, windowDays: 14, minSamples: 7/);
+  });
+});
