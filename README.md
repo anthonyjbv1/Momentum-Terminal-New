@@ -227,6 +227,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260917202622_phase14_target_drift.sql` | `people.target_attention` / `target_direction` / `target_offset` (the drifting target's state; `revert_target` documented as the seed) and `apply_engine_tick` writing them beside the score; `forbes` and `newsdata` from 60 to 55 minutes; execute on the two SECURITY DEFINER trigger functions (`positions_enforce_direction`, `trade_orders_snapshot_portfolio`) revoked from `anon` and `authenticated` |
 | `20260918015822_phase17_finnhub_non_price.sql` | The `finnhub` row activated at a 35-minute interval (off the multiple of 15 AND off the top of the hour) with `config.observe_only`, `config.insider_codes` and one metric, `company_news_volume_24h`; the nine executives mapped to their companies with the name their Form 4 files under; `observe_only_snapshots`, the view that shows a figure only while its source declares it observe-only, service role only |
 | `20260918161256_phase18plus_volume_counts_events_only.sql` | `person_signal_volume()` counts a signal only when its rate is set by the world rather than by our polling: comment digests and the legacy per-comment kind join metric, baseline and live-moment signals outside the count, so the denominator is exactly the set the volume weight multiplies (`UNCOUNTED_SIGNAL_KINDS`). Function body otherwise unchanged; `tracked_since` untouched |
+| `20260918194213_phase19_forecast.sql` | `people.forecast_paused` (the per-person kill switch); `forecast_votes` (direction, reason tag, the score at vote time, `superseded_at` for the supersede-not-delete trail) with one active vote per user per person by partial unique index, RLS select-own for `authenticated` and no client writes; `forecast_rate_limit_per_hour()` = 20 and `forecast_min_votes()` = 5; `cast_forecast_vote()` (SECURITY DEFINER, actor `auth.uid()`, refusals as values) and `forecast_summary()` (aggregates only, the split withheld below the minimum) |
 | `20260917235241_phase16_twitch_live_mode.sql` | `live_sessions` (one broadcast per source and stream id, with its running aggregates) and `live_samples` (the live ledger), both service role only; `ingest_runs.trigger` admits `live`; the `twitch` row's `config.live` block (on, two-minute samples, the thresholds) and its two session metrics (`session_peak_viewers`, `clips_per_stream_hour`, a month of sessions, five before either says anything); `person_signal_volume()` no longer counts live moments as volume |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
@@ -581,6 +582,7 @@ The collection layer for a future recommendation algorithm ("For You"). It recor
 | `abandon_trade_sheet` | required | `{ side, step: "compose" \| "confirm" \| "result", units?: integer, surface? }` (closed without a fill) |
 | `reject_trade`    | required   | `{ side, code: string, units?: integer, surface? }` (the server refused: price moved, a limit hit, …) |
 | `view_portfolio`  | optional   | `{ positions?: integer, orders?: integer }` (what the portfolio showed on arrival) |
+| `cast_forecast`   | required   | `{ direction: "rising" \| "falling", reason: "professional" \| "social" \| "financial" \| "cultural" \| "performance" \| "media" \| "other", changed?: boolean, surface?: string }` (server-side, on a forecast that was cast or changed; never on a repeat) |
 
 `validateBehavioralEvent()` enforces all of this (and normalises: uppercase direction, trimmed query, lowercase swipe action, range and entry kind, rounded and clamped duration). All money is integer cents, as everywhere else. `time_spent` events are coalesced client-side per person, surface and `entry_id`, so two feed entries about the same person keep separate dwells.
 
@@ -1596,6 +1598,161 @@ making the least trustworthy item the *freshest*. Of 651 stored articles exactly
 it sits outside every freshness and volume window and removing production rows
 is not something this phase was asked to do.
 
+## Forecast: the crowd layer, capture and display (Phase 19)
+
+The **Forecast** section sits on a person's profile directly below the five
+forces, in their styling, and asks one question: is this person's momentum
+**▲ Rising** or **▼ Falling** over the next month? It takes one answer with
+one reason, shows the crowd's answer as aggregates only, and moves nothing.
+
+### The one hard rule
+
+Votes influence NOTHING in this phase. The Forecast force exists in
+`DEFAULT_ENGINE_CONFIG.forecast` at weight **0.00** and nowhere else: no
+force module, scorer, store or tick reads it. Following the Phase 17
+discipline, that is asserted by tests rather than by a comment:
+
+- `lib/engine/forecast.test.ts` pins the weight at exactly `0` (the object
+  equals `{ weight: 0 }` and the literal `forecast: { weight: 0 }` is in the
+  source), scans `lib/engine/` and fails if any file other than `config.ts`
+  so much as names `forecast`, fails if the Engine's read or write path names
+  `forecast_votes`, `cast_forecast_vote`, `forecast_summary` or
+  `lib/forecast`, pins the store's tables and RPCs to the set they have always
+  been, and runs the same tick twice on the memory store — once quiet, once
+  with a crowd of votes decorating the store and one of the two people
+  paused — and requires identical people, forces, mood, signals, score
+  events, score history and processed signals, with no sixth force on
+  anyone.
+- `lib/forecast/forecast.db.test.ts` proves the same on real Postgres: three
+  voters cast on every active person, `apply_engine_tick()` is applied, and
+  every read the Engine makes (`people`, `person_signal_volume()`, `signals`,
+  `engine_ticks`, `score_events`) is captured; the votes are deleted, the same
+  tick applied again from the same starting point, and the two captures must
+  be deep-equal. It also checks that no table the tick writes carries a
+  column named for a forecast other than `people.forecast_paused`.
+
+### Vocabulary
+
+The section and the force are **Forecast**. A vote is **▲ Rising** or
+**▼ Falling** — a call on trajectory, never bullish / bearish, never an
+upvote / downvote, never a rating of the person. Every vote carries exactly
+one reason tag: **Professional, Social, Financial, Cultural, Performance,
+Media, Other**. The panel's footnote says so in the product's own words: *A
+forecast is a call on where the momentum goes, not a rating of the person.
+The crowd's calls are shown here and move no score.* `lib/forecast/model.ts`
+holds the vocabulary once for SQL, server and client, and the db test pins
+the SQL check constraints to the same seven tags.
+
+### Schema
+
+- `people.forecast_paused boolean not null default false` — the per-person
+  kill switch. Admin-set by SQL like every other lever
+  (`update public.people set forecast_paused = true where slug = '…'`); the
+  console's Engine table shows it read-only as a `paused` / `open` column.
+  When set, the profile does not render the section at all and
+  `cast_forecast_vote()` refuses with `paused`.
+- `forecast_votes` — `id`, `user_id` (→ `auth.users`, cascade), `person_id`
+  (→ `people`, cascade), `direction` (`rising` | `falling`), `reason` (the
+  seven tags, as a check constraint), `score_at_vote numeric(8,4)` (the
+  person's `current_score` at the instant of the vote, read inside the RPC,
+  never accepted from the client — the thing that makes accuracy computable
+  later and cannot be backfilled), `created_at`, `superseded_at`.
+- **One ACTIVE vote per user per person**, by a partial unique index on
+  `(user_id, person_id) where superseded_at is null`. Voting again stamps
+  `superseded_at` on the prior row and inserts a new one; nothing is deleted,
+  so the trail of changes of mind is the accuracy record. Casting the
+  identical direction and reason again is a no-op (`changed: false`) and
+  writes no row.
+- **Pseudonymous by construction.** RLS on `forecast_votes`: one policy,
+  `select` for `authenticated` where `auth.uid() = user_id`; no client
+  `insert`, `update` or `delete` grant at all; `anon` cannot read. The db test
+  runs as a second signed-in user and sees none of the first user's rows, as
+  `anon` and sees nothing, and fails to write directly under either role.
+  Every other user meets a voter only as a count inside `forecast_summary()`.
+- `cast_forecast_vote(p_person_id, p_direction, p_reason)` — SECURITY
+  DEFINER with `auth.uid()` as the actor, never a parameter. Validates the
+  vocabulary, refuses an unknown or inactive person, a paused person and the
+  rate limit, then supersedes and inserts in one transaction. Every refusal
+  is a returned value `{ ok: false, code, message }` (`invalid`,
+  `unknown_person`, `paused`, `rate_limited`); only a missing session raises.
+- `forecast_summary(p_person_id)` — aggregates only: `total`, `minVotes`,
+  `revealed`, and `rising` / `falling` / `risingReasons` / `fallingReasons`
+  (the top three tags per direction by count, then name) only once
+  `total >= forecast_min_votes()`. Below the minimum the split is not merely
+  hidden by the UI; it is not returned.
+- `forecast_rate_limit_per_hour()` = **20** and `forecast_min_votes()` =
+  **5**, as functions on the `starting_balance_cents()` pattern, so the SQL
+  and the TypeScript constants (`FORECAST_RATE_LIMIT_PER_HOUR`,
+  `FORECAST_MIN_VOTES`) are pinned to agree by a test.
+
+### The two numbers
+
+**Rate limit: 20 distinct people per trailing hour**, enforced in
+`cast_forecast_vote()`. Sixteen subjects today: one person can forecast the
+whole roster in a sitting, and a script cannot sweep it repeatedly. It counts
+*people*, not votes — changing a vote on someone already voted on inside the
+hour is free — and the window slides (the db test casts on 20 people, is
+refused on the 21st, re-votes freely, and is admitted again once the earliest
+casts are more than an hour old).
+
+**Minimum count: 5 active votes** before the Rising / Falling split is shown.
+Below it the panel shows the count alone — *3 forecasts so far. The Rising /
+Falling split shows once 5 people have called it.* — because a lone vote
+reading "100% Falling" is the wrong first impression, and because below five
+a second voter could subtract their own vote from the aggregate and read the
+first voter's.
+
+### Display
+
+- `components/person/forecast-panel.tsx`, rendered by the profile page right
+  after `ForcesPanel`, under the same `SectionHeader` / `Card` as the forces.
+  The header's meta is the count (*12 forecasts*).
+- With five or more votes: the two percentages (`splitPercent()` rounds to
+  whole numbers that sum to 100), a diverging bar, and the top reason tags
+  per direction as badges with their counts. **Green and red mean the
+  reported direction and nothing else**: the split, the bar, the reason
+  badges and the line stating the viewer's own forecast.
+- **Empty state** (no votes yet): *Make the first forecast.* — *Is
+  {name}'s momentum rising or falling over the next month? Your call, with a
+  reason, is the first reading the crowd has on them.*
+- **The vote is two taps.** Two buttons, then the seven reasons as a row of
+  outline chips; picking a reason submits. There is no modal. The **▲ Rising**
+  button wears exactly the Buy styling and **▼ Falling** exactly the Sell
+  styling — the shared `Button` `buy` / `sell` variants (and
+  `buttonClassName()` for the signed-out links to `/login`), never green or
+  red. After voting the panel shows *You forecast ▲ Rising · Professional*
+  with a **Change** control that re-opens the two buttons beside **Keep
+  mine**.
+- Not shown, by instruction: any individual voter, any vote feed, any
+  Data-vs-Crowd divergence.
+
+### The write path
+
+`POST /api/forecast/vote` with `{ personId, direction, reason, surface? }`.
+Identity comes from the auth cookies, never the body (401 signed out); the
+route validates the vocabulary and hands the rest to `cast_forecast_vote()`
+as the viewer. Refusals come back as the RPC's `{ ok: false, code }` with
+the matching status; a database failure is a 503 that records nothing. The
+`cast_forecast` behavioural event is written after the response and only
+when the vote changed. `lib/forecast/server.ts` reads the aggregate through
+the service-role client and the viewer's own vote as the viewer, under the
+select-own policy, which is the only way a vote row ever reaches a client.
+
+### The mobile header
+
+The paper balance pill is gone from the mobile header; it stays on the
+desktop header unchanged and stays visible in Portfolio on both. Market Mood
+is back in its original mobile position and styling. (`top-banner.tsx`: the
+balance chip renders inside `hidden sm:contents`, and the pulse indicator is
+unconditional again.)
+
+### Not built, by instruction
+
+Vote-influence weighting, accuracy scoring, coordinated-activity detection
+and the abnormal-activity freeze, conviction levels on a vote, comments, any
+freeze UI, any Engine contribution, any Feed presence. The score at vote
+time is stored now so that accuracy can be computed later without a backfill.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -1608,6 +1765,7 @@ is not something this phase was asked to do.
 - **Phase 12+**: newest-first selection with a least-recently-served rotation across people, and memory event expiry (30 days, dated folds written as history, today's date and event ages in the person block).
 - **Phase 13**: publisher-direct feeds — the `publisher_feeds` catalogue read as one shared fetch per run, whole-word name matching scoped by topic, undated items refused, per-feed health and discovery written back onto the rows, the two news doors deduplicated as one story family with Google News kept as the fallback — and the ingestion cron at every fifteen minutes with every source interval off the multiple.
 - **Phase 13+**: athlete metrics beyond passing yards — `config.game_stats` on the API-Sports row (every per-game figure read from one request per game, each with its own anchor), `game_passer_rating` (+1) and `game_interceptions` (−1) registered beside yards with touchdowns and every composite figure refused, and the Signals force folding one source's metric signals of one moment into one reading carrying their mean, so a game is its event and its stat line and never three copies of the line.
+- **Phase 19**: Forecast, the crowd layer, capture and display — the Forecast section below the five forces (▲ Rising / ▼ Falling with one of seven reason tags, the split and top reasons once five votes exist, the count alone below that, an invitation with none), `forecast_votes` with the score at vote time, one active vote per user per person with supersede-not-delete history, select-own RLS and no client writes, `cast_forecast_vote()` with a 20-distinct-people-an-hour rate limit and the per-person `forecast_paused` kill switch, `forecast_summary()` returning aggregates only, the Rising / Falling buttons in the Buy / Sell styling, the `cast_forecast` event, the paper balance removed from the mobile header — and the Forecast force at weight 0.00, read by nothing, pinned by two zero-influence tests.
 - **Phase 18++**: the volume reference re-derived from measured data before it engages — `referenceSignalsPerDay` 20 → 4, the geometric mean of the roster's own daily rates (the typical-day impact spread falls 14.9× → 3.0×, the ceiling decides six weights rather than fourteen), the bounds examined and kept, fixed chosen over roster-relative with the coupling cost quantified, `ENGINE_VOLUME_REFERENCE` for a re-derivation without a code change, the staleness made visible on /admin (per-person weight, capped state, engaged count, the roster's live geometric mean and the two review triggers), and the Google News epoch-date hole closed in both directions.
 - **Phase 18+**: the volume denominator counts events, not artifacts — one rule for both sides of the weight (a signal counts when its rate is set by the world, not by our polling), `UNCOUNTED_SIGNAL_KINDS` shared between `person_signal_volume()` and the Signals force with a test that fails if they diverge, comment digests and the legacy per-comment kind out of both (MrBeast's series 14.86 → 1.71 a day, the only subject moved), the four callers of the shared baseline documented at the function and pinned by an exhaustive-import test, and two findings reported not changed: the weight saturates at its ceiling for fifteen of sixteen at the present reference, and the two-wave engagement (2026-09-25 and 2026-09-26) is one day of weighted movement ranked against unweighted on the movers strip.
 - **Phase 18**: two queued scorer-adjacent changes replayed against real data and both declined — the robust baseline spread (3,130 readings reconstructed and reclassified: winsorizing moves one, MAD moves 176 the wrong way on 773 zero-MAD windows; revisit at the per-game athlete metrics in November) and the casual-register lexicon (87 of 87 digests neutral; a casual extension would turn 74 of them positive and change 30 of the 33 news headlines it touches, two of them losing a correct negative). Nothing in the Engine's behaviour changed; the findings, the four callers of the shared baseline and the register boundary are now pinned by tests.
@@ -1637,4 +1795,4 @@ is not something this phase was asked to do.
 
 - **Phase 8+**: connector corrections: comment digests (one signal per video per poll, the distribution and the sample size, comments as evidence only), `comment_volume` as a metric on the shared baseline, Spotify's silent path turned into a named error, the dedup threshold lowered to 0.4 with the local-TV misses pinned as tests, 17 observed domains promoted and two corporate-PR domains held at the floor by decision, and derived-metric inputs declared.
 
-Deliberately not built yet: the profile screen, search results, the Forecast force, and the recommendation algorithm (For You). Shorting stays switched off; the risk levers stay inert (the cooldown's rise to 60 s is a policy floor, not a calibration); and both schedules are wired behind flags — the Engine's heartbeat behind `ENGINE_CRON_ENABLED` and the fifteen-minute ingestion behind `INGEST_CRON_ENABLED`, each of which ships unset.
+Deliberately not built yet: the profile screen, search results, the Forecast force's influence (the force exists at weight 0.00 and reads nothing; the crowd's votes are captured and displayed only), and the recommendation algorithm (For You). Shorting stays switched off; the risk levers stay inert (the cooldown's rise to 60 s is a policy floor, not a calibration); and both schedules are wired behind flags — the Engine's heartbeat behind `ENGINE_CRON_ENABLED` and the fifteen-minute ingestion behind `INGEST_CRON_ENABLED`, each of which ships unset.

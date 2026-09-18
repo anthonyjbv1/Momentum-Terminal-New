@@ -13,7 +13,7 @@ const PERSON = "11111111-1111-4111-8111-111111111111";
 const SESSION = "22222222-2222-4222-8222-222222222222";
 
 describe("canonical event types", () => {
-  it("lists the eighteen documented types, each with a definition", () => {
+  it("lists the nineteen documented types, each with a definition", () => {
     expect([...BEHAVIORAL_EVENT_TYPES]).toEqual([
       "view_person",
       "time_spent",
@@ -33,6 +33,7 @@ describe("canonical event types", () => {
       "abandon_trade_sheet",
       "reject_trade",
       "view_portfolio",
+      "cast_forecast",
     ]);
     for (const type of BEHAVIORAL_EVENT_TYPES) {
       expect(BEHAVIORAL_EVENT_DEFINITIONS[type].description.length).toBeGreaterThan(0);
@@ -113,6 +114,15 @@ describe("validateBehavioralEvent", () => {
       expect(validateBehavioralEvent({ eventType: "view_portfolio", metadata: { positions: 2, orders: 7 } }).ok).toBe(true);
       expect(validateBehavioralEvent({ eventType: "view_portfolio", metadata: { positions: -1 } })).toMatchObject({ ok: false, reason: expect.stringContaining("positions") });
       expect(validateBehavioralEvent({ eventType: "view_portfolio", metadata: { orders: 1.5 } }).ok).toBe(false);
+    });
+
+    it("cast_forecast needs a person, a direction of rising | falling and one of the seven reason tags", () => {
+      expect(validateBehavioralEvent({ eventType: "cast_forecast", metadata: { direction: "rising", reason: "media" } })).toEqual({ ok: false, reason: "cast_forecast requires personId" });
+      expect(validateBehavioralEvent({ eventType: "cast_forecast", personId: PERSON, metadata: { reason: "media" } })).toMatchObject({ ok: false, reason: expect.stringContaining("direction") });
+      expect(validateBehavioralEvent({ eventType: "cast_forecast", personId: PERSON, metadata: { direction: "bullish", reason: "media" } }).ok).toBe(false);
+      expect(validateBehavioralEvent({ eventType: "cast_forecast", personId: PERSON, metadata: { direction: "rising", reason: "vibes" } })).toMatchObject({ ok: false, reason: expect.stringContaining("reason") });
+      const ok = validateBehavioralEvent({ eventType: "cast_forecast", personId: PERSON, metadata: { direction: " Falling ", reason: "Professional", changed: true, surface: "profile" } });
+      expect(ok.ok && ok.event.metadata).toEqual({ direction: "falling", reason: "professional", changed: true, surface: "profile" });
     });
 
     it("take_position needs direction and integer amount_cents", () => {

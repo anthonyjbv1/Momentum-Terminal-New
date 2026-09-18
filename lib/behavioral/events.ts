@@ -35,6 +35,7 @@ export const BEHAVIORAL_EVENT_TYPES = [
   "abandon_trade_sheet",
   "reject_trade",
   "view_portfolio",
+  "cast_forecast",
 ] as const;
 
 export const TRADE_SHEET_STEPS = ["compose", "confirm", "result"] as const;
@@ -109,6 +110,11 @@ export const BEHAVIORAL_EVENT_DEFINITIONS: Record<BehavioralEventType, Behaviora
     description: "Switched the score chart to another time range on a person.",
     requiresPerson: true,
     metadata: "{ range: string (non-empty, e.g. 1h | 24h | 7d | all), surface?: string }",
+  },
+  cast_forecast: {
+    description: "Cast or changed a forecast on a person's momentum (Phase 19): ▲ Rising or ▼ Falling, with a reason tag. A statement about trajectory, never a rating of the person.",
+    requiresPerson: true,
+    metadata: "{ direction: 'rising' | 'falling', reason: 'professional' | 'social' | 'financial' | 'cultural' | 'performance' | 'media' | 'other', changed?: boolean, surface?: string }",
   },
   view_entry: {
     description: "A feed entry about a person came into view (an impression).",
@@ -354,6 +360,15 @@ const TYPE_CHECKS: Partial<Record<BehavioralEventType, TypeCheck>> = {
     const range = typeof metadata?.range === "string" ? metadata.range.trim().toLowerCase() : "";
     if (!range) return { ok: false, reason: "change_range requires metadata.range (non-empty string)" };
     return { ok: true, metadata: { ...metadata, range } };
+  },
+  cast_forecast: (metadata) => {
+    const direction = typeof metadata?.direction === "string" ? metadata.direction.trim().toLowerCase() : "";
+    if (direction !== "rising" && direction !== "falling") return { ok: false, reason: "cast_forecast requires metadata.direction (rising | falling)" };
+    const reason = typeof metadata?.reason === "string" ? metadata.reason.trim().toLowerCase() : "";
+    if (!["professional", "social", "financial", "cultural", "performance", "media", "other"].includes(reason)) {
+      return { ok: false, reason: "cast_forecast requires metadata.reason (one of the seven tags)" };
+    }
+    return { ok: true, metadata: { ...metadata, direction, reason } };
   },
   view_entry: (metadata) => {
     const entryId = typeof metadata?.entry_id === "string" ? metadata.entry_id.trim() : "";

@@ -33,6 +33,8 @@ export interface ProfilePerson {
   /** When the person entered the board. */
   createdAt: string;
   lastTickAt: string | null;
+  /** Phase 19: the per-person kill switch on the crowd layer. True hides the Forecast section and refuses new votes. */
+  forecastPaused: boolean;
 }
 
 /** The people row as it comes back from the database. */
@@ -51,6 +53,8 @@ export interface ProfilePersonRow {
   sell_price: number | string | null;
   created_at: string;
   last_tick_at: string | null;
+  /** Phase 19; absent reads as not paused. */
+  forecast_paused?: boolean | null;
 }
 
 function toNumber(value: unknown, fallback = 0): number {
@@ -78,6 +82,7 @@ export function toProfilePerson(row: ProfilePersonRow): ProfilePerson {
     sellPrice: toNullableNumber(row.sell_price),
     createdAt: row.created_at,
     lastTickAt: row.last_tick_at,
+    forecastPaused: row.forecast_paused === true,
   };
 }
 

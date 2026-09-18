@@ -158,6 +158,7 @@ export function EngineSection({ report, now }: { report: EngineReport; now: numb
                         <th className="n">Drift</th>
                         <th className="n">Gap</th>
                         <th className="n">Sources</th>
+                        <th>Forecast</th>
                         <th>Last tick</th>
                       </tr>
                     </thead>
@@ -173,6 +174,7 @@ export function EngineSection({ report, now }: { report: EngineReport; now: numb
                           <td className="n">{person.targetOffset === 0 ? "—" : `${person.targetOffset > 0 ? "+" : ""}${person.targetOffset.toFixed(2)}`}</td>
                           <td className="n">{(person.score - person.revertTarget).toFixed(2)}</td>
                           <td className="n">{person.activeSources === 0 ? <Badge tone="warn">none</Badge> : num(person.activeSources)}</td>
+                          <td>{person.forecastPaused ? <Badge tone="warn">paused</Badge> : <span className="adm-dim">open</span>}</td>
                           <td>{age(person.lastTickAt, now)}</td>
                         </tr>
                       ))}
@@ -183,7 +185,7 @@ export function EngineSection({ report, now }: { report: EngineReport; now: numb
                           {scores.length} people · high {highest?.slug ?? "—"} / low {lowest?.slug ?? "—"}
                         </td>
                         <td className="n">{mean === null ? "—" : mean.toFixed(2)}</td>
-                        <td className="n" colSpan={6}>
+                        <td className="n" colSpan={7}>
                           mean
                         </td>
                       </tr>
@@ -193,7 +195,8 @@ export function EngineSection({ report, now }: { report: EngineReport; now: numb
                 <p className="adm-note">
                   <b>Gravity target</b> is what the last tick pulled toward: the seeded <b>revert_target</b> plus the drifting target&rsquo;s offset (Phase 14; shown
                   as <b>Drift</b>, empty while ENGINE_TARGET_DRIFT_ENABLED is off). <b>Sources</b> counts the person&rsquo;s active source mappings: a person with none can
-                  never receive a signal, so their score is their target and nothing else.
+                  never receive a signal, so their score is their target and nothing else. <b>Forecast</b> is the crowd layer&rsquo;s per-person switch (Phase 19):
+                  <b> paused</b> hides the section and refuses new votes; it is set by SQL (<code>update public.people set forecast_paused = true where slug = &hellip;</code>).
                 </p>
               </>
             )}

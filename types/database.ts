@@ -185,6 +185,47 @@ export type Database = {
         }
         Relationships: []
       }
+      forecast_votes: {
+        Row: {
+          created_at: string
+          direction: string
+          id: string
+          person_id: string
+          reason: string
+          score_at_vote: number
+          superseded_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          direction: string
+          id?: string
+          person_id: string
+          reason: string
+          score_at_vote: number
+          superseded_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          direction?: string
+          id?: string
+          person_id?: string
+          reason?: string
+          score_at_vote?: number
+          superseded_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "forecast_votes_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       inverse_pairs: {
         Row: {
           dampening: number
@@ -593,6 +634,7 @@ export type Database = {
           spread: number
           target_attention: number | null
           target_direction: number | null
+          forecast_paused: boolean
           target_offset: number
         }
         Insert: {
@@ -617,6 +659,7 @@ export type Database = {
           spread?: number
           target_attention?: number | null
           target_direction?: number | null
+          forecast_paused?: boolean
           target_offset?: number
         }
         Update: {
@@ -641,6 +684,7 @@ export type Database = {
           spread?: number
           target_attention?: number | null
           target_direction?: number | null
+          forecast_paused?: boolean
           target_offset?: number
         }
         Relationships: []
@@ -1896,6 +1940,13 @@ export type Database = {
           score: number
         }[]
       }
+      cast_forecast_vote: {
+        Args: { p_direction: string; p_person_id: string; p_reason: string }
+        Returns: Json
+      }
+      forecast_min_votes: { Args: never; Returns: number }
+      forecast_rate_limit_per_hour: { Args: never; Returns: number }
+      forecast_summary: { Args: { p_person_id: string }; Returns: Json }
       person_signal_volume: {
         Args: { p_days?: number }
         Returns: {

@@ -540,6 +540,8 @@ export interface EngineReport {
     /** How many active source mappings the person has: 0 means nothing can ever produce a signal for them. */
     activeSources: number;
     lastTickAt: string | null;
+    /** Phase 19: the per-person kill switch on the crowd layer. Read-only here; flipped by SQL like every other lever. */
+    forecastPaused: boolean;
   }>;
   /**
    * The per-person volume weight and the two symptoms of a stale reference
@@ -568,7 +570,7 @@ export async function readEngine(): Promise<EngineReport> {
   const client = await adminClient();
   const [ticks, people, count] = await Promise.all([
     client.from("engine_ticks").select("*").order("tick_number", { ascending: false }).limit(RECENT_LIMIT),
-    client.from("people").select("id, slug, display_name, current_score, revert_target, target_offset, last_tick_at").eq("is_active", true).order("current_score", { ascending: false }).order("slug"),
+    client.from("people").select("id, slug, display_name, current_score, revert_target, target_offset, last_tick_at, forecast_paused").eq("is_active", true).order("current_score", { ascending: false }).order("slug"),
     client.from("engine_ticks").select("tick_number", { count: "exact", head: true }),
   ]);
   for (const [label, result] of Object.entries({ ticks, people, count })) {
@@ -633,6 +635,7 @@ export async function readEngine(): Promise<EngineReport> {
       targetOffset: Number(person.target_offset ?? 0),
       activeSources: sourcesByPerson.get(person.id) ?? 0,
       lastTickAt: person.last_tick_at,
+      forecastPaused: person.forecast_paused === true,
     })),
     volume: {
       ...spread,

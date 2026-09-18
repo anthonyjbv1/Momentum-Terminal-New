@@ -10,10 +10,15 @@ import { SearchButton } from "./search-button";
 
 /**
  * The persistent top banner: mark, navigation (desktop), the paper balance
- * (signed in), platform pulse, the quiet 30-second countdown, search and
- * profile. Fixed, translucent, and layered above every sheet so the timer
- * is always in view. On a phone the balance takes the pulse's slot when a
- * user is signed in; the pulse returns from the sm breakpoint up.
+ * (signed in, desktop only), platform pulse, the quiet 30-second countdown,
+ * search and profile. Fixed, translucent, and layered above every sheet so
+ * the timer is always in view.
+ *
+ * On a phone only one of the balance and the pulse fits, and it is the pulse
+ * (Phase 19 amendment): the balance is reference information the user can
+ * look up in Portfolio, Mood is ambient state that belongs in the header. So
+ * the balance chip is hidden below the sm breakpoint and the pulse is always
+ * present, exactly as the banner read before the balance was introduced.
  */
 export async function TopBanner({ variant = "app" }: { variant?: "app" | "minimal" }) {
   // Behavioural logging only runs for a signed-in user; signed out, those
@@ -27,10 +32,12 @@ export async function TopBanner({ variant = "app" }: { variant?: "app" | "minima
         {variant === "app" ? <DesktopNav className="ml-2 hidden md:flex" /> : null}
 
         <div className="ml-auto flex items-center gap-2.5 sm:gap-3">
-          {user ? <BalanceChip /> : null}
-          <span className={user ? "hidden sm:contents" : "contents"}>
-            <PulseIndicator mood={null} status="standby" />
-          </span>
+          {user ? (
+            <span className="hidden sm:contents">
+              <BalanceChip />
+            </span>
+          ) : null}
+          <PulseIndicator mood={null} status="standby" />
           <CountdownTimer size="banner" className="mx-1" />
           <SearchButton loggingEnabled={Boolean(user)} />
           <ProfileButton />

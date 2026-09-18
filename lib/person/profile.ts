@@ -40,7 +40,7 @@ import {
  */
 
 const PERSON_COLUMNS =
-  "id, slug, display_name, category, avatar_url, current_score, revert_target, target_offset, spread, buy_price, sell_price, created_at, last_tick_at";
+  "id, slug, display_name, category, avatar_url, current_score, revert_target, target_offset, spread, buy_price, sell_price, created_at, last_tick_at, forecast_paused";
 
 /** Most signal / narrative items the page lists. */
 const SIGNAL_LIMIT = 30;

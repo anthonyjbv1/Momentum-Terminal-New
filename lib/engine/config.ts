@@ -274,6 +274,22 @@ export interface EngineConfig {
     anomalousSigma: number;
   };
   /**
+   * FORCE 6 — Forecast, the crowd layer (Phase 19). Present in name only.
+   *
+   * The crowd's forecasts (▲ Rising / ▼ Falling on a person, with a reason)
+   * are captured and displayed, and they influence NOTHING: this weight is
+   * 0.00, no force module reads it, and no vote is loaded by the tick. The
+   * spec starts the crowd's weight at zero until accuracy history exists,
+   * and the regulatory gate (reflexivity limits, awaiting counsel) is the
+   * same number. Raising it is a deliberate act with a test to change first:
+   * lib/engine/forecast.test.ts pins it at 0 and proves a tick with votes
+   * present scores exactly as a tick without.
+   */
+  forecast: {
+    /** Ships 0.00. Nothing multiplies by it yet; a non-zero value here does nothing until a force is built to read it. */
+    weight: number;
+  };
+  /**
    * The prescored scorer (Phase 16): a live moment arrives with its own
    * direction and confidence, declared by the live runner from the session's
    * arithmetic; the Engine only decides how memorable it is.
@@ -482,6 +498,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   },
   metrics: { fullConfidenceSigma: 3, notableSigma: 2, anomalousSigma: 3 },
   live: { notableConfidence: 0.5, anomalousConfidence: 0.9 },
+  forecast: { weight: 0 },
   marketMood: {
     fraction: 0.25,
     defaultSensitivity: 1.0,

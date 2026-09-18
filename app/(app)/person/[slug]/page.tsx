@@ -3,11 +3,13 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
 import { getCurrentUser } from "@/lib/auth";
+import { getForecastSummary, getForecastViewerState } from "@/lib/forecast/server";
 import { getPersonBySlug, getPersonProfile, getPersonSignals, getRenderedAt } from "@/lib/person/profile";
 import { getViewerTradingState } from "@/lib/trading/server";
 import { getPlatformSettings } from "@/lib/trading/settings";
 import { BackLink } from "@/components/person/back-link";
 import { Dossier } from "@/components/person/dossier";
+import { ForecastPanel } from "@/components/person/forecast-panel";
 import { ForcesPanel } from "@/components/person/forces-panel";
 import { ProfileSkeleton } from "@/components/person/profile-skeleton";
 import { ScorePanel } from "@/components/person/score-panel";
@@ -17,7 +19,7 @@ import { ProfileLogger } from "@/components/person/use-profile-logging";
 /**
  * /person/[slug] — one person's page (Phase 6c).
  *
- *   identity → score and history → the five forces → signals
+ *   identity → score and history → the five forces → the Forecast (Phase 19) → signals
  *
  * Desktop puts the signals in the right rail (app/(app)/@rail/person/[slug])
  * and the Buy / Sell entry beside the score; mobile stacks everything in one
@@ -62,12 +64,14 @@ export default async function PersonPage({ params }: { params: Params }) {
 
 /** Everything below the back link: the readings, streamed in once they are loaded. */
 async function ProfileBody({ slug, personId }: { slug: string; personId: string }) {
-  const [profile, signals, user, settings, viewer] = await Promise.all([
+  const [profile, signals, user, settings, viewer, forecast, forecastViewer] = await Promise.all([
     getPersonProfile(slug),
     getPersonSignals(personId),
     getCurrentUser(),
     getPlatformSettings(),
     getViewerTradingState(personId),
+    getForecastSummary(personId),
+    getForecastViewerState(personId),
   ]);
   // The person was found a moment ago; only a deactivation in between lands here.
   if (!profile) notFound();
@@ -92,6 +96,15 @@ async function ProfileBody({ slug, personId }: { slug: string; personId: string 
       />
 
       <ForcesPanel forces={profile.forces} latestTick={profile.latestTick} />
+
+      {/* The crowd's read on the trajectory, below the five forces. Hidden entirely while the person's forecast_paused flag is set. */}
+      <ForecastPanel
+        person={{ id: profile.person.id, slug: profile.person.slug, displayName: profile.person.displayName, forecastPaused: profile.person.forecastPaused }}
+        summary={forecast}
+        signedIn={forecastViewer.signedIn}
+        ownVote={forecastViewer.ownVote}
+        loggingEnabled={loggingEnabled}
+      />
 
       {/* On desktop the signals live in the rail; below lg they follow the forces. */}
       <SignalsList
