@@ -1535,13 +1535,13 @@ connector reading as a person with no news. Both stay as they are.
 
 A roster-relative reference (the live geometric mean, recomputed each tick)
 would never go stale — and would couple every person's weight to every other
-person's. Adding ten quiet subjects at 0.5 a day to today's roster drops the
-live geometric mean from 4.0 to about 0.9, so **every existing subject's weight
-would fall by more than a factor of four overnight**, for reasons that have
-nothing to do with them, and their score history would stop being comparable
-across a roster change. That is precisely what the per-person design exists to
-avoid. A fixed constant goes stale instead — but *visibly*, and re-deriving it
-is a dated, deliberate act.
+person's. Ten new subjects at half an event a day would move today's live
+geometric mean from **3.71 to 1.66**, so **every existing subject's weight would
+fall by 55 % overnight**, for reasons that have nothing to do with them, and
+their score history would stop being comparable across a roster change. (Ten at
+one a day: −41 %. Three loud subjects at eight a day: +14 % on everyone.) That
+is precisely what the per-person design exists to avoid. A fixed constant goes
+stale instead — but *visibly*, and re-deriving it is a dated, deliberate act.
 
 So the reference stays fixed, and the staleness is made observable rather than
 latent. **`/admin` → Engine state → Signal volume** shows every person's typical
@@ -1554,9 +1554,11 @@ many sit on a bound. **Re-derive when either symptom crosses:**
 
 Sensitivity, so the trigger is not a mystery: the reference moves with the
 *typical* subject, not the loudest. Adding N subjects at rate r to a roster of M
-shifts log(reference) by (N / (M+N)) × (log r − log reference) — ten quiet
-subjects on sixteen is a −78 % move, three new sources doubling three people's
-rates is about +15 %. Roster changes move it far more than source changes.
+shifts log(reference) by (N / (M+N)) × (log r − log reference). On today's
+fifteen measured subjects that is **−55 %** for ten newcomers at 0.5 a day,
+**−41 %** at 1 a day, and **+14 %** for three at 8 a day. Roster changes move it
+far more than source changes, and a roster change of a third is roughly the
+point at which the second review trigger fires on its own.
 `ENGINE_VOLUME_REFERENCE` re-sets it without a code change.
 
 ### The two-wave transient

@@ -232,9 +232,11 @@ export interface EngineConfig {
      * IT WILL GO STALE AGAIN, because it is a cross-person constant inside a
      * per-person mechanism. That is deliberate: a roster-relative reference
      * would self-correct but couple every person's weight to every other
-     * person's — adding ten quiet subjects would cut the existing sixteen's
-     * weights by about 41 % overnight, for reasons having nothing to do with
-     * them. A fixed constant goes stale visibly instead. REVIEW WHEN EITHER
+     * person's. Ten new subjects at half an event a day would move the live
+     * geometric mean 3.71 -> 1.66 and so cut every existing subject's weight
+     * by 55 % overnight, for reasons having nothing to do with them (at one a
+     * day, 41 %; three loud subjects at eight a day would raise every weight
+     * 14 %). A fixed constant goes stale visibly instead. REVIEW WHEN EITHER
      * more than a third of the people with a sufficient baseline sit at a
      * bound, OR the roster's live geometric mean leaves [reference / 2,
      * reference x 2]. Both are on /admin under Signal volume, and
