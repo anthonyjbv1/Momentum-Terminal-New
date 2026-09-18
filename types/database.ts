@@ -1698,6 +1698,17 @@ export type Database = {
         }
         Relationships: []
       }
+      observe_only_snapshots: {
+        Row: {
+          identifier: string | null
+          metric_key: string | null
+          person_slug: string | null
+          recorded_at: string | null
+          source: string | null
+          value: number | null
+        }
+        Relationships: []
+      }
       metric_baseline_progress: {
         Row: {
           first_snapshot_at: string | null

@@ -86,6 +86,12 @@ export function getApiSportsKeyOrNull(): string | null {
   return value ? value : null;
 }
 
+/** Finnhub key (FINNHUB_API_KEY), or null when unset. SERVER ONLY. */
+export function getFinnhubKeyOrNull(): string | null {
+  const value = process.env.FINNHUB_API_KEY?.trim();
+  return value ? value : null;
+}
+
 /**
  * Shared secret that authorises calls to /api/ingest. SERVER ONLY.
  * Returns null when unset so the route can fail closed with a clear message.

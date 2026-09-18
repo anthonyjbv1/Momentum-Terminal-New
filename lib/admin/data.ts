@@ -32,6 +32,8 @@ import { requireAdmin } from "./auth";
 const USAGE_ROW_CAP = 20_000;
 const EVENT_ROW_CAP = 20_000;
 const RECENT_LIMIT = 25;
+/** Observe-only readings read per request: one a day per person, so this is years of them. */
+const OBSERVE_ONLY_ROW_CAP = 4_000;
 
 export type Window = "24h" | "7d" | "30d" | "all";
 
@@ -246,6 +248,29 @@ export interface BaselineRow {
 }
 
 /** One publisher feed of the Phase 13 catalogue, with what its last fetch found. Configuration and counts: no article text, no metric level. */
+/**
+ * One figure a source records and never scores (Phase 17): the latest reading,
+ * and how far its series has filled.
+ *
+ * The privacy rule still holds. This does not come from either raw table — it
+ * comes from observe_only_snapshots, whose WHERE clause admits a row only while
+ * its source row lists that metric key in config.observe_only. A level that
+ * contributes to a score is structurally unable to appear here: the edit that
+ * lets a key count is the same edit that removes it from this view.
+ */
+export interface ObserveOnlyRow {
+  personSlug: string;
+  source: string;
+  identifier: string | null;
+  metricKey: string;
+  /** The latest reading. Today that is a public company's closing price. */
+  value: number;
+  recordedAt: string;
+  /** Readings in the window read, and the oldest of them: how far the baseline has filled. */
+  samples: number;
+  firstAt: string;
+}
+
 export interface PublisherFeedRow {
   id: string;
   domain: string;
@@ -301,11 +326,13 @@ export interface IngestionReport {
   feeds: PublisherFeedRow[];
   /** Live mode: open sessions first, then the most recently ended. */
   liveSessions: LiveSessionRow[];
+  /** Recorded, displayed, never scored (Phase 17): one row per person and metric, latest first. */
+  observeOnly: ObserveOnlyRow[];
 }
 
 export async function readIngestion(): Promise<IngestionReport> {
   const client = await adminClient();
-  const [sources, runs, errors, baselines, feeds, live] = await Promise.all([
+  const [sources, runs, errors, baselines, feeds, live, observeOnly] = await Promise.all([
     client.from("source_health").select("*").order("name"),
     client.from("ingest_runs").select("*").order("started_at", { ascending: false }).limit(RECENT_LIMIT),
     client
@@ -322,12 +349,37 @@ export async function readIngestion(): Promise<IngestionReport> {
       .order("ended_at", { ascending: true, nullsFirst: true })
       .order("started_at", { ascending: false })
       .limit(RECENT_LIMIT),
+    client.from("observe_only_snapshots").select("*").order("recorded_at", { ascending: false }).limit(OBSERVE_ONLY_ROW_CAP),
   ]);
-  for (const [label, result] of Object.entries({ sources, runs, errors, baselines, feeds, live })) {
+  for (const [label, result] of Object.entries({ sources, runs, errors, baselines, feeds, live, observeOnly })) {
     if (result.error) throw new Error(`${label}: ${result.error.message}`);
   }
 
+  // Newest first, so the first row of each series is its latest reading.
+  const observeOnlyByKey = new Map<string, ObserveOnlyRow>();
+  for (const row of observeOnly.data ?? []) {
+    if (row.person_slug === null || row.source === null || row.metric_key === null || row.value === null || row.recorded_at === null) continue;
+    const key = `${row.person_slug}|${row.source}|${row.metric_key}`;
+    const seen = observeOnlyByKey.get(key);
+    if (seen) {
+      seen.samples += 1;
+      seen.firstAt = row.recorded_at;
+      continue;
+    }
+    observeOnlyByKey.set(key, {
+      personSlug: row.person_slug,
+      source: row.source,
+      identifier: row.identifier,
+      metricKey: row.metric_key,
+      value: Number(row.value),
+      recordedAt: row.recorded_at,
+      samples: 1,
+      firstAt: row.recorded_at,
+    });
+  }
+
   return {
+    observeOnly: [...observeOnlyByKey.values()].sort((a, b) => a.source.localeCompare(b.source) || a.metricKey.localeCompare(b.metricKey) || a.personSlug.localeCompare(b.personSlug)),
     liveSessions: (live.data ?? []).map((row) => {
       const samples = Number(row.sample_count ?? 0);
       const end = row.ended_at ? Date.parse(row.ended_at) : Date.now();

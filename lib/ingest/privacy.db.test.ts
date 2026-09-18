@@ -31,6 +31,13 @@ const INTERNAL_RELATIONS = [
   // Phase 13. The publisher feed catalogue and its health: configuration and
   // counts the runner writes; nothing a user-facing path reads.
   "publisher_feeds",
+  // Phase 16. The live ledger: raw viewer counts and what each sample produced.
+  "live_sessions",
+  "live_samples",
+  // Phase 17. The view onto figures a source records and never scores. It is
+  // the one place a raw level is deliberately readable, and it is readable by
+  // the service role alone, on the same terms as the table underneath it.
+  "observe_only_snapshots",
 ];
 const USER_ROLES = ["anon", "authenticated"];
 
@@ -265,6 +272,10 @@ describe("the registry", () => {
       { slug, source: "publisher_rss", identifier: name },
       { slug, source: "rss", identifier: expect.stringContaining(`news.google.com/rss/search?q=%22${name.replace(/ /g, "+")}%22`) },
     ];
+    // Phase 17: an executive also reads the company they are identified with,
+    // for its news VOLUME and their own Form 4s. Never for its share price,
+    // which is recorded and scores nothing (finnhub.db.test.ts).
+    const executive = (slug: string, name: string, symbol: string) => [{ slug, source: "finnhub", identifier: symbol }, ...news(slug, name)];
     expect(mappings).toEqual([
       ...news("adin-ross", "Adin Ross"),
       ...news("anthony-baptiste", "Anthony Baptiste"),
@@ -273,19 +284,19 @@ describe("the registry", () => {
       { slug: "drake", source: "publisher_rss", identifier: "Drake" },
       { slug: "drake", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Drake%22") },
       { slug: "drake", source: "spotify", identifier: "3TVXtAsR1Inumwj472S9r4" },
-      ...news("elon-musk", "Elon Musk"),
-      ...news("jeff-bezos", "Jeff Bezos"),
-      ...news("jensen-huang", "Jensen Huang"),
+      ...executive("elon-musk", "Elon Musk", "TSLA"),
+      ...executive("jeff-bezos", "Jeff Bezos", "AMZN"),
+      ...executive("jensen-huang", "Jensen Huang", "NVDA"),
       // Phase 10: a creator whose primary platform is Twitch, and an athlete on
       // a weekly schedule — two data shapes the first two subjects do not have.
       { slug: "kai-cenat", source: "publisher_rss", identifier: "Kai Cenat" },
       { slug: "kai-cenat", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Kai+Cenat%22") },
       { slug: "kai-cenat", source: "twitch", identifier: "kaicenat" },
       ...news("kendrick-lamar", "Kendrick Lamar"),
-      ...news("larry-ellison", "Larry Ellison"),
-      ...news("larry-page", "Larry Page"),
-      ...news("mark-zuckerberg", "Mark Zuckerberg"),
-      ...news("michael-dell", "Michael Dell"),
+      ...executive("larry-ellison", "Larry Ellison", "ORCL"),
+      ...executive("larry-page", "Larry Page", "GOOGL"),
+      ...executive("mark-zuckerberg", "Mark Zuckerberg", "META"),
+      ...executive("michael-dell", "Michael Dell", "DELL"),
       { slug: "mrbeast", source: "publisher_rss", identifier: "MrBeast" },
       { slug: "mrbeast", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22MrBeast%22") },
       { slug: "mrbeast", source: "youtube", identifier: "UCX6OQ3DkcsbYNE6H8uQQuVA" },
@@ -293,8 +304,8 @@ describe("the registry", () => {
       { slug: "patrick-mahomes", source: "apisports", identifier: "1197" },
       { slug: "patrick-mahomes", source: "publisher_rss", identifier: "Patrick Mahomes" },
       { slug: "patrick-mahomes", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Patrick+Mahomes%22") },
-      ...news("sergey-brin", "Sergey Brin"),
-      ...news("warren-buffett", "Warren Buffett"),
+      ...executive("sergey-brin", "Sergey Brin", "GOOGL"),
+      ...executive("warren-buffett", "Warren Buffett", "BRK.B"),
     ]);
   });
 

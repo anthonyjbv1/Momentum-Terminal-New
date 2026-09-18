@@ -161,6 +161,56 @@ export function IngestionSection({ report, now }: { report: IngestionReport; now
         </Scroll>
 
         <p className="adm-sub" style={{ marginTop: 16 }}>
+          Observe-only · recorded and displayed, contributing nothing to any score (Phase 17)
+        </p>
+        {report.observeOnly.length === 0 ? (
+          <Empty>No source declares an observe-only figure, or none has been recorded yet.</Empty>
+        ) : (
+          <>
+            <Scroll>
+              <table className="adm-t">
+                <thead>
+                  <tr>
+                    <th>Person</th>
+                    <th>Source</th>
+                    <th>Subject</th>
+                    <th>Figure</th>
+                    <th className="n">Latest</th>
+                    <th>Recorded</th>
+                    <th className="n">Readings</th>
+                    <th>Series from</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.observeOnly.map((row) => (
+                    <tr key={`${row.personSlug}|${row.source}|${row.metricKey}`}>
+                      <td className="adm-k">{row.personSlug}</td>
+                      <td className="adm-dim">{row.source}</td>
+                      <td className="adm-k">{row.identifier ?? "—"}</td>
+                      <td>{row.metricKey.replace(/_/g, " ")}</td>
+                      <td className="n">{num(row.value, 2)}</td>
+                      <td>
+                        {age(row.recordedAt, now)}
+                        <div className="adm-k adm-dim">{stamp(row.recordedAt)}</div>
+                      </td>
+                      <td className="n">{num(row.samples)}</td>
+                      <td>{stamp(row.firstAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Scroll>
+            <p className="adm-dim" style={{ marginTop: 8 }}>
+              These figures are recorded so their baselines fill and so they can be watched, and they reach no score: no observation, no signal, no force, no
+              memory, no score history. The list is <span className="adm-k">config.observe_only</span> on the source row, and a figure appears here only while
+              it is on it — so turning one on (remove the key, declare it under <span className="adm-k">config.metrics</span>) is the same edit that takes it
+              off this table. A stock price contributing to a Momentum Score is the exposure the platform&apos;s regulatory positioning denies, which is why
+              the close is recorded this way rather than behind a switch: a switch stops what comes next and leaves the history it already made.
+            </p>
+          </>
+        )}
+
+        <p className="adm-sub" style={{ marginTop: 16 }}>
           Live sessions · broadcasts followed minute by minute (Phase 16): open first, then the most recent
         </p>
         {report.liveSessions.length === 0 ? (

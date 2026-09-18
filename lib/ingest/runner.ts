@@ -50,7 +50,7 @@ import { STORY_DEDUP_LOOKBACK_HOURS } from "./stories";
  */
 
 export interface IngestLogLine {
-  event: "run" | "source" | "poll" | "observation" | "signal" | "drop" | "collapse" | "upgrade" | "exclude" | "feed" | "note";
+  event: "run" | "source" | "poll" | "observation" | "signal" | "drop" | "collapse" | "upgrade" | "exclude" | "feed" | "note" | "observe_only";
   [key: string]: unknown;
 }
 
@@ -93,6 +93,33 @@ export interface IngestOptions {
 
 /** The most people one source polls at once, whatever the configuration says: a courtesy to the hosts as much as a bound on the function. */
 export const MAX_POLL_CONCURRENCY = 8;
+
+/**
+ * OBSERVE-ONLY METRIC KEYS (Phase 17): `config.observe_only` on the source row.
+ *
+ * A reading whose key is listed here is RECORDED as a raw snapshot and goes no
+ * further: no observation row, no signal, no force, no memory, no score
+ * history. Its series still fills, so its baseline is ready the day it is
+ * allowed to count, and there is no trail to unwind if it never is.
+ *
+ * It exists for figures the platform must be able to see and must not score.
+ * The first is a public company's daily close: the platform's regulatory
+ * positioning rests on its indexes deriving no value from any registered
+ * financial instrument, so a Momentum Score that moved because a stock moved
+ * would be the exact exposure that positioning denies. A flag defaulting on
+ * would stop future contribution and leave the history it already made; this
+ * leaves none to begin with.
+ *
+ * It is CONFIGURATION rather than code, in one place that every source and
+ * every connector passes through, so a connector cannot opt out of it and
+ * turning a figure on is a row update: drop its key from `observe_only` and
+ * declare it in `config.metrics`. Nothing is deployed.
+ */
+export function readObserveOnly(config: Record<string, Json | undefined>): Set<string> {
+  const raw = config.observe_only;
+  if (!Array.isArray(raw)) return new Set();
+  return new Set(raw.filter((key): key is string => typeof key === "string" && /^[a-z0-9_]+$/.test(key)));
+}
 
 /** The source row's poll_concurrency (a positive integer), else the runner's default of 1, bounded. */
 export function pollConcurrencyFor(config: Record<string, Json | undefined>, override?: number): number {
@@ -324,6 +351,8 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
 
     const config = asConfigObject(source.config);
     const configs = readMetricConfigs(config);
+    // Keys this source records and never scores (Phase 17). Read once per source.
+    const observeOnly = readObserveOnly(config);
     for (const problem of configs.problems) {
       configProblems.push({ source: source.name, problem });
       log({ event: "source", run: runId, source: source.name, status: "config_problem", problem });
@@ -496,6 +525,15 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         for (const reading of readings) {
           if (!Number.isFinite(reading.value)) continue;
           const recordedAt = reading.recordedAt ?? now;
+          if (observeOnly.has(reading.metricKey)) {
+            // Recorded and nothing else: it never reaches `current`, so it gets
+            // no observation, no signal and no force. The log line carries the
+            // key and not the level — the figure is meant to touch as little as
+            // possible, and the admin console reads it from the view built for it.
+            pendingSnapshots.push({ personId: person.id, dataSourceId: source.id, metricKey: reading.metricKey, value: reading.value, recordedAt });
+            log({ event: "observe_only", run: runId, source: source.name, person: person.slug, metric: reading.metricKey, recordedAt: recordedAt.toISOString() });
+            continue;
+          }
           current.set(reading.metricKey, { value: reading.value, recordedAt });
           const since = new Date(recordedAt.getTime() - lookbackHours(reading.metricKey, configs) * HOUR_MS);
           history.set(

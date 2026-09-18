@@ -126,6 +126,79 @@ describe("runIngestion", () => {
     expect(later.sourcesRun).toHaveLength(1);
   });
 
+  /**
+   * OBSERVE-ONLY (Phase 17). A key on the source row's config.observe_only is
+   * recorded and goes no further. The figure this exists for is a public
+   * company's closing price, which the platform's regulatory positioning says
+   * no index here derives value from, so "records but never scores" has to be
+   * a property of the pipeline rather than a habit of one connector.
+   */
+  describe("observe-only readings", () => {
+    const OBSERVE_CONFIG: Json = {
+      ...(FOLLOWERS_CONFIG as Record<string, Json>),
+      observe_only: ["daily_close"],
+    };
+    const source = makeSource({ id: "src-o", name: "o", is_active: true, config: OBSERVE_CONFIG });
+    let close = 400;
+    const registry = buildRegistry([levelConnector("o", () => ({ followers: 1_000_000, daily_close: close }))]);
+
+    it("records the reading as a snapshot and gives it no observation, no signal and no baseline of its own", async () => {
+      const store = createMemoryIngestStore({ sources: [source], mappings: { "src-o": [{ person, externalIdentifier: "id" }] } });
+      const lines: IngestLogLine[] = [];
+      close = 400;
+      // Enough polls to make any declared metric's baseline sufficient several times over.
+      for (let i = 0; i < 40; i += 1) {
+        close = i < 20 ? 400 : 4_000; // a tenfold move: nothing a baseline could call ordinary
+        await runIngestion({ store, now: hour(i), registry, force: true, log: (line) => lines.push(line) });
+      }
+
+      // Recorded: the series is there and fills like any other.
+      expect(store.snapshots.filter((s) => s.metricKey === "daily_close")).toHaveLength(40);
+      expect(store.snapshots.filter((s) => s.metricKey === "daily_close").at(-1)?.value).toBe(4_000);
+
+      // And nothing else. No observation row, so no sigma, no band, no outcome.
+      expect(store.observations.map((o) => o.metricKey)).not.toContain("daily_close");
+      expect(store.observations.every((o) => o.metricKey === "followers")).toBe(true);
+      // No signal, so nothing the Engine could score and no force contribution.
+      expect(store.signals.map((s) => s.rawPayload.metric)).not.toContain("daily_close");
+      expect(JSON.stringify(store.signals)).not.toContain("daily_close");
+      // The declared metric beside it went all the way through, so this is the
+      // key being observe-only and not the pipeline being asleep.
+      expect(store.observations.some((o) => o.outcome === "emitted" || o.outcome === "inside_band")).toBe(true);
+
+      // It is logged as what it is, and the log carries the key rather than the level.
+      const observeOnly = lines.filter((line) => line.event === "observe_only");
+      expect(observeOnly).toHaveLength(40);
+      expect(observeOnly[0]).toMatchObject({ source: "o", person: "mrbeast", metric: "daily_close" });
+      expect(Object.keys(observeOnly[0])).not.toContain("value");
+    });
+
+    it("is configuration, so the same connector scores the same key the moment the row stops listing it", async () => {
+      // The enable path, exactly: drop the key from observe_only and declare it
+      // under metrics. No code changes between these two runs.
+      const enabled = makeSource({
+        id: "src-o",
+        name: "o",
+        is_active: true,
+        config: {
+          observe_only: [],
+          metrics: {
+            ...(FOLLOWERS_CONFIG as { metrics: Record<string, Json> }).metrics,
+            daily_close: { label: "daily close", polarity: 1, delta: "level", baseline_window_hours: 48, min_samples: 3, sd_floor: 0.01, scale: 1 },
+          },
+        } as Json,
+      });
+      const store = createMemoryIngestStore({ sources: [enabled], mappings: { "src-o": [{ person, externalIdentifier: "id" }] } });
+      close = 400;
+      for (let i = 0; i < 6; i += 1) {
+        close = i < 5 ? 400 : 4_000;
+        await runIngestion({ store, now: hour(i), registry, force: true, log: quiet });
+      }
+      expect(store.observations.some((o) => o.metricKey === "daily_close" && o.outcome === "emitted")).toBe(true);
+      expect(store.signals.some((s) => s.rawPayload.metric === "daily_close")).toBe(true);
+    });
+  });
+
   describe("the metric pipeline", () => {
     let store: MemoryIngestStore;
     let level = 1_000_000;

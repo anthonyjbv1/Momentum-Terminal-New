@@ -121,9 +121,12 @@ describe("the sixteen subjects on the two news doors", () => {
     }
   });
 
-  it("polls the two news doors four people at a time; nothing else declares a concurrency", async () => {
+  it("polls the two news doors four people at a time, and Finnhub's nine likewise; nothing else declares a concurrency", async () => {
     const rows = await database.rows<{ name: string; concurrency: number | null }>("select name, (config ->> 'poll_concurrency')::int as concurrency from public.data_sources order by name");
     expect(rows.filter((r) => r.concurrency !== null).map((r) => [r.name, r.concurrency])).toEqual([
+      // Phase 17: nine executives at up to three calls each, four at a time, so
+      // the source's share of a run stays near a second.
+      ["finnhub", 4],
       ["publisher_rss", 4],
       ["rss", 4],
     ]);
