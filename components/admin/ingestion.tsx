@@ -15,6 +15,7 @@ import { Badge, Empty, Meter, Panel, Scroll, Stat, Stats, type Tone, age, hours,
 const OUTCOME_TONE: Record<string, Tone> = {
   emitted: "ok",
   inside_band: "info",
+  unchanged: "info",
   insufficient_baseline: "warn",
   first_contact: "warn",
   no_config: "bad",
@@ -24,6 +25,7 @@ const OUTCOME_TONE: Record<string, Tone> = {
 const OUTCOME_NOTE: Record<string, string> = {
   emitted: "outside the band and sufficient: this metric is producing signals",
   inside_band: "baseline is ready; the latest reading was ordinary",
+  unchanged: "baseline is ready and the reading is unusual, but it repeats the one already on the record: said once, not every poll",
   insufficient_baseline: "still accumulating: fewer observations in the window than the declared minimum",
   first_contact: "first snapshot recorded; there is no prior reading to compare against",
   no_config: "polled but not declared as a metric with a baseline",
@@ -42,8 +44,14 @@ function sourceTone(row: IngestionReport["sources"][number]): Tone {
   return "ok";
 }
 
+/**
+ * A baseline is READY once the metric is being judged against it, whatever the
+ * verdict was: outside the band (`emitted`), inside it (`inside_band`), or
+ * outside it and already said (`unchanged`, Phase 21). Only the accumulating
+ * states mean not ready.
+ */
 function baselineReady(row: BaselineRow): boolean {
-  return row.lastOutcome === "emitted" || row.lastOutcome === "inside_band";
+  return row.lastOutcome === "emitted" || row.lastOutcome === "inside_band" || row.lastOutcome === "unchanged";
 }
 
 /** What a publisher feed's last fetch found (Phase 13), and how to read it. */
