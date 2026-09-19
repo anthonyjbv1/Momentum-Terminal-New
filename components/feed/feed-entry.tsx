@@ -7,9 +7,9 @@ import { useState } from "react";
 import { cn } from "@/lib/cn";
 import { categoryLabel, type FeedEntry as FeedEntryModel } from "@/lib/feed/feed-model";
 import { relativeTime } from "@/lib/home/relative-time";
-import { formatSigned } from "@/lib/person/profile-model";
+import { FORCE_IMPACT_DECIMALS, formatSigned } from "@/lib/person/profile-model";
 import { Avatar } from "@/components/ui/avatar";
-import { DirectionIndicator, directionOf } from "@/components/ui/direction-indicator";
+import { DirectionIndicator, directionAtPrecision } from "@/components/ui/direction-indicator";
 
 /**
  * One entry in the Feed. The Engine's sentence is the hero; the person is
@@ -181,7 +181,9 @@ function Detail({ entry }: { entry: FeedEntryModel }) {
                 <span className="text-sm leading-relaxed text-fg-secondary">&ldquo;{item.headline}&rdquo;</span>
               </div>
               {item.impact !== null ? (
-                <span className={cn("num shrink-0 text-xs font-medium", impactTones[directionOf(item.impact, 0)])}>{formatSigned(item.impact, 2)}</span>
+                <span className={cn("num shrink-0 text-xs font-medium", impactTones[directionAtPrecision(item.impact, FORCE_IMPACT_DECIMALS, 0)])}>
+                  {formatSigned(item.impact, FORCE_IMPACT_DECIMALS)}
+                </span>
               ) : null}
             </li>
           ))}

@@ -1,4 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
+import { getBoardPulse } from "@/lib/engine/board-pulse";
 import { Logo } from "@/components/brand/momentum-mark";
 import { CountdownTimer } from "@/components/ui/countdown-timer";
 
@@ -24,6 +25,10 @@ export async function TopBanner({ variant = "app" }: { variant?: "app" | "minima
   // Behavioural logging only runs for a signed-in user; signed out, those
   // events would be rejected by the log endpoint anyway.
   const user = await getCurrentUser().catch(() => null);
+  // The board's tide, read once per request. The minimal banner (login,
+  // sign-up, not-found) says nothing about the board and does not pay for
+  // the query.
+  const pulse = variant === "app" ? await getBoardPulse() : null;
 
   return (
     <header className="fixed inset-x-0 top-0 z-(--z-banner) h-banner border-b border-line bg-canvas/80 backdrop-blur-xl">
@@ -37,7 +42,7 @@ export async function TopBanner({ variant = "app" }: { variant?: "app" | "minima
               <BalanceChip />
             </span>
           ) : null}
-          <PulseIndicator mood={null} status="standby" />
+          <PulseIndicator mood={pulse?.mood ?? null} status={pulse?.status ?? "standby"} windowMinutes={pulse?.windowMinutes ?? null} />
           <CountdownTimer size="banner" className="mx-1" />
           <SearchButton loggingEnabled={Boolean(user)} />
           <ProfileButton />

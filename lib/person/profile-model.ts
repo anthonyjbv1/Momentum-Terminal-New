@@ -1,4 +1,7 @@
-import { directionOf, type Direction } from "@/components/ui/direction-indicator";
+import { directionAtPrecision, directionOf, type Direction } from "@/components/ui/direction-indicator";
+
+/** Decimals a force's contribution is shown to, everywhere it is shown. Its colour follows the same rounding. */
+export const FORCE_IMPACT_DECIMALS = 2;
 import { categoryLabel } from "@/lib/home/board-model";
 
 /**
@@ -351,7 +354,11 @@ export function readForces(events: ScoreEventRow[], latestTickNumber: number | n
       label: FORCE_DEFINITIONS[key].label,
       description: FORCE_DEFINITIONS[key].description,
       impact,
-      direction: directionOf(impact, 0),
+      // Coloured by the figure the panel shows, not by the sign underneath:
+      // Gravity's pull toward a target just above the score is a small
+      // negative that reads 0.00 at two decimals, and a 0.00 in red says
+      // "falling" where the number says "nothing happened" (Phase 19+).
+      direction: directionAtPrecision(impact, FORCE_IMPACT_DECIMALS, 0),
       details: entry?.details ?? null,
     };
   });

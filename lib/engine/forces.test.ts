@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_ENGINE_CONFIG as CONFIG } from "./config";
 import { convictionForce, convictionImpact } from "./forces/conviction";
 import { gravityForce } from "./forces/gravity";
-import { computeMood, marketMoodForce } from "./forces/market-mood";
+import { EMPTY_MOOD_WINDOW_HISTORY, foldTickIntoWindow, marketMoodForce, windowedMood, type MoodWindow } from "./forces/market-mood";
 import { foldMetricMoments, freshnessWeight, isExpiredSignal, scoreSignals, signalFreshness, signalImpact, signalsForce, tierMultiplier } from "./forces/signals";
 import { tradingActivityForce, windowedNetFlows } from "./forces/trading-activity";
 import { inversePairAdjustments } from "./inverse-pairs";
@@ -348,24 +348,71 @@ describe("Signals — one moment, one reading (Phase 13+)", () => {
 });
 
 describe("Market Mood", () => {
-  it("is zero when nobody had signals", () => {
-    expect(computeMood([0, 0, 0])).toBe(0);
-    expect(marketMoodForce("a", 0, [0, 0, 0], CONFIG.marketMood).impact).toBe(0);
+  const HALF_MINUTE = 30 / 3600;
+  /** One tick's worth of board movement, folded in as the tick does it. */
+  const oneReading = (impacts: Record<string, number>, people = 3) => foldTickIntoWindow(EMPTY_MOOD_WINDOW_HISTORY, new Map(Object.entries(impacts)), people);
+  const impactOf = (personId: string, window: MoodWindow, config = CONFIG.marketMood, deltaHours = HALF_MINUTE) =>
+    marketMoodForce({ personId, personSlug: personId, window, deltaHours, config }).impact;
+
+  it("is zero when nobody had signals: a tick that moved nobody is not a reading of the tide", () => {
+    const window = oneReading({ a: 0, b: 0, c: 0 });
+    expect(window.readings).toBe(0);
+    expect(windowedMood(window)).toBe(0);
+    expect(impactOf("a", window)).toBe(0);
   });
 
-  it("applies a fraction of the others' average movement, excluding the person's own signals", () => {
-    const impacts = [1.2, 0, 0];
-    expect(computeMood(impacts)).toBeCloseTo(0.4);
-    expect(marketMoodForce("mover", 1.2, impacts, CONFIG.marketMood).impact).toBe(0); // its own news does not feed back
-    expect(marketMoodForce("other", 0, impacts, CONFIG.marketMood).impact).toBeCloseTo(0.25 * 0.6); // others' mean is 0.6
+  it("reads the board's movement over the window's readings, excluding the person's own", () => {
+    const window = oneReading({ mover: 1.2, other: 0, third: 0 });
+    expect(windowedMood(window)).toBeCloseTo(0.4); // 1.2 across three people
+    expect(impactOf("mover", window)).toBe(0); // its own news does not feed back
+    expect(impactOf("other", window)).toBeCloseTo(1.41 * HALF_MINUTE * 0.6); // the others' mean is 0.6
   });
 
-  it("honours per-person sensitivity and brakes", () => {
+  it("holds the tide for the window: a quiet tick after a burst leaves the mood where it was", () => {
+    const burst = oneReading({ mover: 1.2, other: 0, third: 0 });
+    const quiet = foldTickIntoWindow({ totalImpact: burst.totalImpact, totalByPerson: burst.totalByPerson, readings: burst.readings }, new Map(), 3);
+    expect(quiet.readings).toBe(1);
+    expect(windowedMood(quiet)).toBeCloseTo(windowedMood(burst));
+    expect(impactOf("other", quiet)).toBeCloseTo(impactOf("other", burst));
+  });
+
+  it("averages the readings rather than summing them, so the scale stays the scale of one burst", () => {
+    const first = oneReading({ mover: 1.2, other: 0, third: 0 });
+    const second = foldTickIntoWindow(first, new Map([["other", 1.2]]), 3);
+    expect(second.readings).toBe(2);
+    expect(windowedMood(second)).toBeCloseTo(0.4); // 2.4 across three people over two readings
+  });
+
+  it("is time-normalised like Gravity: twice the elapsed time, twice the movement, and no time, no movement", () => {
+    const window = oneReading({ mover: 1.2, other: 0, third: 0 });
+    expect(impactOf("other", window, CONFIG.marketMood, 2 * HALF_MINUTE)).toBeCloseTo(2 * impactOf("other", window));
+    expect(impactOf("other", window, CONFIG.marketMood, 6 / 60)).toBeCloseTo(1.41 * 0.1 * 0.6); // six minutes of it
+    expect(impactOf("other", window, CONFIG.marketMood, 0)).toBe(0);
+    // A tick interval half as long moves a score half as far, so the cadence
+    // cannot re-level the board on its own: this is the point of the rate.
+    expect(impactOf("other", window, CONFIG.marketMood, HALF_MINUTE / 2)).toBeCloseTo(impactOf("other", window) / 2);
+  });
+
+  it("honours per-person sensitivity and both brakes", () => {
     const config = { ...CONFIG.marketMood, sensitivityBySlug: { calm: 0.5, wild: 3 } };
-    expect(marketMoodForce("calm", 0, [1.2, 0, 0], config).impact).toBeCloseTo(0.25 * 0.5 * 0.6);
-    // wild: 0.25 * 3 * min(mood, maxAbsMood) would be 0.45 -> stays under maxAbsImpact; a huge mood is clamped
-    expect(marketMoodForce("wild", 0, [40, 0, 0], config).impact).toBe(config.maxAbsImpact);
-    expect(marketMoodForce("other", 0, [-40, 0, 0], config).impact).toBeCloseTo(-0.25 * 2.0); // mood clamped to -2
+    const window = oneReading({ mover: 1.2, calm: 0, wild: 0 });
+    expect(impactOf("calm", window, config)).toBeCloseTo(1.41 * 0.5 * HALF_MINUTE * 0.6);
+    // The mood itself is clamped to maxAbsMood before the rate is applied.
+    const huge = oneReading({ mover: 40, calm: 0, wild: 0 });
+    expect(impactOf("calm", huge, config)).toBeCloseTo(1.41 * 0.5 * HALF_MINUTE * config.maxAbsMood);
+    // And the impact is clamped in its own right: an hour at triple sensitivity would be 8.46 points.
+    expect(impactOf("wild", huge, config, 1)).toBe(config.maxAbsImpact);
+    const cold = oneReading({ mover: -40, calm: 0, wild: 0 });
+    expect(impactOf("calm", cold, config, 1)).toBe(-config.maxAbsImpact); // -1.41 before the clamp
+    expect(impactOf("calm", cold, config)).toBeCloseTo(-1.41 * 0.5 * HALF_MINUTE * config.maxAbsMood); // a tick's worth is far under it
+  });
+
+  it("carries its working: the board mood, the window and the rate that produced the impact", () => {
+    const window = oneReading({ mover: 1.2, other: 0, third: 0 });
+    const entry = marketMoodForce({ personId: "other", personSlug: "other", window, deltaHours: HALF_MINUTE, config: CONFIG.marketMood });
+    expect(entry.force).toBe("market_mood");
+    expect(entry.details).toMatchObject({ moodExcludingSelf: 0.6, ratePerHour: 1.41, windowMinutes: 60, readings: 1, deltaHours: HALF_MINUTE, sensitivity: 1 });
+    expect(entry.details.mood as number).toBeCloseTo(0.4);
   });
 });
 

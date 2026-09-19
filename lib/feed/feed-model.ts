@@ -1,4 +1,4 @@
-import { directionOf, type Direction } from "@/components/ui/direction-indicator";
+import { directionAtPrecision, type Direction } from "@/components/ui/direction-indicator";
 import { categoryLabel, categoryOptions, type CategoryOption } from "@/lib/home/board-model";
 import { formatSigned } from "@/lib/person/profile-model";
 
@@ -18,6 +18,13 @@ import { formatSigned } from "@/lib/person/profile-model";
 // ---------------------------------------------------------------------------
 // Tunables
 // ---------------------------------------------------------------------------
+
+/**
+ * Decimals the Feed shows an entry's impact to (the DirectionIndicator beside
+ * it, and the Engine's framing sentence). An entry's direction is read at the
+ * same precision, so a move that rounds to zero carries no colour (Phase 19+).
+ */
+export const FEED_IMPACT_DECIMALS = 1;
 
 /**
  * THE HIGH-IMPACT THRESHOLD, in score points. An entry whose recorded score
@@ -193,7 +200,7 @@ export function frameSignal(personName: string, source: string | null, impact: n
   }
   if (impact === null) return `${what} on ${personName} has been read.`;
   if (Math.abs(impact) < 0.05) return `${what} on ${personName} read as neutral.`;
-  return `${what} on ${personName} read ${formatSigned(impact, 1)}.`;
+  return `${what} on ${personName} read ${formatSigned(impact, FEED_IMPACT_DECIMALS)}.`;
 }
 
 export function toFeedEntry(row: FeedRow): FeedEntry | null {
@@ -221,7 +228,7 @@ export function toFeedEntry(row: FeedRow): FeedEntry | null {
       text: frameSignal(person.name, sources[0] ?? null, impact, processed),
       quote: row.text,
       impact,
-      direction: directionOf(impact, 0),
+      direction: directionAtPrecision(impact, FEED_IMPACT_DECIMALS, 0),
       scoreBefore: null,
       scoreAfter: null,
       tickNumber: null,
@@ -238,7 +245,7 @@ export function toFeedEntry(row: FeedRow): FeedEntry | null {
     text: row.text,
     quote: null,
     impact,
-    direction: directionOf(impact, 0),
+    direction: directionAtPrecision(impact, FEED_IMPACT_DECIMALS, 0),
     scoreBefore: toNullableNumber(row.score_before),
     scoreAfter: toNullableNumber(row.score_after),
     tickNumber: toNullableNumber(row.tick_number),

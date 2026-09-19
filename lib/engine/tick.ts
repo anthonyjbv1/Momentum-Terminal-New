@@ -2,7 +2,7 @@ import { DEFAULT_ENGINE_CONFIG, type EngineConfig } from "@/lib/engine/config";
 import { deadlineAfter, type TickDeadline } from "@/lib/engine/deadline";
 import { convictionForce } from "@/lib/engine/forces/conviction";
 import { gravityForce } from "@/lib/engine/forces/gravity";
-import { computeMood, marketMoodForce } from "@/lib/engine/forces/market-mood";
+import { foldTickIntoWindow, marketMoodForce, windowedMood } from "@/lib/engine/forces/market-mood";
 import { isExpiredSignal, scoreSignals, signalAgeHours, signalsForce } from "@/lib/engine/forces/signals";
 import { tradingActivityForce } from "@/lib/engine/forces/trading-activity";
 import { inversePairAdjustments } from "@/lib/engine/inverse-pairs";
@@ -195,12 +195,16 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     return { person, previousScore, deltaHours, gravity, target, drift, scoredSignals, signals, openCapital, concentration };
   });
 
-  const allSignalsImpacts = partial.map((p) => p.signals.impact);
-  const mood = computeMood(allSignalsImpacts);
   const signalsImpactByPerson = new Map(partial.map((p) => [p.person.id, p.signals.impact]));
+  // Market Mood reads the board over a trailing window (Phase 19+): what the
+  // store loaded from the earlier ticks in it, plus what this tick just
+  // scored. A burst is therefore a tide that lasts the window rather than a
+  // splash that is gone in thirty seconds.
+  const moodWindow = foldTickIntoWindow(context.moodWindow, signalsImpactByPerson, context.people.length);
+  const mood = windowedMood(moodWindow);
 
   const results: PersonTickResult[] = partial.map((p) => {
-    const marketMood = roundForce(marketMoodForce(p.person.slug, p.signals.impact, allSignalsImpacts, config.marketMood));
+    const marketMood = roundForce(marketMoodForce({ personId: p.person.id, personSlug: p.person.slug, window: moodWindow, deltaHours: p.deltaHours, config: config.marketMood }));
     const conviction = roundForce(convictionForce(p.openCapital, Number(p.person.max_allocation_cents), config.conviction));
     const tradingActivity = roundForce(
       tradingActivityForce({

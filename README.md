@@ -227,6 +227,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260917202622_phase14_target_drift.sql` | `people.target_attention` / `target_direction` / `target_offset` (the drifting target's state; `revert_target` documented as the seed) and `apply_engine_tick` writing them beside the score; `forbes` and `newsdata` from 60 to 55 minutes; execute on the two SECURITY DEFINER trigger functions (`positions_enforce_direction`, `trade_orders_snapshot_portfolio`) revoked from `anon` and `authenticated` |
 | `20260918015822_phase17_finnhub_non_price.sql` | The `finnhub` row activated at a 35-minute interval (off the multiple of 15 AND off the top of the hour) with `config.observe_only`, `config.insider_codes` and one metric, `company_news_volume_24h`; the nine executives mapped to their companies with the name their Form 4 files under; `observe_only_snapshots`, the view that shows a figure only while its source declares it observe-only, service role only |
 | `20260918161256_phase18plus_volume_counts_events_only.sql` | `person_signal_volume()` counts a signal only when its rate is set by the world rather than by our polling: comment digests and the legacy per-comment kind join metric, baseline and live-moment signals outside the count, so the denominator is exactly the set the volume weight multiplies (`UNCOUNTED_SIGNAL_KINDS`). Function body otherwise unchanged; `tracked_since` untouched |
+| `20260918234503_phase19plus_mood_window.sql` | A partial index on `score_events (created_at desc) where force = 'signals'`: Market Mood reads the Signals force's own impacts over its trailing window once per tick, and the signals rows are a thousandth of that table. `engine_ticks.mood` re-documented — from Phase 19+ it holds the windowed reading, and rows before it hold the older instantaneous one |
 | `20260918194213_phase19_forecast.sql` | `people.forecast_paused` (the per-person kill switch); `forecast_votes` (direction, reason tag, the score at vote time, `superseded_at` for the supersede-not-delete trail) with one active vote per user per person by partial unique index, RLS select-own for `authenticated` and no client writes; `forecast_rate_limit_per_hour()` = 20 and `forecast_min_votes()` = 5; `cast_forecast_vote()` (SECURITY DEFINER, actor `auth.uid()`, refusals as values) and `forecast_summary()` (aggregates only, the split withheld below the minimum) |
 | `20260917235241_phase16_twitch_live_mode.sql` | `live_sessions` (one broadcast per source and stream id, with its running aggregates) and `live_samples` (the live ledger), both service role only; `ingest_runs.trigger` admits `live`; the `twitch` row's `config.live` block (on, two-minute samples, the thresholds) and its two session metrics (`session_peak_viewers`, `clips_per_stream_hour`, a month of sessions, five before either says anything); `person_signal_volume()` no longer counts live moments as volume |
 
@@ -326,7 +327,7 @@ The registry as shipped: MrBeast ↔ `youtube`, `youtube_comments` (`UCX6OQ3Dkcs
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
 | **Gravity**          | `decayed = target + (score − target) · e^(−λ·Δh)`, impact = `decayed − score`; λ = 0.35/h, Δh = hours since `last_tick_at` (30 s on the very first tick, capped at 24 h); target = `revert_target` + `target_offset` (the seed, plus the [drifting target](#the-drifting-target-phase-14) when it is on) | pulls toward the target |
 | **Signals**          | per signal: `baseImpact (1.5) · tier multiplier (T1 1.5, T2 1.0, T3 0.5, T4/5 0.3) · confidence · direction`; summed, capped at ±10 per tick | 0 |
-| **Market Mood**      | mood = platform-wide mean of this tick's Signals impacts; impact = `fraction (0.25) · sensitivity (1.0, per-slug overridable) · mood excluding the person's own signals`, mood clamped to ±2 and impact to ±0.5 (the brakes) | 0 |
+| **Market Mood**      | mood = the board's Signals movement over a **trailing window** (`windowMinutes` 60), as a mean per person across the ticks in it that moved anyone; impact = `ratePerHour (1.41) · sensitivity (1.0, per-slug overridable) · Δh · mood excluding the person's own signals`, mood clamped to ±2 and impact to ±0.5 (the brakes). Per hour × the person's own elapsed time, exactly as Gravity applies its λ ([Phase 19+](#market-mood-is-a-tide-not-a-splash-phase-19)) | 0 |
 | **Conviction**       | concentration = open capital on the person / `max_allocation_cents`; 0–60 % → 0, 60–85 % → +0.05…+0.15, > 85 % → −0.05…−0.15, capped at −0.30 | 0 (no positions) |
 | **Trading Activity** | flow score = net Buy−Sell flow in the last 60 s / `max_allocation_cents` (clamped ±1); **baseline** = the same score for every 60 s window over the trailing **24 h** (`baselineHours`); deviation = flow score − baseline mean; a deadband at **1.0 σ** (`thresholdStdDevs`) of the baseline sd, which is floored at **0.01** (`sdFloor`); outside the band adjustment = deviation · 0.25 (`weight`), inside it deviation · 0.25 · 0.25 (`inBandScale`) but never smaller in magnitude than **0.01** (`inBandMinImpact`, signed by the deviation, so normal trading reads alive rather than idle); × 0.4 when no signal confirms the move, capped ±0.30, skipped below 15 % concentration, and **0 with "insufficient baseline" until 30 windows** (`minPopulatedWindows`) in the trailing day have seen a trade. Baseline-relative so that long-only flow (which can only be ≥ 0) is not a permanent lift: steady inflow is the baseline, a burst above it lifts, a lull below it lowers. Unchanged when shorting is enabled. | 0 (no trades) |
 
@@ -1753,6 +1754,155 @@ and the abnormal-activity freeze, conviction levels on a vote, comments, any
 freeze UI, any Engine contribution, any Feed presence. The score at vote
 time is stored now so that accuracy can be computed later without a backfill.
 
+## Market Mood is a tide, not a splash (Phase 19+)
+
+Measured across the first 6,056 ticks: 215 had signals to read, 214 carried a
+non-zero mood, and the largest reading ever was 0.2457. Those middle two
+numbers matching is the whole story — the mood was the mean of **this tick's**
+Signals impacts, signals arrive in fifteen-minute bursts, and the Engine ticks
+twice a minute, so on **96.5% of ticks** there was nothing to read a tide from
+and the mood correctly reported 0.00.
+
+Gravity's behaviour between bursts is meaningful: it decays smoothly, and the
+decay is real. Mood's was not. A tide that exists for one tick and is gone
+thirty seconds later is a splash.
+
+### The window
+
+The mood is now the board's Signals movement over a **trailing 60 minutes**:
+
+```
+mood = Σ Signals impact in the window / (people × readings)
+```
+
+A **reading** is a tick inside the window that moved anyone. Dividing by every
+tick would bury each burst under the 119 quiet ticks around it; dividing by
+the readings keeps the burst's own magnitude and holds it for the window,
+decaying as old readings age out. The value therefore stays on the scale the
+clamps were set for — only its frequency changes. A person's own signals are
+still excluded from their own mood, which matters *more* with a window, since
+a burst now persists for an hour rather than a tick.
+
+`windowMinutes` is a **tunable** (`ENGINE_MOOD_WINDOW_MINUTES`). 60 was chosen
+from the replay below: 30 minutes leaves the mood absent on 16% of ticks, and
+120 halves the visible changes to 1.5 an hour, reading as the mood of the
+afternoon rather than of the hour.
+
+### The replay, over the 48 hours to 2026-09-18 (5,760 ticks)
+
+| | instantaneous (before) | windowed, 30 min | **windowed, 60 min** | windowed, 120 min |
+| --- | --- | --- | --- | --- |
+| Ticks with a non-zero mood | 204 (3.5%) | 4,845 (84.1%) | **5,750 (99.8%)** | 5,750 (99.8%) |
+| Ticks showing something at 2 dp | 190 (3.3%) | 4,276 (74.2%) | **5,090 (88.4%)** | 5,266 (91.4%) |
+| Times the header figure changes | 319 | 191 | **139 (2.9/hour)** | 71 (1.5/hour) |
+| Range | −0.1400 … +0.1601 | −0.0436 … +0.0872 | **−0.0331 … +0.0773** | −0.0198 … +0.0561 |
+
+The instantaneous reading changes *more often* (319) while saying less: most
+of those changes are a flicker to a value and back to 0.00 within one tick.
+
+### What it does to scores, and the rate that holds it still
+
+Windowing puts the mood on ~28× more ticks, and the windowed value is itself
+smaller than a burst reading, for a measured **21.27× rise in gross
+contribution** had the per-tick `fraction` of 0.25 been left alone. That is a
+real change in score movement, not a display change, so the weight was
+re-derived in the same commit rather than left to run hot:
+
+```
+equivalent per-tick fraction = 0.25 / 21.27        = 0.01175
+ratePerHour                  = 0.01175 × 120 ticks = 1.41
+```
+
+**The rate is derived, not chosen**, and `lib/engine/market-mood-window.test.ts`
+fails if someone edits it without re-deriving it. Replayed per person over the
+same 48 hours, with self-exclusion and four-decimal rounding included:
+
+| | before | after | |
+| --- | --- | --- | --- |
+| Gross movement | 0.036184 points/hour | 0.036080 points/hour | **−0.3%** |
+| Net drift | 0.026048 points/hour | 0.032216 points/hour | **+23.7%** |
+| Resting displacement against Gravity | 0.074 points | 0.092 points | |
+
+Gross is held flat by construction. **Net is not, and that is the honest
+number**: a window cancels less within itself than separate one-tick splashes
+do, so the same readings leave a little more signed drift behind. Both figures
+sit far below the Engine's 0.5-point unit of notable, and the resting
+displacement moves by under a fifth of a point, so the board does not
+re-level; but the rate matches the board's measured *mix of signs*, not a
+universal invariant. Re-derive it if the burst cadence changes materially.
+
+### Per hour, like Gravity
+
+The force is `ratePerHour × Δh`, in the person's own elapsed time, rather than
+a fixed amount per tick. A per-tick force silently scales with the tick
+interval: halving the cadence would have doubled Mood's pull on every score
+with nothing in the diff to show it — the same class of bug as the poll
+interval that was silently halving source polls (Phase 10) and the volume
+reference that went stale against a changed roster (Phase 18++). The test runs
+the same wall-clock hour at 30 and at 60 seconds a tick and requires the same
+movement within 1%; a per-tick force would differ by 2×.
+
+### Where the mood shows
+
+The banner's Mood indicator has existed since Phase 6a but was never wired to
+a reading — it passed `null` and always showed "—". Windowing is what makes
+wiring it worth doing, so it now shows the latest tick's windowed mood and
+whether the Engine is ticking (`lib/engine/board-pulse.ts`: one indexed row
+per request, server-rendered, so it follows navigation rather than polling —
+at 2.9 changes an hour that is honest enough). `/admin` labels its column
+**Mood (60m)**. `engine_ticks.mood` now stores the windowed value; rows before
+2026-09-18 hold the older instantaneous one, and the column's comment says so.
+
+### The cost
+
+Market Mood now writes a `score_events` row for nearly every person on nearly
+every tick instead of 3.5% of them: roughly 46,000 more rows a day, about
+20 MB, on a table already growing at 48,000 rows and 22 MB a day from Gravity.
+Worth a retention window on `score_events` before it is a year old; not
+changed here.
+
+## A displayed zero is never coloured (Phase 19+)
+
+On a profile whose score sits above its Gravity target, the forces panel
+showed Gravity as **0.00 in red**. Colour means direction in this design
+system and zero has no direction. The cause was as diagnosed: the underlying
+value is a small negative — the pull downward toward the target — that rounds
+to 0.00 at two decimals while keeping its sign for colouring. Since Phase 14
+stored scores at four decimals, it is the common case rather than a rare one.
+
+`directionAtPrecision(value, precision, threshold)` in
+`components/ui/direction-indicator.tsx` is now the rule: **a value that rounds
+to zero at the precision it is shown at is neutral**, whatever its sign
+underneath; above that the existing flat threshold still applies. It rounds
+with the same `toFixed` the formatters use, so the text and its colour cannot
+disagree. Rounding and precision are unchanged everywhere — this is a
+colouring rule only.
+
+Every surface that colours a number by sign was checked. Four carried the
+defect, all of them the ones that passed a threshold of 0 (colour on any
+non-zero sign) beside a figure shown to two decimals:
+
+| Surface | Defect |
+| --- | --- |
+| The five forces (`readForces`, profile) | **The reported case**: Gravity at −0.0038 shown "0.00" in red |
+| Signals list (profile) | A signal impact rounding to 0.00 took a colour |
+| Feed entry evidence | The same, on each signal behind an entry |
+| `FeedEntryModel.direction` | Same rule, latent: the field is carried but not yet rendered |
+
+And one more found in the same class, in the text rather than the colour:
+`formatChange()` signed by the raw value, so it printed **"+0.00"** for 0.004
+— the header's own Mood figure among them. It now drops the sign when the
+figure rounds to zero, exactly as `formatSigned()` already did.
+
+Checked and left alone, with the reasoning: the shared `DirectionIndicator`
+(score deltas, top movers, Notable Moves, the Feed's per-entry delta) shows
+one decimal, where the flat threshold of 0.05 *is* half a unit, so a displayed
+0.0 was already neutral; the period-change percent beside the hero score can
+only display 0.00% for changes smaller than the points threshold colours; and
+every money surface (portfolio, positions, trade sheet) works in integer
+cents, where a non-zero value can never display as $0.00. Chart labels and
+sparklines are monochrome.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -1765,6 +1915,7 @@ time is stored now so that accuracy can be computed later without a backfill.
 - **Phase 12+**: newest-first selection with a least-recently-served rotation across people, and memory event expiry (30 days, dated folds written as history, today's date and event ages in the person block).
 - **Phase 13**: publisher-direct feeds — the `publisher_feeds` catalogue read as one shared fetch per run, whole-word name matching scoped by topic, undated items refused, per-feed health and discovery written back onto the rows, the two news doors deduplicated as one story family with Google News kept as the fallback — and the ingestion cron at every fifteen minutes with every source interval off the multiple.
 - **Phase 13+**: athlete metrics beyond passing yards — `config.game_stats` on the API-Sports row (every per-game figure read from one request per game, each with its own anchor), `game_passer_rating` (+1) and `game_interceptions` (−1) registered beside yards with touchdowns and every composite figure refused, and the Signals force folding one source's metric signals of one moment into one reading carrying their mean, so a game is its event and its stat line and never three copies of the line.
+- **Phase 19+**: Market Mood became a tide rather than a splash — the board's Signals movement read over a trailing 60 minutes (a mean across the ticks in it that moved anyone, so the scale is unchanged and only the frequency moves: non-zero on 99.8% of ticks against 3.5%, and the header figure changes 2.9 times an hour), applied as 1.41 points per hour × the person's own elapsed time exactly as Gravity applies its λ, with the rate DERIVED from the measured 21.27× rise in firing so the force's gross contribution is held where it was (−0.3%; net drift +23.7%, stated not hidden) and a cadence change can no longer re-level the board; the banner's Mood indicator wired to a real reading for the first time; and a displayed 0.00 never coloured again, on the five forces, the signals list, the Feed's evidence and the feed model, plus a "+0.00" that `formatChange` was printing.
 - **Phase 19**: Forecast, the crowd layer, capture and display — the Forecast section below the five forces (▲ Rising / ▼ Falling with one of seven reason tags, the split and top reasons once five votes exist, the count alone below that, an invitation with none), `forecast_votes` with the score at vote time, one active vote per user per person with supersede-not-delete history, select-own RLS and no client writes, `cast_forecast_vote()` with a 20-distinct-people-an-hour rate limit and the per-person `forecast_paused` kill switch, `forecast_summary()` returning aggregates only, the Rising / Falling buttons in the Buy / Sell styling, the `cast_forecast` event, the paper balance removed from the mobile header — and the Forecast force at weight 0.00, read by nothing, pinned by two zero-influence tests.
 - **Phase 18++**: the volume reference re-derived from measured data before it engages — `referenceSignalsPerDay` 20 → 4, the geometric mean of the roster's own daily rates (the typical-day impact spread falls 14.9× → 3.0×, the ceiling decides six weights rather than fourteen), the bounds examined and kept, fixed chosen over roster-relative with the coupling cost quantified, `ENGINE_VOLUME_REFERENCE` for a re-derivation without a code change, the staleness made visible on /admin (per-person weight, capped state, engaged count, the roster's live geometric mean and the two review triggers), and the Google News epoch-date hole closed in both directions.
 - **Phase 18+**: the volume denominator counts events, not artifacts — one rule for both sides of the weight (a signal counts when its rate is set by the world, not by our polling), `UNCOUNTED_SIGNAL_KINDS` shared between `person_signal_volume()` and the Signals force with a test that fails if they diverge, comment digests and the legacy per-comment kind out of both (MrBeast's series 14.86 → 1.71 a day, the only subject moved), the four callers of the shared baseline documented at the function and pinned by an exhaustive-import test, and two findings reported not changed: the weight saturates at its ceiling for fifteen of sixteen at the present reference, and the two-wave engagement (2026-09-25 and 2026-09-26) is one day of weighted movement ranked against unweighted on the movers strip.

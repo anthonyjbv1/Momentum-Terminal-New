@@ -1,4 +1,5 @@
 import type { EngineConfig } from "@/lib/engine/config";
+import type { MoodWindowHistory } from "@/lib/engine/forces/market-mood";
 import { isFreeSignal } from "@/lib/engine/selection";
 import { LIVE_MOMENT_KIND } from "@/lib/engine/sentiment/prescored";
 import { readSignalVolumeRow, type PersonSignalVolume, type PersonSignalVolumeRow } from "@/lib/engine/signal-volume";
@@ -64,6 +65,31 @@ export function aggregateSignalActivity(rows: Array<{ person_id: string; sentime
   return activity;
 }
 
+/**
+ * Market Mood's window, read back from the Signals force's audit trail
+ * (Phase 19+). A READING is a tick that moved somebody; ticks the force
+ * never wrote a row for are not readings and must not dilute the mean.
+ * Rows belonging to people who have since left the board are dropped: the
+ * mean is spread across the people on it now.
+ */
+export function readMoodWindowHistory(
+  rows: Array<{ person_id: string; impact: number | string | null; tick_number: number | string }>,
+  activeIds: Set<string>,
+): MoodWindowHistory {
+  const totalByPerson = new Map<string, number>();
+  const readingTicks = new Set<string>();
+  let totalImpact = 0;
+  for (const row of rows) {
+    if (!activeIds.has(row.person_id)) continue;
+    const impact = Number(row.impact);
+    if (!Number.isFinite(impact) || impact === 0) continue;
+    totalImpact += impact;
+    totalByPerson.set(row.person_id, (totalByPerson.get(row.person_id) ?? 0) + impact);
+    readingTicks.add(String(row.tick_number));
+  }
+  return { totalImpact, totalByPerson, readings: readingTicks.size };
+}
+
 // ---------------------------------------------------------------------------
 // Supabase implementation
 // ---------------------------------------------------------------------------
@@ -73,8 +99,13 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
     async loadTickContext(now, config) {
       const depthSince = new Date(now.getTime() - config.spread.depthWindowHours * 3600 * 1000).toISOString();
       const tradesSince = new Date(now.getTime() - config.tradingActivity.baselineHours * 3600 * 1000).toISOString();
+      // Market Mood's trailing window (Phase 19+): the Signals force's own
+      // audit trail over the last windowMinutes. Only the rows the force
+      // actually wrote exist, so a tick that moved nobody is simply absent
+      // and is not counted as a reading.
+      const moodSince = new Date(now.getTime() - config.marketMood.windowMinutes * 60 * 1000).toISOString();
 
-      const [people, signals, positions, activity, trades, pairs, lastTick, volume] = await Promise.all([
+      const [people, signals, positions, activity, trades, pairs, lastTick, volume, moodEvents] = await Promise.all([
         client.from("people").select("*").eq("is_active", true).order("slug"),
         client
           .from("signals")
@@ -93,9 +124,10 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         client.from("engine_ticks").select("tick_number").order("tick_number", { ascending: false }).limit(1).maybeSingle(),
         // Each person's event-signal volume, for the per-person weight (Phase 15).
         client.rpc("person_signal_volume", { p_days: config.signals.volume.windowDays }),
+        client.from("score_events").select("person_id, impact, tick_number").eq("force", "signals").gte("created_at", moodSince),
       ]);
 
-      for (const [label, result] of Object.entries({ people, signals, positions, activity, trades, pairs, lastTick, volume })) {
+      for (const [label, result] of Object.entries({ people, signals, positions, activity, trades, pairs, lastTick, volume, moodEvents })) {
         if (result.error) throw new Error(`Engine failed to load ${label}: ${result.error.message}`);
       }
 
@@ -141,6 +173,7 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         signalActivityByPerson: aggregateSignalActivity(activity.data ?? []),
         signalVolumeByPerson: new Map(((volume.data ?? []) as PersonSignalVolumeRow[]).map(readSignalVolumeRow)),
         tradeEvents,
+        moodWindow: readMoodWindowHistory(moodEvents.data ?? [], activeIds),
         inversePairs: pairs.data ?? [],
         lastTickNumber: lastTick.data ? Number(lastTick.data.tick_number) : 0,
       };
@@ -190,6 +223,13 @@ export interface MemoryEngineSeed {
   lastTickNumber?: number;
   /** personId -> event-signal volume (Phase 15). Absent people carry no weight (1). */
   signalVolume?: Record<string, PersonSignalVolume>;
+  /**
+   * Market Mood's window as it stood BEFORE the first tick of the test
+   * (Phase 19+). Without it the store reconstructs the window from the ticks
+   * it has itself recorded, exactly as the Supabase store reads it back from
+   * score_events, so a run of ticks behaves as production does.
+   */
+  moodWindow?: { totalImpact: number; totalByPerson: Record<string, number>; readings: number };
 }
 
 export interface MemoryEngineStore extends EngineStore {
@@ -242,6 +282,20 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
         ),
         signalVolumeByPerson: new Map(Object.entries(seed.signalVolume ?? {})),
         tradeEvents: [...(seed.tradeEvents ?? [])],
+        moodWindow: seed.moodWindow
+          ? { totalImpact: seed.moodWindow.totalImpact, totalByPerson: new Map(Object.entries(seed.moodWindow.totalByPerson)), readings: seed.moodWindow.readings }
+          : readMoodWindowHistory(
+              // The same reconstruction the Supabase store does, over the ticks
+              // this store has recorded inside the window.
+              scoreEvents
+                .filter((event) => {
+                  if (event.force !== "signals") return false;
+                  const at = ticks.find((tick) => tick.expectedTickNumber === event.tickNumber)?.startedAt;
+                  return at ? at.getTime() >= now.getTime() - config.marketMood.windowMinutes * 60 * 1000 : false;
+                })
+                .map((event) => ({ person_id: event.personId, impact: event.impact, tick_number: event.tickNumber })),
+              activeIds,
+            ),
         inversePairs: [...(seed.inversePairs ?? [])],
         lastTickNumber,
       };

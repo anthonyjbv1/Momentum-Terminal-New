@@ -5,10 +5,10 @@ import { useState } from "react";
 
 import { cn } from "@/lib/cn";
 import { relativeTime } from "@/lib/home/relative-time";
-import { formatSigned, signalIdOf, type ProfileSignal } from "@/lib/person/profile-model";
+import { FORCE_IMPACT_DECIMALS, formatSigned, signalIdOf, type ProfileSignal } from "@/lib/person/profile-model";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { directionOf } from "@/components/ui/direction-indicator";
+import { directionAtPrecision } from "@/components/ui/direction-indicator";
 import { SectionHeader } from "@/components/ui/page-header";
 
 import { PROFILE_SURFACE, logProfileEvent } from "./use-profile-logging";
@@ -80,7 +80,9 @@ const detailTime = new Intl.DateTimeFormat("en-US", { month: "short", day: "nume
 
 function SignalItem({ item, personId, loggingEnabled, renderedAt }: { item: ProfileSignal; personId: string; loggingEnabled: boolean; renderedAt: number }) {
   const [open, setOpen] = useState(false);
-  const direction = directionOf(item.impact, 0);
+  // Coloured by the figure below, at the decimals it is shown to: an impact
+  // that rounds to 0.00 reads as nothing happened, so it takes no colour.
+  const direction = directionAtPrecision(item.impact, FORCE_IMPACT_DECIMALS, 0);
 
   const toggle = () => {
     const next = !open;
@@ -119,7 +121,7 @@ function SignalItem({ item, personId, loggingEnabled, renderedAt }: { item: Prof
           </time>
           <span className="ml-auto flex shrink-0 items-center gap-2">
             {item.impact !== null ? (
-              <span className={cn("num text-sm font-medium", impactTones[direction])}>{formatSigned(item.impact, 2)}</span>
+              <span className={cn("num text-sm font-medium", impactTones[direction])}>{formatSigned(item.impact, FORCE_IMPACT_DECIMALS)}</span>
             ) : item.processed === false ? (
               <span className="text-label text-fg-faint">Unscored</span>
             ) : null}

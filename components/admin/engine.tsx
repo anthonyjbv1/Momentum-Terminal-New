@@ -96,7 +96,12 @@ export function EngineSection({ report, now }: { report: EngineReport; now: numb
                       <th className="n">#</th>
                       <th>Started</th>
                       <th className="n">Took</th>
-                      <th className="n">Mood</th>
+                      <th
+                        className="n"
+                        title="Market Mood: the board's mean per-person Signals movement over the Engine's trailing window, across the ticks in it that moved anyone. Ticks before Phase 19+ hold that tick's own signals alone."
+                      >
+                        Mood (60m)
+                      </th>
                       <th className="n">People</th>
                       <th className="n">Processed</th>
                       <th className="n">Attempted</th>

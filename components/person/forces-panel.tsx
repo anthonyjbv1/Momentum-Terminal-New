@@ -1,6 +1,6 @@
 import { cn } from "@/lib/cn";
 import { relativeTime } from "@/lib/home/relative-time";
-import { formatSigned, type ForceReading, type PersonProfile } from "@/lib/person/profile-model";
+import { FORCE_IMPACT_DECIMALS, formatSigned, type ForceReading, type PersonProfile } from "@/lib/person/profile-model";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/page-header";
@@ -98,7 +98,7 @@ function ForceRow({ force, scale }: { force: ForceReading; scale: number }) {
         {idle ? (
           <span className="text-label text-fg-faint">Idle</span>
         ) : (
-          <span className={cn("num text-sm font-medium", figureTones[force.direction])}>{formatSigned(force.impact ?? 0, 2)}</span>
+          <span className={cn("num text-sm font-medium", figureTones[force.direction])}>{formatSigned(force.impact ?? 0, FORCE_IMPACT_DECIMALS)}</span>
         )}
       </div>
     </div>

@@ -99,8 +99,15 @@ export function templateNarrative(person: PersonSummary, summary: TickSummary): 
         ? `${possessive(name)} momentum ${verb} as ${possessive(partner.displayName)} ${(partner.forces.signals ?? 0) > 0 ? "surge" : "slide"} pulled the pair the other way.`
         : `${possessive(name)} momentum ${verb} in reaction to a paired rival's move.`;
     }
-    case "market_mood":
-      return `${name} drifted ${up ? "up" : "down"} with a broadly ${summary.mood >= 0 ? "positive" : "negative"} market mood.`;
+    case "market_mood": {
+      // The mood is read over a window now (Phase 19+), so it is rarely
+      // exactly zero — but a tide that shows as 0.00 is not "broadly
+      // positive", and the sentence should not claim a direction the figure
+      // does not show. The Feed says what the header says.
+      const tide = Number(summary.mood.toFixed(2));
+      const mood = tide === 0 ? "flat" : tide > 0 ? "broadly positive" : "broadly negative";
+      return `${name} drifted ${up ? "up" : "down"} with a ${mood} market mood.`;
+    }
     case "gravity":
       return `${possessive(name)} momentum settled ${up ? "up" : "back"} toward its baseline of ${person.revertTarget.toFixed(0)}.`;
     case "conviction":

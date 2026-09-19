@@ -18,6 +18,33 @@ export function directionOf(change: number | null | undefined, threshold: number
   return "neutral";
 }
 
+/** True when the value is shown as zero at `precision` — the same rounding the formatters do. */
+export function roundsToZero(value: number, precision: number): boolean {
+  return Number(Math.abs(value).toFixed(precision)) === 0;
+}
+
+/**
+ * The direction of a value AS IT IS DISPLAYED (Phase 19+).
+ *
+ * Colour means direction in this design system, and a zero has no direction.
+ * A number can still carry a sign after it has rounded to nothing — Gravity's
+ * pull is a small negative that reads "0.00" at two decimals, which since
+ * Phase 14 stored scores at four decimals is common rather than rare — and
+ * colouring that red says "falling" where the figure says "nothing happened".
+ *
+ * So: a value that rounds to zero at the precision it is shown at is neutral,
+ * whatever its sign underneath. Above that the existing flat threshold still
+ * applies. This rounds with the same toFixed the formatters use, so the text
+ * and its colour cannot disagree.
+ *
+ * Nothing here changes rounding or precision: it is a colouring rule only.
+ */
+export function directionAtPrecision(change: number | null | undefined, precision: number, threshold: number = FLAT_THRESHOLD): Direction {
+  if (change === null || change === undefined || Number.isNaN(change)) return "neutral";
+  if (roundsToZero(change, precision)) return "neutral";
+  return directionOf(change, threshold);
+}
+
 export const directionLabels: Record<Direction, string> = {
   heating: "Heating",
   cooling: "Cooling",
@@ -56,13 +83,24 @@ export interface DirectionIndicatorProps {
   className?: string;
 }
 
+/**
+ * "+1.2", "−0.4", "0.0" — the sign is a real minus, not a hyphen, and a
+ * figure that rounds to zero carries no sign at all (Phase 19+): "+0.00" for
+ * a value of 0.004 claims a direction the number does not show. The same rule
+ * as formatSigned() in the profile model, and the same rule the colour
+ * follows, so the text and its colour cannot disagree.
+ */
 export function formatChange(change: number, precision = 1): string {
-  const sign = change > 0 ? "+" : change < 0 ? "−" : "";
-  return `${sign}${Math.abs(change).toFixed(precision)}`;
+  const fixed = Math.abs(change).toFixed(precision);
+  if (Number(fixed) === 0) return fixed;
+  return `${change > 0 ? "+" : "−"}${fixed}`;
 }
 
 export function DirectionIndicator({ change, size = "md", withLabel = false, iconOnly = false, precision = 1, className }: DirectionIndicatorProps) {
-  const direction = directionOf(change);
+  // The arrow and the colour follow the figure this renders, at its own
+  // precision: at the default (one decimal) that is the flat threshold
+  // exactly, so nothing about the usual reading changes.
+  const direction = directionAtPrecision(change, precision);
   const Icon = directionIcon[direction];
   // No reading at all (the Engine has not moved this person yet) is a bare
   // dash: an arrow beside it would imply a measurement that does not exist.

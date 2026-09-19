@@ -300,17 +300,56 @@ export interface EngineConfig {
     /** Declared confidence from which a live moment is remembered as anomalous. */
     anomalousConfidence: number;
   };
-  /** FORCE 3 — Market Mood (global sentiment tide). */
+  /** FORCE 3 — Market Mood (the board's tide, read over a trailing window). */
   marketMood: {
-    /** Fraction of the mood applied to each person. */
-    fraction: number;
+    /**
+     * THE WINDOW the tide is read over, in minutes. TUNABLE, and overridable
+     * without a code change: ENGINE_MOOD_WINDOW_MINUTES.
+     *
+     * 60 was chosen from the measured board (Phase 19+): signals arrive in
+     * fifteen-minute bursts, so an hour holds roughly four readings, the
+     * mood is present on 99.8% of ticks instead of 3.5%, and what the header
+     * shows changes about 2.9 times an hour. 30 minutes leaves the mood
+     * absent on 16% of ticks; 120 halves the visible changes to 1.5 an hour
+     * and reads more like the mood of the afternoon than of the hour.
+     */
+    windowMinutes: number;
+    /**
+     * POINTS PER HOUR per unit of mood, applied as rate × deltaHours in the
+     * person's own elapsed time, exactly as Gravity applies lambdaPerHour.
+     * TUNABLE, and overridable without a code change: ENGINE_MOOD_RATE_PER_HOUR.
+     *
+     * DERIVED, NOT CHOSEN (Phase 19+). It replaces the per-tick `fraction`
+     * of 0.25, and its value is that fraction divided by the measured rise
+     * in firing, so the force contributes what it already contributed.
+     * Windowing puts the mood on ~28× more ticks while making each reading
+     * smaller, for a measured gross-contribution ratio of 21.27× over the
+     * 48 hours to 2026-09-18. Hence
+     *
+     *   equivalent per-tick fraction = 0.25 / 21.27        = 0.01175
+     *   rate per hour                = 0.01175 × 120 ticks = 1.41
+     *
+     * Replayed over those 48 hours the force moves each person 0.0362 points
+     * an hour gross before and 0.0361 after (−0.3%, four-decimal rounding
+     * included). Its NET drift rises 23.7% (0.0260 → 0.0322 points an hour)
+     * because a window cancels less within itself than separate one-tick
+     * splashes do; against Gravity that is a resting displacement of 0.092
+     * points rather than 0.074, both far below the Engine's 0.5-point unit
+     * of notable.
+     *
+     * Re-derive it if the burst cadence changes materially: the ratio is a
+     * measurement of this board, not a constant of nature. The rate is per
+     * HOUR precisely so that a change to the tick interval cannot re-level
+     * the board on its own.
+     */
+    ratePerHour: number;
     /** Sensitivity used for people not listed in sensitivityBySlug. */
     defaultSensitivity: number;
     /** Per-person overrides keyed by people.slug. */
     sensitivityBySlug: Record<string, number>;
-    /** Brake: the mood itself is clamped to ±this before the fraction is applied. */
+    /** Brake: the mood itself is clamped to ±this before the rate is applied. */
     maxAbsMood: number;
-    /** Brake: the per-person impact is clamped to ±this. */
+    /** Brake: the per-person impact is clamped to ±this, per tick. */
     maxAbsImpact: number;
   };
   /** FORCE 4 — Conviction (capital concentration = open capital / max_allocation). */
@@ -500,7 +539,8 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   live: { notableConfidence: 0.5, anomalousConfidence: 0.9 },
   forecast: { weight: 0 },
   marketMood: {
-    fraction: 0.25,
+    windowMinutes: 60,
+    ratePerHour: 1.41,
     defaultSensitivity: 1.0,
     sensitivityBySlug: {},
     maxAbsMood: 2.0,
@@ -606,6 +646,21 @@ export interface EngineEnvOverrides {
    * positive number, decimals allowed; anything else is ignored.
    */
   volumeReference?: string | undefined;
+  /**
+   * ENGINE_MOOD_WINDOW_MINUTES. The window Market Mood is read over
+   * (marketMood.windowMinutes, default 60). A positive number of minutes;
+   * anything else is ignored. Changing it changes how much of the board's
+   * recent movement the tide carries, not how hard the force pushes.
+   */
+  moodWindowMinutes?: string | undefined;
+  /**
+   * ENGINE_MOOD_RATE_PER_HOUR. Market Mood's points-per-hour rate
+   * (marketMood.ratePerHour, default 1.41, derived from the measured
+   * contribution the per-tick fraction produced). Re-derive it here rather
+   * than waiting on a code change when the burst cadence moves. A positive
+   * number, decimals allowed; anything else is ignored.
+   */
+  moodRatePerHour?: string | undefined;
 }
 
 /** A strictly positive integer from a raw environment string, or null. */
@@ -642,6 +697,14 @@ export function engineConfigFromEnv(env: EngineEnvOverrides, base: EngineConfig 
   // handed over whole: `{ volume: { referenceSignalsPerDay } }` alone would
   // replace the volume block and lose minSamples, the bounds and the rest.
   if (volumeReference !== null) overrides.signals = { volume: { ...base.signals.volume, referenceSignalsPerDay: volumeReference } };
+  const moodWindowMinutes = parsePositiveNumber(env.moodWindowMinutes);
+  const moodRatePerHour = parsePositiveNumber(env.moodRatePerHour);
+  if (moodWindowMinutes !== null || moodRatePerHour !== null) {
+    overrides.marketMood = {
+      ...(moodWindowMinutes !== null ? { windowMinutes: moodWindowMinutes } : {}),
+      ...(moodRatePerHour !== null ? { ratePerHour: moodRatePerHour } : {}),
+    };
+  }
   return withEngineConfig(overrides, base);
 }
 

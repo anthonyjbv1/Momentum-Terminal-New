@@ -114,13 +114,16 @@ describe("Engine tick", () => {
     expect(drakeSummary.forces.market_mood).toBeUndefined(); // own news never feeds back through the mood
     expect(drakeSummary.newScore).toBeCloseTo(50 + 1.2 + 0.0437, 2); // + gravity toward 65
 
-    // Kendrick: inverse -(1.2 * 0.4) = -0.48, plus mood 0.25 * mean(others) = 0.25 * 0.6 = 0.15
+    // Kendrick: inverse -(1.2 * 0.4) = -0.48, plus the tide. The mood is read
+    // over the window (one reading here, this tick) and applied per hour:
+    // 1.41 * (30/3600) * mean(others) = 1.41 * 0.008333 * 0.6 = 0.00705.
+    const TIDE = 1.41 * (30 / 3600) * 0.6; // 0.00705, written at the force's four decimals
     expect(kendrickSummary.forces.inverse_pair).toBeCloseTo(-0.48);
-    expect(kendrickSummary.forces.market_mood).toBeCloseTo(0.15);
+    expect(kendrickSummary.forces.market_mood).toBeCloseTo(TIDE, 3);
     expect(kendrickSummary.newScore).toBeLessThan(mrbeastSummary.newScore);
 
     // MrBeast only feels the tide.
-    expect(mrbeastSummary.forces.market_mood).toBeCloseTo(0.15);
+    expect(mrbeastSummary.forces.market_mood).toBeCloseTo(TIDE, 3);
     expect(mrbeastSummary.forces.signals).toBeUndefined();
     expect(summary.mood).toBeCloseTo(1.2 / 3);
 
@@ -141,10 +144,17 @@ describe("Engine tick", () => {
     );
     expect(store.scoreEvents.some((e) => e.force === "conviction" || e.force === "trading_activity")).toBe(false);
 
-    // A second tick has nothing left to process.
+    // A second tick has nothing left to process — but the tide is not gone
+    // thirty seconds later (Phase 19+): the window still holds the reading,
+    // so the mood reads the same and the force keeps applying it.
     const again = await runEngineTick({ store, scorer: rulesBasedScorer, now: new Date(NOW.getTime() + 30_000) });
     expect(again.signalsProcessed).toBe(0);
-    expect(again.mood).toBe(0);
+    expect(again.mood).toBeCloseTo(1.2 / 3);
+    expect(again.people.find((p) => p.slug === "mrbeast")!.forces.market_mood).toBeCloseTo(TIDE, 3);
+    // Past the window it is: the reading has aged out and the board is flat again.
+    const later = await runEngineTick({ store, scorer: rulesBasedScorer, now: new Date(NOW.getTime() + 61 * 60_000) });
+    expect(later.mood).toBe(0);
+    expect(later.people.find((p) => p.slug === "mrbeast")!.forces.market_mood).toBeUndefined();
   });
 
   it("treats baseline signals as zero impact but still marks them processed", async () => {
@@ -189,7 +199,7 @@ describe("Engine tick", () => {
     );
     // A scorer that would blow up if the model were ever asked.
     const never = { name: "never", scoreSignal: async () => { throw new Error("the model must not see a live moment"); } };
-    const summary = await runEngineTick({ store, scorer: never, now: NOW, config: withEngineConfig({ marketMood: { fraction: 0 } }) });
+    const summary = await runEngineTick({ store, scorer: never, now: NOW, config: withEngineConfig({ marketMood: { ratePerHour: 0 } }) });
     expect(summary.signals[0]).toMatchObject({ id: "sig-live", label: "positive", direction: 1, confidence: 0.6, scorer: "prescored", anomaly: "notable" });
     // 1.5 × tier 2 (1.0) × 0.6, fresh, unweighted.
     expect(summary.signals[0].impact).toBeCloseTo(0.9, 4);
@@ -229,7 +239,7 @@ describe("Engine tick", () => {
         ...Array.from({ length: 8 }, (_, i) => loud(`dn${i}`, "p-low", "arrested in fraud scandal")),
       ],
     });
-    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config: withEngineConfig({ marketMood: { fraction: 0 } }) });
+    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config: withEngineConfig({ marketMood: { ratePerHour: 0 } }) });
     expect(summary.people.find((p) => p.slug === "high")?.newScore).toBe(CONFIG.score.ceiling);
     expect(summary.people.find((p) => p.slug === "low")?.newScore).toBe(CONFIG.score.floor);
   });
@@ -261,7 +271,7 @@ describe("Engine tick — the person's volume weight", () => {
         },
       }),
     );
-    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config: withEngineConfig({ marketMood: { fraction: 0 }, inversePairs: { defaultDampening: 0 } }) });
+    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config: withEngineConfig({ marketMood: { ratePerHour: 0 }, inversePairs: { defaultDampening: 0 } }) });
     const by = (slug: string) => summary.people.find((p) => p.slug === slug)!;
     expect(by("drake").forces.signals).toBeCloseTo(2.4);
     expect(by("mrbeast").forces.signals).toBeCloseTo(0.3);
@@ -321,7 +331,7 @@ describe("Engine tick — the drifting target", () => {
 
   it("ON, weeks of silence: an inert person's target sinks toward their own floor and Gravity follows it; a covered person's rises", async () => {
     // Market Mood off, so the quiet person's score shows Gravity following the target and nothing else.
-    const config = withEngineConfig({ targetDrift: { enabled: true }, marketMood: { fraction: 0 } });
+    const config = withEngineConfig({ targetDrift: { enabled: true }, marketMood: { ratePerHour: 0 } });
     const quiet = makePerson({ id: "p-quiet", slug: "quiet", display_name: "Quiet", current_score: 63, revert_target: 63 });
     const covered = makePerson({ id: "p-covered", slug: "covered", display_name: "Covered", current_score: 60, revert_target: 60 });
     const store = createMemoryEngineStore({ people: [quiet, covered] });

@@ -1,3 +1,4 @@
+import type { MoodWindowHistory } from "@/lib/engine/forces/market-mood";
 import type { DeferralReason } from "@/lib/engine/sentiment/budget";
 import type { SentimentResult } from "@/lib/engine/sentiment/types";
 import type { PersonSignalVolume } from "@/lib/engine/signal-volume";
@@ -83,6 +84,12 @@ export interface TickContext {
   signalVolumeByPerson: Map<string, PersonSignalVolume>;
   /** Trade events inside the Trading Activity history window. */
   tradeEvents: TradeEvent[];
+  /**
+   * The board's Signals movement over the EARLIER ticks of Market Mood's
+   * trailing window (Phase 19+), read back from the Signals force's own
+   * audit trail. The tick folds its own scoring in before the mood is read.
+   */
+  moodWindow: MoodWindowHistory;
   inversePairs: InversePair[];
   /** Highest tick_number persisted so far (0 before the first tick). */
   lastTickNumber: number;

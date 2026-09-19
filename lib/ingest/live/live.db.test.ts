@@ -89,15 +89,33 @@ describe("a live moment", () => {
         `p16-${key}`,
         String(hoursAgo),
       ]);
-    // Yesterday at about this hour: an article and a live moment. An hour ago: one of each again.
-    await insert("article", "a1", 24 + 1);
-    await insert("live_moment", "m1", 24 + 1, { moment: "audience_surge", direction: 1, confidence: 0.5, magnitude: 0.25, from: 48200, to: 60250 });
-    await insert("article", "a2", 1);
+    const volume = async () => {
+      const [row] = await database.rows<{ current_24h: string; daily_total: number }>(
+        "select current_24h, (select coalesce(sum(d), 0) from unnest(daily) as d)::int as daily_total from public.person_signal_volume(14) where person_id = $1",
+        [personId],
+      );
+      return { current24h: Number(row.current_24h), dailyTotal: Number(row.daily_total) };
+    };
+
+    // Two live moments, a day and a half apart: neither is volume, at any
+    // hour. (This used to pin the daily buckets to {0,1} from an offset of
+    // "24 + 1 hours ago" called yesterday — which it is in the evening and
+    // is not after midnight UTC, so the assertion failed for the first hours
+    // of every day. What the test means to claim is that a live moment never
+    // counts as volume, and that is true whatever the clock says.)
+    await insert("live_moment", "m1", 36, { moment: "audience_surge", direction: 1, confidence: 0.5, magnitude: 0.25, from: 48200, to: 60250 });
     await insert("live_moment", "m2", 1, { moment: "clip_burst", direction: 1, confidence: 0.7, magnitude: 3.4 });
-    const [row] = await database.rows<{ current_24h: string; daily: string }>("select current_24h, daily::text as daily from public.person_signal_volume(14) where person_id = $1", [personId]);
-    expect(Number(row.current_24h)).toBe(1);
-    // Two complete days since tracking began: the day before yesterday (nothing) and yesterday (the article alone).
-    expect(row.daily).toBe("{0,1}");
+    expect(await volume()).toEqual({ current24h: 0, dailyTotal: 0 });
+
+    // The same two moments beside two articles: only the articles count.
+    await insert("article", "a1", 36);
+    await insert("article", "a2", 1);
+    const [{ in_complete_days: inCompleteDays }] = await database.rows<{ in_complete_days: number }>(
+      "select count(*)::int as in_complete_days from public.signals where dedupe_key like 'p16-a%' and (occurred_at at time zone 'utc')::date < (now() at time zone 'utc')::date",
+    );
+    expect(inCompleteDays).toBeGreaterThanOrEqual(1); // the day-and-a-half-old one, always
+    // The hour-old article is inside the trailing day; the older one is not.
+    expect(await volume()).toEqual({ current24h: 1, dailyTotal: inCompleteDays });
     const [stored] = await database.rows<{ raw_payload: Record<string, unknown> }>("select raw_payload from public.signals where dedupe_key = 'p16-m1'");
     expect(stored.raw_payload).toMatchObject({ kind: "live_moment", direction: 1, confidence: 0.5, from: 48200 });
     await database.rows("delete from public.signals where dedupe_key like 'p16-%'");

@@ -128,12 +128,25 @@ export function getEngineSecretOrNull(): string | null {
  *                                         roster's measured geometric mean);
  *                                         expected to need re-deriving as
  *                                         subjects and sources are added
+ *   ENGINE_MOOD_WINDOW_MINUTES            the window Market Mood is read over
+ *                                         (code default 60)
+ *   ENGINE_MOOD_RATE_PER_HOUR             Market Mood's points-per-hour rate
+ *                                         (code default 1.41, derived to hold
+ *                                         the force's measured contribution)
  */
-export function getEngineEnvOverrides(): { tradingMinPopulatedWindows: string | undefined; targetDriftEnabled: string | undefined; volumeReference: string | undefined } {
+export function getEngineEnvOverrides(): {
+  tradingMinPopulatedWindows: string | undefined;
+  targetDriftEnabled: string | undefined;
+  volumeReference: string | undefined;
+  moodWindowMinutes: string | undefined;
+  moodRatePerHour: string | undefined;
+} {
   return {
     tradingMinPopulatedWindows: process.env.ENGINE_TRADING_MIN_POPULATED_WINDOWS,
     targetDriftEnabled: process.env.ENGINE_TARGET_DRIFT_ENABLED,
     volumeReference: process.env.ENGINE_VOLUME_REFERENCE,
+    moodWindowMinutes: process.env.ENGINE_MOOD_WINDOW_MINUTES,
+    moodRatePerHour: process.env.ENGINE_MOOD_RATE_PER_HOUR,
   };
 }
 
