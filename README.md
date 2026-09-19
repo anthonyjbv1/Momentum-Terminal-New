@@ -1996,6 +1996,24 @@ On the same 48 hours Phase 20 measured, the joint replay gives **153 signals
 against 1,854**, matching that phase's projection exactly, and **135** once
 `comment_volume` stops scoring.
 
+**Measured after shipping**, on the SAME readings rather than a different
+day's: the 194 observations of the first hour live (2026-09-19 15:15–16:22,
+five ingestion runs) carry their own sigma, so what the old rule would have
+done to them is arithmetic, not a different sample. **79** of the 194 clear
+1.0σ and would have emitted. **17** clear 2.0σ. Emit-on-change removes 11 of
+those 17 as repeats of the reading already on the record. **6 emitted** — a
+92.4 % reduction against the replay's projected 92.6 %, on identical data.
+Per metric: `news_volume_24h` 3 of 80, `viral_moment_rate` 1 of 80 (with 8
+suppressed as repeats), `company_news_volume_24h` 2 of 18, every other metric
+0. The six are five different people, and the one person with two
+(Mark Zuckerberg, news volume −3.6σ then −4.7σ) moved between them.
+
+The force-level share — 90.9 % metric against 9.1 % event over the 48 hours
+before — is NOT yet measurable and is not quoted here: the post-ship hour holds
+eight counted readings in total, and the event side of it saw two against a
+48-hour average of 3.3 an hour. That figure needs its own 48-hour window, from
+2026-09-19 15:15.
+
 ### `comment_volume` is not calibrated, and cannot be calibrated yet
 
 It emitted on **78.2 %** of its observations, the highest rate on the board,
