@@ -5,6 +5,7 @@ import { cache } from "react";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 import {
+  FORCES_WINDOW_MINUTES,
   RANGES,
   convictionLevel,
   deriveState,
@@ -14,6 +15,7 @@ import {
   readForces,
   toProfilePerson,
   toSeries,
+  type ForceImpactRow,
   type NarrativeRow,
   type PersonProfile,
   type ProfilePerson,
@@ -97,7 +99,8 @@ export const getPersonProfile = cache(async (slug: string): Promise<PersonProfil
   if (!person) return null;
 
   const supabase = createSupabaseAdminClient();
-  const [series, latestTickResult, eventsResult] = await Promise.all([
+  const windowStart = new Date(Date.now() - FORCES_WINDOW_MINUTES * 60_000).toISOString();
+  const [series, latestTickResult, windowResult, eventsResult] = await Promise.all([
     getScoreSeries(person.id),
     supabase
       .from("score_history")
@@ -107,8 +110,19 @@ export const getPersonProfile = cache(async (slug: string): Promise<PersonProfil
       .order("tick_number", { ascending: false })
       .limit(1)
       .maybeSingle(),
-    // The forces of the latest tick. Six rows at most per tick (five forces
-    // plus inverse_pair), so twelve covers the latest tick with room to spare.
+    // Every force row of the last FORCES_WINDOW_MINUTES, which is what the
+    // panel adds up. Two ticks a minute and at most six rows a tick bounds an
+    // hour at 720; the limit is the ceiling, not a page. Force and impact
+    // only — the working is read once, below, not 720 times.
+    supabase
+      .from("score_events")
+      .select("force, impact")
+      .eq("person_id", person.id)
+      .gte("created_at", windowStart)
+      .limit(1_000),
+    // The latest tick's rows, for the working each force recorded there
+    // (Conviction's capital concentration). Six rows at most per tick (five
+    // forces plus inverse_pair), so twelve covers it with room to spare.
     supabase
       .from("score_events")
       .select("force, impact, tick_number, details")
@@ -119,11 +133,12 @@ export const getPersonProfile = cache(async (slug: string): Promise<PersonProfil
   ]);
 
   if (latestTickResult.error) console.warn("[person] latest tick read failed:", latestTickResult.error.message);
+  if (windowResult.error) console.warn("[person] score_events window read failed:", windowResult.error.message);
   if (eventsResult.error) console.warn("[person] score_events read failed:", eventsResult.error.message);
 
   const latestRow = latestTickResult.data;
   const latestTick = latestRow ? { tickNumber: Number(latestRow.tick_number), at: latestRow.recorded_at } : null;
-  const forces = readForces((eventsResult.data ?? []) as ScoreEventRow[], latestTick?.tickNumber ?? null);
+  const forces = readForces((windowResult.data ?? []) as ForceImpactRow[], (eventsResult.data ?? []) as ScoreEventRow[], latestTick?.tickNumber ?? null);
 
   return {
     person,

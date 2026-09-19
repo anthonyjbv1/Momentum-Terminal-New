@@ -79,23 +79,23 @@ describe("a value that rounds to zero at the precision it is shown at", () => {
 
 describe("the surfaces that colour a number by its sign", () => {
   it("the five forces: a force that rounds to 0.00 is shown flat, not red", () => {
-    const events = [
-      { tick_number: 7, force: "gravity", impact: -0.0038, details: null },
-      { tick_number: 7, force: "signals", impact: 1.2, details: null },
-      { tick_number: 7, force: "market_mood", impact: 0.0071, details: null },
-      { tick_number: 7, force: "conviction", impact: -0.12, details: null },
+    const window = [
+      { force: "gravity", impact: -0.0038 },
+      { force: "signals", impact: 1.2 },
+      { force: "market_mood", impact: 0.0071 },
+      { force: "conviction", impact: -0.12 },
     ];
-    const forces = readForces(events, 7);
+    const forces = readForces(window, [], 7);
     const byKey = Object.fromEntries(forces.map((force) => [force.key, force]));
     expect(byKey.gravity.impact).toBe(-0.0038);
     expect(formatSigned(byKey.gravity.impact!, FORCE_IMPACT_DECIMALS)).toBe("0.00");
-    expect(byKey.gravity.direction).toBe("neutral"); // the defect this phase fixed
+    expect(byKey.gravity.direction).toBe("neutral"); // the defect Phase 19+ fixed
     expect(byKey.signals.direction).toBe("heating");
     expect(byKey.market_mood.direction).toBe("heating"); // 0.01 shows, so it keeps its colour
     expect(byKey.conviction.direction).toBe("cooling");
     // A force that never ran is idle, which is not the same as flat.
-    expect(readForces([], null)[0].impact).toBeNull();
-    expect(readForces([], null)[0].direction).toBe("neutral");
+    expect(readForces([], [], null)[0].impact).toBeNull();
+    expect(readForces([], [], null)[0].direction).toBe("neutral");
   });
 
   it("the Feed reads an entry's direction at the decimals the Feed shows", () => {

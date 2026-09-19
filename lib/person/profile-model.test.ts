@@ -4,11 +4,14 @@ import { DEFAULT_ENGINE_CONFIG } from "@/lib/engine/config";
 
 import {
   CONVICTION_BANDS,
+  FORCES_WINDOW_MINUTES,
+  FORCE_IMPACT_DECIMALS,
   STATE_RULE,
   convictionLevel,
   defaultRange,
   deriveState,
   emptySeries,
+  forcesWindowLabel,
   formatSigned,
   formatSignedPercent,
   formatTrackedSince,
@@ -117,33 +120,78 @@ describe("deriveState — the STATE threshold", () => {
 });
 
 describe("readForces", () => {
-  const events = [
-    { force: "gravity", impact: "0.37", tick_number: 12, details: { decayed: 50.37 } },
+  // The window read: force and impact for every tick inside it.
+  const window = [
+    { force: "gravity", impact: "0.37" },
+    { force: "gravity", impact: 0.21 },
+    { force: "signals", impact: -1.2 },
+    { force: "inverse_pair", impact: 0.3 },
+  ];
+  // The latest tick's rows, read only for the working each force recorded.
+  const latest = [
+    { force: "gravity", impact: "0.21", tick_number: 12, details: { decayed: 50.37 } },
     { force: "signals", impact: -1.2, tick_number: 12, details: null },
-    { force: "inverse_pair", impact: 0.3, tick_number: 12, details: {} },
     { force: "conviction", impact: 0.1, tick_number: 11, details: { concentration: 0.7 } },
   ];
 
   it("is entirely idle (null) before the first tick", () => {
-    const forces = readForces(events, null);
+    const forces = readForces(window, latest, null);
     expect(forces.map((force) => force.key)).toEqual(["gravity", "signals", "market_mood", "conviction", "trading_activity"]);
     expect(forces.every((force) => force.impact === null && force.direction === "neutral")).toBe(true);
   });
 
-  it("reads the latest tick only, with 0 for forces that wrote nothing", () => {
-    const forces = readForces(events, 12);
+  it("SUMS the window, with 0 for forces that wrote nothing in it", () => {
+    const forces = readForces(window, latest, 12);
     const byKey = Object.fromEntries(forces.map((force) => [force.key, force]));
-    expect(byKey.gravity).toMatchObject({ impact: 0.37, direction: "heating", details: { decayed: 50.37 } });
+    // Two ticks of Gravity: what it moved the score by across the window, not
+    // either tick on its own.
+    expect(byKey.gravity).toMatchObject({ impact: 0.58, direction: "heating", details: { decayed: 50.37 } });
     expect(byKey.signals).toMatchObject({ impact: -1.2, direction: "cooling" });
     expect(byKey.market_mood).toMatchObject({ impact: 0, direction: "neutral" });
-    // The conviction row is from tick 11, so on tick 12 the force was 0.
+    // Conviction wrote nothing in the window, and its row from tick 11 is not
+    // the latest tick's working either.
     expect(byKey.conviction).toMatchObject({ impact: 0, details: null });
+    expect(byKey.trading_activity).toMatchObject({ impact: 0, direction: "neutral" });
     expect(forces.some((force) => (force.key as string) === "inverse_pair")).toBe(false);
   });
 
-  it("colours even tiny impacts by their sign", () => {
-    const forces = readForces([{ force: "market_mood", impact: 0.01, tick_number: 1, details: null }], 1);
-    expect(forces.find((force) => force.key === "market_mood")?.direction).toBe("heating");
+  it("a window of per-tick crumbs adds up to a figure that renders", () => {
+    // The Phase 21 case, in the shape the board actually produces: Gravity
+    // contributes about 0.005 points a tick and Market Mood 0.0006, 120 times
+    // an hour. A single tick of either says nothing at two decimals — Market
+    // Mood is 0.00 forever, Gravity flickers between 0.00 and the rounding
+    // grain — and the hour is a number.
+    const read = (rows: Array<{ force: string; impact: number }>, key: string) =>
+      readForces(rows, [], 9).find((force) => force.key === key)!;
+
+    expect(formatSigned(read([{ force: "market_mood", impact: -0.00062 }], "market_mood").impact ?? 0, FORCE_IMPACT_DECIMALS)).toBe("0.00");
+    expect(formatSigned(read([{ force: "gravity", impact: -0.00504 }], "gravity").impact ?? 0, FORCE_IMPACT_DECIMALS)).toBe("−0.01");
+
+    const gravity = read(Array.from({ length: 120 }, () => ({ force: "gravity", impact: -0.00504 })), "gravity");
+    const mood = read(Array.from({ length: 120 }, () => ({ force: "market_mood", impact: -0.00062 })), "market_mood");
+    expect(gravity.impact).toBeCloseTo(-0.6048, 4);
+    expect(gravity.direction).toBe("cooling");
+    expect(formatSigned(gravity.impact ?? 0, FORCE_IMPACT_DECIMALS)).toBe("−0.60");
+    expect(formatSigned(mood.impact ?? 0, FORCE_IMPACT_DECIMALS)).toBe("−0.07");
+  });
+
+  it("colours even tiny impacts by their sign, once they round to something", () => {
+    expect(readForces([{ force: "market_mood", impact: 0.01 }], [], 1).find((force) => force.key === "market_mood")?.direction).toBe("heating");
+  });
+
+  it("the caption's words follow the window's number", () => {
+    // The panel says "over the last {forcesWindowLabel(FORCES_WINDOW_MINUTES)}",
+    // so changing the constant changes the sentence and the two cannot disagree.
+    expect(FORCES_WINDOW_MINUTES).toBe(60);
+    expect(forcesWindowLabel(FORCES_WINDOW_MINUTES)).toBe("hour");
+    expect(forcesWindowLabel(180)).toBe("3 hours");
+    expect(forcesWindowLabel(30)).toBe("30 minutes");
+  });
+
+  it("the window matches the span Market Mood is measured over", () => {
+    // Phase 19+ made Market Mood a trailing-window reading; Phase 21 makes the
+    // panel's Market Mood row describe that same hour rather than one tick of it.
+    expect(FORCES_WINDOW_MINUTES).toBe(DEFAULT_ENGINE_CONFIG.marketMood.windowMinutes);
   });
 });
 

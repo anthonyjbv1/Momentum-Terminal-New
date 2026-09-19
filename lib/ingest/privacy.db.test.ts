@@ -239,8 +239,13 @@ describe("the registry", () => {
     const sources = await database.rows<{ name: string; tier: number; is_active: boolean; config: Record<string, unknown> | null }>(
       "select name, tier, is_active, config from public.data_sources where name in ('youtube', 'youtube_comments', 'rss', 'spotify') order by name",
     );
-    // youtube_comments now declares a metric of its own (comment_volume), so it is no longer metric-free.
-    expect((sources.find((s) => s.name === "youtube_comments")?.config as { metrics: Record<string, unknown> }).metrics).toHaveProperty("comment_volume");
+    // youtube_comments reads comment_volume and, since Phase 21, scores
+    // nothing with it: the figure is a sum over a CHANGING BASKET of uploads,
+    // so it is recorded as an observe-only snapshot and declared nowhere. A
+    // key cannot be both, and the runner reads observe_only first.
+    const comments = sources.find((s) => s.name === "youtube_comments")?.config as { metrics: Record<string, unknown>; observe_only: string[] };
+    expect(comments.observe_only).toEqual(["comment_volume"]);
+    expect(comments.metrics).not.toHaveProperty("comment_volume");
     expect(sources.map((s) => [s.name, s.tier, s.is_active])).toEqual([
       ["rss", 3, true],
       ["spotify", 2, true],

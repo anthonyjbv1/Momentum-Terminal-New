@@ -230,6 +230,8 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260918234503_phase19plus_mood_window.sql` | A partial index on `score_events (created_at desc) where force = 'signals'`: Market Mood reads the Signals force's own impacts over its trailing window once per tick, and the signals rows are a thousandth of that table. `engine_ticks.mood` re-documented — from Phase 19+ it holds the windowed reading, and rows before it hold the older instantaneous one |
 | `20260918194213_phase19_forecast.sql` | `people.forecast_paused` (the per-person kill switch); `forecast_votes` (direction, reason tag, the score at vote time, `superseded_at` for the supersede-not-delete trail) with one active vote per user per person by partial unique index, RLS select-own for `authenticated` and no client writes; `forecast_rate_limit_per_hour()` = 20 and `forecast_min_votes()` = 5; `cast_forecast_vote()` (SECURITY DEFINER, actor `auth.uid()`, refusals as values) and `forecast_summary()` (aggregates only, the split withheld below the minimum) |
 | `20260917235241_phase16_twitch_live_mode.sql` | `live_sessions` (one broadcast per source and stream id, with its running aggregates) and `live_samples` (the live ledger), both service role only; `ingest_runs.trigger` admits `live`; the `twitch` row's `config.live` block (on, two-minute samples, the thresholds) and its two session metrics (`session_peak_viewers`, `clips_per_stream_hour`, a month of sessions, five before either says anything); `person_signal_volume()` no longer counts live moments as volume |
+| `20260919145502_phase21_metric_emission.sql` | `raw_metric_observations.outcome` admits `unchanged`, the Phase 21 emission rule's new outcome (outside the deadband, identical to the reading already on the record — suppressed, and itself on the record, which is what collapses a run to its first), with the column comment spelling out all six; the `youtube_comments` row's `comment_volume` moved out of `config.metrics` into `config.observe_only`, because the figure is a sum over a changing basket of uploads and cannot be calibrated until the connector defines it differently |
+| `20260919150046_phase21_forces_window_index.sql` | `score_events_person_created_idx` on `(person_id, created_at desc)`, the read behind the forces panel's one-hour window; the existing tick-keyed person index stays for the latest-tick read on the same page |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
 
@@ -709,7 +711,7 @@ An unknown slug is a real HTTP 404 inside the shell. The slug is resolved before
 - **Identity** — a labelled dossier grid: small grey uppercase label, large white value, hairline rules. NAME (the largest value after the score), CATEGORY, TRACKED SINCE (`people.created_at`), STATE and CONVICTION, with the avatar alongside (monogram when there is no image). REGION is not shown: `people` has no such column, and the page invents nothing. Every label describes market or score state; the only coloured value is STATE, and only because it reads direction.
 - **Momentum score** — the score in large monospaced numerals; beneath it the change over the selected range in points and percent, coloured by direction; the gravity target (`revert_target`), spread, and the Buy / Sell quotes in small type.
 - **Score history** — one thin white line, a recessive grid, a single score axis, three time marks, the gravity target as a faint dashed reference (or a note that it sits above / below the visible range), and a crosshair with the exact score and time on hover or touch. Ranges are 1H / 24H / 7D / ALL; a range with fewer than two slices of history is disabled, never drawn flat. A gap between ticks wider than three slices breaks the line, so a pause in the Engine reads as a pause. No history at all is an empty state that says so.
-- **The five forces** — Gravity, Signals, Market Mood, Conviction, Trading Activity, each with what it measures and the points it contributed on the person's **latest tick**, as a diverging bar from a centre line. A force with no row on that tick did nothing and reads 0.00; before the first tick every force is present and marked *Idle*.
+- **The five forces** — Gravity, Signals, Market Mood, Conviction, Trading Activity, each with what it measures and the points it added to the score **over the last hour** (`FORCES_WINDOW_MINUTES`, Phase 21: a tick's contribution is too small to render at two decimals), as a diverging bar from a centre line. A force that wrote no row in the window did nothing and reads 0.00; before the first tick every force is present and marked *Idle*. The caption and the header both name the span.
 - **Signals** — the person's signals and Engine narratives merged newest first: source (data source name, or *The Engine*), age, headline, and the recorded score impact where there is one. Tapping an item opens its detail (exact time, sentiment and confidence, score before → after for a narrative). Read-only, with a real empty state.
 - **Buy / Sell** — Buy is the light pill (near-white, black label), Sell the dark pill (near-black, white label), each showing the current quote. Monochrome: direction colour stays on the change figures. Tapping shows a one-line note that trading opens with Phase 6e and does nothing else.
 
@@ -719,11 +721,11 @@ An unknown slug is a real HTTP 404 inside the shell. The slug is resolved before
 
 ### CONVICTION
 
-Read from the Conviction force on the latest tick, using the concentration the Engine recorded (open capital on the person over their allocation cap): **Low** at or below 60 %, **Moderate** to 85 %, **High** above — the same bands as `DEFAULT_ENGINE_CONFIG.conviction`, pinned by a test. A ticked person with no Conviction row is Low (the force writes no row when it is zero); before the first tick the value is `—`.
+Read from the Conviction force **on the latest tick** — a state reading, not something that accumulates over the panel's hour — using the concentration the Engine recorded (open capital on the person over their allocation cap): **Low** at or below 60 %, **Moderate** to 85 %, **High** above — the same bands as `DEFAULT_ENGINE_CONFIG.conviction`, pinned by a test. A ticked person with no Conviction row is Low (the force writes no row when it is zero); before the first tick the value is `—`.
 
 ### Data
 
-`lib/person/profile.ts` reads on the server through the service-role client, for the same reason Home does (the page is public; anon has no policies). Per request: the `people` row by slug; `person_score_series()` once per range (time-bucketed in Postgres, so a week of two-ticks-a-minute history is 168 rows, not 20 000); the newest `score_history` row for the latest tick number; that tick's `score_events`; and the newest `signals` and `narratives`. Everything is wrapped in React `cache()`, so the page, its metadata and the rail share one set of queries.
+`lib/person/profile.ts` reads on the server through the service-role client, for the same reason Home does (the page is public; anon has no policies). Per request: the `people` row by slug; `person_score_series()` once per range (time-bucketed in Postgres, so a week of two-ticks-a-minute history is 168 rows, not 20 000); the newest `score_history` row for the latest tick number; every `score_events` row of the last `FORCES_WINDOW_MINUTES` (force and impact only — what the forces panel sums); that latest tick's `score_events` for the working each force recorded, which is where CONVICTION's concentration comes from; and the newest `signals` and `narratives`. Everything is wrapped in React `cache()`, so the page, its metadata and the rail share one set of queries.
 
 ### Behavioural logging
 
@@ -948,7 +950,7 @@ The normalisation is the point. What each metric means is declared on its `data_
 | `min_samples` | observations required before a deviation counts. **Below it the metric emits nothing**, whatever the move |
 | `sd_floor` | floor for the baseline sd, in the observation's units, so a flat history cannot make a small move many sigma |
 | `scale` | how strongly a sigma of this metric reads (the metric scorer multiplies by it) |
-| `threshold_std_devs` | the deadband, default 1.0σ |
+| `threshold_std_devs` | the deadband, default **2.0σ** (raised from 1.0 in Phase 21; see [Metric emission](#metric-emission-phase-21)) |
 
 `config.derived` declares metrics computed from another metric's snapshot history with no connector of their own: `upload_rate` (`kind: rate`: the change in `video_count` over the trailing week, per day, once the history spans the window) and `viral_moment_rate` (`kind: spike_count`: how many `news_volume_24h` readings in the trailing week sat two sd above the week's own mean). A derived level is snapshotted and normalised like any other.
 
@@ -962,7 +964,7 @@ The normalisation is the point. What each metric means is declared on its `data_
 
 **Observability.** Every run (`ingest_runs`), every poll (`source_polls`: source, person, ok / error / skipped with the reason, latency, what it produced) and every observation (`raw_metric_observations`: level, previous, delta, baseline mean and sd, sigma, samples, outcome, the signal it produced) is recorded and logged as a structured `[ingest]` line, so a score move can be walked back from `score_events.details.signals[].impact` to the signal to the observation to the poll. `source_health` (a view) gives last poll, last success, last error and its reason, the trailing-day poll count, error rate and latency per source; `llm_cost_per_tick` prices `llm_usage` by tick (the sentiment scorer now stamps the tick number on its usage rows) against `llm_model_prices`, and says how many calls had no price row. `GET /api/admin/health` returns all three.
 
-**Running it dry.** The cron stays off. `POST /api/ingest?force=1` with `INGEST_SECRET` runs every active source once: the first run produces snapshots, first-contact observations and no metric signals; later runs produce `insufficient_baseline` observations until `min_samples` is reached, then `inside_band` or, on a real move, `emitted` with a σ signal. Nothing here advances a score; a signal waits for a tick.
+**Running it dry.** The cron stays off. `POST /api/ingest?force=1` with `INGEST_SECRET` runs every active source once: the first run produces snapshots, first-contact observations and no metric signals; later runs produce `insufficient_baseline` observations until `min_samples` is reached, then `inside_band`, `unchanged`, or, on a real move to a level not already on the record, `emitted` with a σ signal. Nothing here advances a score; a signal waits for a tick.
 
 ## RSS signal quality (Phase 8)
 
@@ -1903,6 +1905,175 @@ every money surface (portfolio, positions, trade sheet) works in integer
 cents, where a non-zero value can never display as $0.00. Chart labels and
 sparklines are monochrome.
 
+## Metric emission, the deadband, and the forces panel (Phase 21)
+
+Phase 20 measured the board and found metric signals outnumbering article
+signals nine to one, carrying **92.5 % of all Signals-force impact** over 48
+hours. Two causes, both in the emission rule rather than in the data. This
+phase ships the fix for both, takes the one metric that is broken at the
+source out of scoring, and makes the forces panel show a figure that can
+render.
+
+### A metric describes a state; the event is the state CHANGING
+
+`news_volume_24h` reading four articles an hour, unchanged, for six hours was
+six signals. Each was true and only the first was news. **82.5 % of emitted
+metric signals repeated the identical value of the one before them**, carrying
+77 % of metric impact.
+
+`observeMetric()` now takes the metric's **previous observation** and emits
+only when the observed quantity differs from it. The rule in full:
+
+- **"Differs" is an identity check, not a small-change filter.** A reading that
+  moves at all is a new reading and emits, whatever the size of the move —
+  magnitude is the deadband's job. `UNCHANGED_RELATIVE_EPSILON` is **1e-12**,
+  about a thousand times double precision's own round-off, so a quantity
+  recomputed by a different route (a rate divided by a slightly different
+  elapsed time, a float reassembled out of the ledger) reads as unchanged while
+  a real move never does: a count would have to reach 10¹² before a change of
+  one unit fell inside it.
+- **A run collapses to its first, not to alternating.** A suppressed repeat is
+  itself recorded, as the new outcome **`unchanged`**, and `outcomeReported()`
+  treats `emitted` and `unchanged` alike as "on the record". Without that, a
+  suppressed reading would leave nothing to compare against and the next one
+  would emit: on / off / on forever.
+- **Changing and changing back is news both times.** The comparison is against
+  the record, not against a set of values ever seen. 4 → 4 → 7 → 4 emits three
+  times and suppresses once: three states, three events.
+- **A metric's FIRST emission is never suppressed.** `insufficient_baseline`,
+  `inside_band`, `first_contact` and `no_config` do not report, so the reading
+  that finally clears the baseline has nothing on the record to repeat, even
+  when the level is the same one that was sitting inside the band yesterday.
+
+The comparison reads one row per metric out of `raw_metric_observations`
+(`store.lastObservations`, one query per person and source per poll, on the
+index that already existed), so the state lives in the ledger rather than in
+the runner's memory and survives a restart mid-poll.
+
+Live mode is untouched: session metrics fire once when a stream closes, so two
+consecutive sessions with the same peak viewers are two events, not a repeat,
+and the live runner passes no previous observation.
+
+### The deadband, 1.0σ → 2.0σ
+
+At 1.0σ "unusual" meant **one reading in three**: for a normal statistic
+|z| > 1 occurs 31.7 % of the time, and the board bore it out —
+`news_volume_24h` emitted on 35.7 % of its observations and
+`viral_moment_rate` on 29.4 %. That is a description of the middle of the
+distribution. The threshold was the finding, not the data. At 2.0σ the tail is
+4.6 % under normal theory, which is closer to what the word the headline uses
+is worth.
+
+It stays **tunable per metric** (`threshold_std_devs` on the source row);
+2.0 is the default and every metric currently takes it. The constant carries
+its derivation, and a test pins it so that changing it means re-deriving it.
+
+**Replayed against the whole accumulated ledger**, per metric — what each rule
+keeps, and what both together keep:
+
+| Metric | Source | Judged | Emits today | Rate | 2.0σ alone | Change-only alone | Both |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `news_volume_24h` | rss | 2,914 | 1,041 | 35.7 % | 215 | 226 | **78** |
+| `viral_moment_rate` | rss | 2,546 | 749 | 29.4 % | 199 | 71 | **50** |
+| `comment_volume` | youtube_comments | 101 | 79 | 78.2 % | 18 | 79 | **18 → 0** |
+| `company_news_volume_24h` | finnhub | 315 | 28 | 8.9 % | 2 | 19 | **2** |
+| `recent_video_views` | youtube | 105 | 24 | 22.9 % | 7 | 24 | **7** |
+| `view_count` | youtube | 105 | 8 | 7.6 % | 6 | 8 | **6** |
+| `follower_count` | twitch | 92 | 1 | 1.1 % | 0 | 1 | **0** |
+| `subscriber_count`, `commentary_volume_24h`, `stream_days_7d`, `stream_hours_7d` | youtube, twitch | 394 | 0 | 0 % | 0 | 0 | **0** |
+| **Total** | | **6,572** | **1,930** | **29.4 %** | **447** | **428** | **161 → 143** |
+
+Read it per metric, because the two rules bite differently. The RSS pair is
+where the volume was, and the rules attack it from opposite sides: for
+`news_volume_24h` the deadband and the repeat rule remove roughly the same
+number independently and 92.5 % together; for `viral_moment_rate`, a
+spike count that sits on the same integer for hours, the repeat rule alone
+removes 90.5 %. The YouTube and Twitch metrics are already quiet and lose
+almost nothing — `view_count`'s six survivors are six real moves. Nothing that
+was silent becomes loud.
+
+On the same 48 hours Phase 20 measured, the joint replay gives **153 signals
+against 1,854**, matching that phase's projection exactly, and **135** once
+`comment_volume` stops scoring.
+
+### `comment_volume` is not calibrated, and cannot be calibrated yet
+
+It emitted on **78.2 %** of its observations, the highest rate on the board,
+and every one was a negative reading of a person whose comment volume had not
+fallen.
+
+The metric totals the comment count of a channel's three newest uploads: a sum
+over a **changing basket**. When a new video replaces the oldest of the three,
+the total steps by the difference between them and nothing about the audience
+has changed. MrBeast's stepped from 179,354 to 88,049 on 2026-09-18, and every
+hourly poll since was judged as `level` against a 336-hour baseline whose mean
+(157,887) describes a basket that no longer exists. Sigma has been walking back
+from −2.79 toward the band at about 0.05 an hour as the old values age out, and
+the next upload will restart it.
+
+It is **not thin data**: 104 samples against a declared minimum of 24. And
+neither of this phase's other changes fixes it — the level moves every poll, so
+emit-on-change never fires (79 of 79 survive it), and 2.0σ only postpones the
+emission. It is the only cumulative-style counter declared `level`;
+`subscriber_count`, `view_count` and `recent_video_views` are all
+`relative_rate`, which is why they are quiet.
+
+The real fix is a **basket-stable definition in the connector** — comments per
+video, each upload its own series, or a fixed cohort followed over time — which
+is a new metric with a new baseline to fill, and out of this phase's scope.
+Until it is written the key sits in the source row's `config.observe_only`
+(the Phase 17 mechanism): the reading is recorded as a raw snapshot and reaches
+no observation, signal, force, memory or score history. Its declaration comes
+out of `config.metrics` with it, because the declaration that exists is the one
+that misdescribes the metric. Turning it back on is one row update and no
+deploy.
+
+### The forces panel shows an hour, and says so
+
+Gravity contributes about **0.005 points a tick** and Market Mood about
+**0.0006**. The Engine ticks twice a minute. The panel showed the latest
+tick's contribution at two decimals, so Market Mood read 0.00 forever and
+Gravity flickered between 0.00 and the rounding grain: a number that cannot
+render is not a reading.
+
+The panel now sums each force's contributions over **`FORCES_WINDOW_MINUTES`
+= 60** — the same span Market Mood itself is measured over since Phase 19+, so
+the panel's Market Mood row and the banner's Mood indicator describe the same
+hour. The same three forces on MrBeast at 2026-09-19 14:00 read **−0.60**,
+**+0.53** and **−0.07**: the same arithmetic, summed rather than sampled.
+
+**Display only.** No force's weight, cadence or behaviour changed; the sum is
+exactly what the forces already moved the score by. Conviction and Trading
+Activity write no rows, so they still read **0.00** — flat and uncoloured,
+which is Phase 19+'s rule and still applies, since a window sum that rounds to
+zero at two decimals is as directionless as a tick's was. The caption and the
+section header are both built from the constant
+(`forcesWindowLabel(FORCES_WINDOW_MINUTES)` → "hour"), so the number and the
+words cannot come apart; the header still carries the age of the latest tick,
+because whether the Engine is running is a separate fact from what it did.
+
+The read is a second, narrow query (`force, impact` for the window) beside the
+existing twelve-row latest-tick query, which stays because Conviction's
+recorded `concentration` — a state reading, not something that accumulates —
+is what the CONVICTION level is derived from.
+`score_events_person_created_idx` is the index behind it: about 245 rows per
+person per hour, against ten thousand rows per person that a tick-keyed index
+would have had to walk.
+
+### Not in this phase
+
+**Feed suppression of metric signals.** Reported rather than done, since the
+emission rule changes what the Feed receives in the first place. Before:
+**1,273 metric signals in 24 hours, 1,227 of them reaching the Feed as signal
+entries** (the rest linked to a narrative), across only 396 distinct
+headlines — about **80 per person per day**. After, replayed: **135 in 48
+hours, about 4.2 per person per day**. Eleven of the 135 (8.1 %) are still
+consecutive near-identical entries for one person — the same metric, a
+genuinely different level, and a sigma that rounds to the same figure at the
+one decimal the headline prints — concentrated in Elon Musk (4) and Kendrick
+Lamar (4). That residue is exactly what a Feed-level rule would catch, and it
+is now a rounding artifact rather than a repeated fact.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -1915,6 +2086,7 @@ sparklines are monochrome.
 - **Phase 12+**: newest-first selection with a least-recently-served rotation across people, and memory event expiry (30 days, dated folds written as history, today's date and event ages in the person block).
 - **Phase 13**: publisher-direct feeds — the `publisher_feeds` catalogue read as one shared fetch per run, whole-word name matching scoped by topic, undated items refused, per-feed health and discovery written back onto the rows, the two news doors deduplicated as one story family with Google News kept as the fallback — and the ingestion cron at every fifteen minutes with every source interval off the multiple.
 - **Phase 13+**: athlete metrics beyond passing yards — `config.game_stats` on the API-Sports row (every per-game figure read from one request per game, each with its own anchor), `game_passer_rating` (+1) and `game_interceptions` (−1) registered beside yards with touchdowns and every composite figure refused, and the Signals force folding one source's metric signals of one moment into one reading carrying their mean, so a game is its event and its stat line and never three copies of the line.
+- **Phase 21**: the emission rule — a metric describes a STATE and the event is the state CHANGING, so a reading identical to the one already on the record is recorded as `unchanged` and emits nothing (an identity check at one part in a trillion, a run collapsing to its first because a suppressed repeat is itself on the record, a change and a change back both news, and a first emission after the baseline fills never suppressed); the deadband raised 1.0σ → 2.0σ with its derivation written down, since 1.0σ made "unusual" mean one reading in three; replayed together over the accumulated ledger, 1,930 emissions become 161, and 143 once `comment_volume` — a sum over a CHANGING basket of uploads, emitting on 78.2% of its observations against a baseline describing a basket that no longer exists — becomes observe-only until the connector defines it stably; and the forces panel showing each force's contribution over the last hour rather than one tick of it, because Gravity's 0.005 points a tick and Market Mood's 0.0006 cannot render at two decimals, with no force's weight or behaviour touched.
 - **Phase 19+**: Market Mood became a tide rather than a splash — the board's Signals movement read over a trailing 60 minutes (a mean across the ticks in it that moved anyone, so the scale is unchanged and only the frequency moves: non-zero on 99.8% of ticks against 3.5%, and the header figure changes 2.9 times an hour), applied as 1.41 points per hour × the person's own elapsed time exactly as Gravity applies its λ, with the rate DERIVED from the measured 21.27× rise in firing so the force's gross contribution is held where it was (−0.3%; net drift +23.7%, stated not hidden) and a cadence change can no longer re-level the board; the banner's Mood indicator wired to a real reading for the first time; and a displayed 0.00 never coloured again, on the five forces, the signals list, the Feed's evidence and the feed model, plus a "+0.00" that `formatChange` was printing.
 - **Phase 19**: Forecast, the crowd layer, capture and display — the Forecast section below the five forces (▲ Rising / ▼ Falling with one of seven reason tags, the split and top reasons once five votes exist, the count alone below that, an invitation with none), `forecast_votes` with the score at vote time, one active vote per user per person with supersede-not-delete history, select-own RLS and no client writes, `cast_forecast_vote()` with a 20-distinct-people-an-hour rate limit and the per-person `forecast_paused` kill switch, `forecast_summary()` returning aggregates only, the Rising / Falling buttons in the Buy / Sell styling, the `cast_forecast` event, the paper balance removed from the mobile header — and the Forecast force at weight 0.00, read by nothing, pinned by two zero-influence tests.
 - **Phase 18++**: the volume reference re-derived from measured data before it engages — `referenceSignalsPerDay` 20 → 4, the geometric mean of the roster's own daily rates (the typical-day impact spread falls 14.9× → 3.0×, the ceiling decides six weights rather than fourteen), the bounds examined and kept, fixed chosen over roster-relative with the coupling cost quantified, `ENGINE_VOLUME_REFERENCE` for a re-derivation without a code change, the staleness made visible on /admin (per-person weight, capped state, engaged count, the roster's live geometric mean and the two review triggers), and the Google News epoch-date hole closed in both directions.

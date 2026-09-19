@@ -301,6 +301,36 @@ export function isForceKey(value: unknown): value is ForceKey {
   return typeof value === "string" && (FORCE_KEYS as readonly string[]).includes(value);
 }
 
+/**
+ * THE SPAN THE FORCES PANEL ADDS UP, in minutes. TUNABLE, and a DISPLAY
+ * window only — no force's weight or behaviour depends on it.
+ *
+ * 60, from Phase 21. The panel showed each force's contribution on the LATEST
+ * TICK, and at two decimals that figure says nothing: the Engine ticks twice a
+ * minute, so Gravity's per-tick contribution averages 0.005 points — which
+ * flickers between 0.00 and the rounding grain — and Market Mood's averages
+ * 0.0006, which is 0.00 forever. Over an hour the same three forces read
+ * −0.60, −0.07 and +0.53 (MrBeast, 2026-09-19): the same arithmetic, summed
+ * rather than sampled, at a size a person can see.
+ *
+ * An hour because it is the span Market Mood itself is measured over
+ * (ENGINE_MOOD_WINDOW_MINUTES, also 60), so the panel's Market Mood row and
+ * the banner's Mood indicator describe the same hour. Shorter and Gravity
+ * disappears again; longer and the panel stops describing now.
+ */
+export const FORCES_WINDOW_MINUTES = 60;
+
+/**
+ * The window in words. The panel's caption is built from this rather than
+ * writing "hour" down, so the number and the words cannot come apart when the
+ * constant changes.
+ */
+export function forcesWindowLabel(minutes: number): string {
+  if (minutes === 60) return "hour";
+  if (minutes % 60 === 0) return `${minutes / 60} hours`;
+  return `${minutes} minutes`;
+}
+
 /** A score_events row as the database returns it. */
 export interface ScoreEventRow {
   force: string;
@@ -309,18 +339,29 @@ export interface ScoreEventRow {
   details: unknown;
 }
 
+/** The narrow read behind the panel's figures: force and impact, for every tick in the window. */
+export interface ForceImpactRow {
+  force: string;
+  impact: number | string;
+}
+
 export interface ForceReading {
   key: ForceKey;
   label: string;
   description: string;
   /**
-   * Points this force contributed on the person's latest tick. 0 when the tick
-   * ran and the force did nothing (the Engine writes no row for zero impact);
-   * null when the Engine has never ticked this person.
+   * Points this force added to the score over the last FORCES_WINDOW_MINUTES:
+   * the sum of its per-tick contributions, which is exactly what it moved the
+   * score by. 0 when the Engine ticked and the force did nothing (it writes no
+   * row for zero impact); null when it has never ticked this person.
    */
   impact: number | null;
   direction: Direction;
-  /** The Engine's working for the force on that tick, when it recorded any. */
+  /**
+   * The Engine's working for the force on the LATEST tick, when it recorded
+   * any — a state reading (Conviction's capital concentration), not something
+   * that accumulates over the window the way `impact` does.
+   */
   details: Record<string, unknown> | null;
 }
 
@@ -329,26 +370,34 @@ function toDetails(value: unknown): Record<string, unknown> | null {
 }
 
 /**
- * The five forces as of the person's latest tick. `latestTickNumber` comes
- * from score_history; events from any other tick are ignored, so a force that
- * fired last week but not on the latest tick correctly reads 0, not stale.
+ * The five forces over the display window: `window` is every score_events row
+ * inside it, summed per force, and `latest` is the latest tick's rows, read
+ * only for the working each force recorded there.
+ *
+ * `latestTickNumber` comes from score_history and is the idle sentinel: null
+ * means the Engine has never ticked this person and every force reads Idle
+ * rather than zero. A force that fired last week but not in this window
+ * correctly reads 0, not stale.
  */
-export function readForces(events: ScoreEventRow[], latestTickNumber: number | null): ForceReading[] {
-  const atLatest = new Map<ForceKey, { impact: number; details: Record<string, unknown> | null }>();
+export function readForces(window: ForceImpactRow[], latest: ScoreEventRow[], latestTickNumber: number | null): ForceReading[] {
+  const summed = new Map<ForceKey, number>();
+  const details = new Map<ForceKey, Record<string, unknown>>();
   if (latestTickNumber !== null) {
-    for (const event of events) {
-      if (toNumber(event.tick_number, -1) !== latestTickNumber || !isForceKey(event.force)) continue;
-      const impact = toNullableNumber(event.impact);
+    for (const row of window) {
+      if (!isForceKey(row.force)) continue;
+      const impact = toNullableNumber(row.impact);
       if (impact === null) continue;
-      const existing = atLatest.get(event.force);
-      // A force writes one row per tick; if two ever appear, sum them.
-      atLatest.set(event.force, { impact: (existing?.impact ?? 0) + impact, details: toDetails(event.details) ?? existing?.details ?? null });
+      summed.set(row.force, (summed.get(row.force) ?? 0) + impact);
+    }
+    for (const event of latest) {
+      if (toNumber(event.tick_number, -1) !== latestTickNumber || !isForceKey(event.force) || details.has(event.force)) continue;
+      const working = toDetails(event.details);
+      if (working) details.set(event.force, working);
     }
   }
 
   return FORCE_KEYS.map((key) => {
-    const entry = atLatest.get(key);
-    const impact = latestTickNumber === null ? null : (entry?.impact ?? 0);
+    const impact = latestTickNumber === null ? null : (summed.get(key) ?? 0);
     return {
       key,
       label: FORCE_DEFINITIONS[key].label,
@@ -359,7 +408,7 @@ export function readForces(events: ScoreEventRow[], latestTickNumber: number | n
       // negative that reads 0.00 at two decimals, and a 0.00 in red says
       // "falling" where the number says "nothing happened" (Phase 19+).
       direction: directionAtPrecision(impact, FORCE_IMPACT_DECIMALS, 0),
-      details: entry?.details ?? null,
+      details: details.get(key) ?? null,
     };
   });
 }

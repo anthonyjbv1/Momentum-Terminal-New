@@ -24,12 +24,31 @@ import { fetchRecentUploads, fetchVideoCommentCounts, fetchYouTubeChannelStats, 
  *            built from thousands of them measures editing, not momentum.
  *   metric   comment_volume, the REAL total comment count across those
  *            uploads (videos.list statistics, not the capped sample), a raw
- *            level the runner normalises against the person's own trailing
- *            baseline. A surge in how much an audience is reacting says
- *            something happened regardless of what was said.
+ *            level. OBSERVE-ONLY since Phase 21 — recorded, and scoring
+ *            nothing. See below.
  *
  * Like counts and reply counts are deliberately not read: a comment is a
  * sentence, not a number.
+ *
+ * WHY comment_volume DOES NOT SCORE (Phase 21). The figure is a sum over a
+ * CHANGING BASKET: it totals the `videos` newest uploads, so when a new video
+ * replaces the oldest of the three the total steps by the difference between
+ * them and nothing about the audience has changed. MrBeast's stepped from
+ * 179,354 to 88,049 on 2026-09-18 for exactly that reason, and every hourly
+ * poll afterwards was judged against the mean of a basket that no longer
+ * existed: it emitted on 78.2% of its observations, the highest rate on the
+ * board, every one a negative reading of a person whose comment volume had
+ * not fallen. Not thin data (104 samples against a declared minimum of 24)
+ * and not a threshold problem: the level moves every poll, so emit-on-change
+ * never fires, and the 2σ deadband only delays the emission while the old
+ * basket ages out of the window.
+ *
+ * The fix is a BASKET-STABLE definition, and it belongs here rather than in
+ * the source configuration: comments per video (each upload its own series
+ * with its own baseline), or a fixed cohort of videos followed over time.
+ * Either is a new metric with a new baseline to fill, so until it is written
+ * the key stays in the source row's `config.observe_only` and the reading is
+ * recorded and goes no further.
  */
 
 export const YOUTUBE_COMMENTS_SOURCE_NAME = "youtube_comments";

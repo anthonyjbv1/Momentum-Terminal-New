@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { METRIC_PAYLOAD_KEYS, deriveMetric, describeWindow, formatSigma, metricSignal, observationSeries, observeMetric, readMetricConfigs, type MetricConfig, type SnapshotPoint } from "./metrics";
+import { DEFAULT_THRESHOLD_STD_DEVS, METRIC_PAYLOAD_KEYS, UNCHANGED_RELATIVE_EPSILON, deriveMetric, describeWindow, formatSigma, isUnchangedObservation, metricSignal, observationSeries, observeMetric, outcomeReported, readMetricConfigs, type MetricConfig, type PreviousObservation, type SnapshotPoint } from "./metrics";
 
 /**
  * The metric pipeline's pure half: configuration is strict, observations are
@@ -45,7 +45,8 @@ describe("readMetricConfigs", () => {
     });
     expect(problems).toEqual([]);
     expect(metrics).toEqual([
-      SUBSCRIBERS,
+      // subscriber_count declares no threshold, so it takes the default; popularity overrides it.
+      { ...SUBSCRIBERS, thresholdStdDevs: DEFAULT_THRESHOLD_STD_DEVS },
       { metricKey: "popularity", label: "popularity", polarity: 1, delta: "level", baselineWindowHours: 720, minSamples: 48, sdFloor: 0.1, scale: 1, thresholdStdDevs: 1.5 },
     ]);
     expect(derived).toEqual([{ metricKey: "upload_rate", from: "video_count", kind: "rate", windowHours: 168, perHours: 24, minSpanHours: 24, spikeStdDevs: 2, spikeSdFloor: 0.5, minSourceSamples: 24 }]);
@@ -157,6 +158,113 @@ describe("observeMetric", () => {
     const jump = observeMetric({ metricKey: "popularity", config: popularity, history: steady, current: { value: 95, recordedAt: hour(60) } });
     expect(jump.outcome).toBe("emitted");
     expect(jump.reading!.sigma).toBeGreaterThan(1);
+  });
+});
+
+/**
+ * Phase 21. A metric describes a STATE; the event is the state CHANGING.
+ * Two independent rules, tested independently: the deadband decides whether a
+ * reading is unusual at all, and emit-on-change decides whether an unusual
+ * reading is news or the same fact told again.
+ */
+describe("the deadband", () => {
+  const LEVEL: MetricConfig = { ...SUBSCRIBERS, metricKey: "popularity", label: "Spotify popularity", delta: "level", baselineWindowHours: 720, minSamples: 48, sdFloor: 0.5, thresholdStdDevs: DEFAULT_THRESHOLD_STD_DEVS };
+  const steady = Array.from({ length: 60 }, (_, i) => ({ value: 90 + (i % 2), recordedAt: hour(i) }));
+
+  it("defaults to 2.0 standard deviations, raised from Phase 7's 1.0", () => {
+    // Pinned with its reason: at 1.0 a normal statistic is "unusual" 31.7% of
+    // the time, and the board bore that out (news_volume_24h emitted on 45.5%
+    // of its observations). Changing this number means re-deriving it, not
+    // editing the test.
+    expect(DEFAULT_THRESHOLD_STD_DEVS).toBe(2.0);
+    expect(readMetricConfigs({ metrics: { m: { polarity: 1, delta: "level", baseline_window_hours: 24, min_samples: 5, sd_floor: 1, scale: 1 } } }).metrics[0].thresholdStdDevs).toBe(2.0);
+  });
+
+  it("is TUNABLE per metric, and the middle of the distribution no longer emits", () => {
+    const current = { value: 91.2, recordedAt: hour(60) };
+    const atOneSigma = observeMetric({ metricKey: "popularity", config: { ...LEVEL, thresholdStdDevs: 1 }, history: steady, current });
+    const atTwoSigma = observeMetric({ metricKey: "popularity", config: LEVEL, history: steady, current });
+
+    // The same reading against the same baseline, between one and two standard
+    // deviations from it: it was a signal, and is now normal.
+    expect(atOneSigma.reading!.sigma).toBe(atTwoSigma.reading!.sigma);
+    expect(Math.abs(atTwoSigma.reading!.sigma)).toBeGreaterThan(1);
+    expect(Math.abs(atTwoSigma.reading!.sigma)).toBeLessThan(2);
+    expect(atOneSigma.outcome).toBe("emitted");
+    expect(atTwoSigma.outcome).toBe("inside_band");
+
+    // A real anomaly still emits at 2σ.
+    expect(observeMetric({ metricKey: "popularity", config: LEVEL, history: steady, current: { value: 95, recordedAt: hour(60) } }).outcome).toBe("emitted");
+  });
+});
+
+describe("emit on change", () => {
+  const LEVEL: MetricConfig = { ...SUBSCRIBERS, metricKey: "popularity", label: "Spotify popularity", delta: "level", baselineWindowHours: 720, minSamples: 48, sdFloor: 0.5, thresholdStdDevs: DEFAULT_THRESHOLD_STD_DEVS };
+  const steady = Array.from({ length: 60 }, (_, i) => ({ value: 90 + (i % 2), recordedAt: hour(i) }));
+  const observe = (value: number, previousObservation: PreviousObservation | null) =>
+    observeMetric({ metricKey: "popularity", config: LEVEL, history: steady, current: { value, recordedAt: hour(60) }, previousObservation });
+
+  it("suppresses a reading identical to the one already on the record", () => {
+    expect(observe(95, null).outcome).toBe("emitted");
+    expect(observe(95, { observed: 95, reported: true }).outcome).toBe("unchanged");
+    expect(observe(94, { observed: 95, reported: true }).outcome).toBe("emitted");
+  });
+
+  it("a RUN collapses to its first, because a suppressed repeat is itself on the record", () => {
+    // What the runner does: each poll compares against the last observation
+    // that reported, and 'unchanged' reports as surely as 'emitted' does.
+    let previous: PreviousObservation | null = null;
+    const outcomes: string[] = [];
+    for (const value of [95, 95, 95, 95]) {
+      const observation = observe(value, previous);
+      outcomes.push(observation.outcome);
+      previous = { observed: observation.observed, reported: outcomeReported(observation.outcome) };
+    }
+    expect(outcomes).toEqual(["emitted", "unchanged", "unchanged", "unchanged"]);
+  });
+
+  it("a value that changes and changes BACK is news both times", () => {
+    // The rule compares against the record, not against a set of values ever
+    // seen: 95 → 97 → 95 is three states and three events.
+    let previous: PreviousObservation | null = null;
+    const outcomes: string[] = [];
+    for (const value of [95, 95, 97, 95]) {
+      const observation = observe(value, previous);
+      outcomes.push(observation.outcome);
+      previous = { observed: observation.observed, reported: outcomeReported(observation.outcome) };
+    }
+    expect(outcomes).toEqual(["emitted", "unchanged", "emitted", "emitted"]);
+  });
+
+  it("NEVER suppresses a metric's first emission after its baseline becomes sufficient", () => {
+    // The previous observation carries the same level, but it was
+    // insufficient_baseline or inside_band, so it never reported and there is
+    // nothing on the record for this reading to repeat.
+    for (const outcome of ["no_config", "first_contact", "insufficient_baseline", "inside_band"] as const) {
+      expect(outcomeReported(outcome), outcome).toBe(false);
+      expect(observe(95, { observed: 95, reported: outcomeReported(outcome) }).outcome, outcome).toBe("emitted");
+    }
+    expect(outcomeReported("emitted")).toBe(true);
+    expect(outcomeReported("unchanged")).toBe(true);
+  });
+
+  it("is an IDENTITY check: the same quantity recomputed reads as unchanged, any real move emits", () => {
+    // The epsilon exists for a float reassembled out of the ledger or a rate
+    // divided by a slightly different elapsed time — NOT to filter small moves.
+    expect(observe(95, { observed: 95 * (1 + 1e-13), reported: true }).outcome).toBe("unchanged");
+    expect(observe(95, { observed: 94.9999, reported: true }).outcome).toBe("emitted");
+
+    expect(isUnchangedObservation(0, 0)).toBe(true);
+    expect(isUnchangedObservation(0, UNCHANGED_RELATIVE_EPSILON / 2)).toBe(true);
+    expect(isUnchangedObservation(0, 1e-6)).toBe(false);
+    // A single unit still counts as a move at every magnitude the board carries.
+    expect(isUnchangedObservation(1e9, 1e9 + 1)).toBe(false);
+    expect(isUnchangedObservation(1e9, 1e9 * (1 + 1e-14))).toBe(true);
+    expect(isUnchangedObservation(Number.NaN, Number.NaN)).toBe(false);
+  });
+
+  it("an observation with no level on the record is compared against nothing", () => {
+    expect(observe(95, { observed: null, reported: true }).outcome).toBe("emitted");
   });
 });
 

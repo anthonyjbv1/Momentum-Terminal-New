@@ -4,7 +4,7 @@ import type { DataSource } from "@/types";
 import type { Json } from "@/types/database";
 
 import { admitEvents, recentSince } from "./events";
-import { deriveMetric, metricSignal, observeMetric, readMetricConfigs, type MetricConfigs, type MetricObservation, type SnapshotPoint } from "./metrics";
+import { deriveMetric, metricSignal, observeMetric, readMetricConfigs, type MetricConfigs, type MetricObservation, type PreviousObservation, type SnapshotPoint } from "./metrics";
 import { buildPublisherPolicy } from "./publishers";
 import type { FeedHealthRow, IngestStore, IngestTrigger, ObservationRow, PollRow, PollStatus, SignalRow, SnapshotRow } from "./store";
 import { STORY_DEDUP_LOOKBACK_HOURS } from "./stories";
@@ -27,7 +27,8 @@ import { STORY_DEDUP_LOOKBACK_HOURS } from "./stories";
  *   metrics   fetchMetrics → raw levels → snapshot → delta against the
  *             person's previous snapshots → normalised against their own
  *             trailing baseline (lib/ingest/metrics.ts) → a signal only when
- *             the baseline is sufficient and the reading is outside the band
+ *             the baseline is sufficient, the reading is outside the band,
+ *             and it is not the reading already on the record
  *   derived   config.derived metrics computed from another metric's history,
  *             then normalised the same way
  *
@@ -563,10 +564,20 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         }
 
         // 4. Normalise: every reading against the person's own trailing baseline --
+        // One read per person and source for the whole metric set: what each
+        // metric last put on the record, so a reading that repeats it is told
+        // once rather than every quarter of an hour (Phase 21).
+        const previousObservations = current.size > 0 ? await store.lastObservations(person.id, source.id) : new Map<string, PreviousObservation>();
         const observations: Array<{ observation: MetricObservation; signal: RawSignal | null }> = [];
         for (const [metricKey, point] of current) {
           const metricConfig = configs.metrics.find((m) => m.metricKey === metricKey) ?? null;
-          const observation = observeMetric({ metricKey, config: metricConfig, history: history.get(metricKey) ?? [], current: point });
+          const observation = observeMetric({
+            metricKey,
+            config: metricConfig,
+            history: history.get(metricKey) ?? [],
+            current: point,
+            previousObservation: previousObservations.get(metricKey) ?? null,
+          });
           const signal = observation.outcome === "emitted" ? metricSignal({ person, sourceName: source.name, externalIdentifier, observation }) : null;
           observations.push({ observation, signal });
           log({

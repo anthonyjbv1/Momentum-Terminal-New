@@ -2,7 +2,8 @@ import type { FeedCatalogEntry, FeedHealthReport, SnapshotValue } from "@/lib/co
 import type { DataSource, Person, TypedSupabaseClient } from "@/types";
 import type { Json } from "@/types/database";
 
-import type { MetricDeltaKind, MetricOutcome } from "./metrics";
+import { outcomeReported } from "./metrics";
+import type { MetricDeltaKind, MetricOutcome, PreviousObservation } from "./metrics";
 import type { PublisherDomainRow } from "./publishers";
 
 /**
@@ -151,6 +152,12 @@ export interface IngestStore {
   latestSnapshot(personId: string, dataSourceId: string, metricKey: string): Promise<SnapshotValue | null>;
   /** Snapshots for a (person, source, metric) recorded at or after `since`, oldest first. */
   listSnapshots(personId: string, dataSourceId: string, metricKey: string, since: Date): Promise<SnapshotValue[]>;
+  /**
+   * The most recent observation of each metric for a (person, source), keyed
+   * by metric key: what the emit-on-change rule (Phase 21) compares this
+   * reading against. Metrics never observed are absent.
+   */
+  lastObservations(personId: string, dataSourceId: string): Promise<Map<string, PreviousObservation>>;
   /** Insert signals (processed = false). Rows whose dedupe key already exists are skipped. Returns the rows stored. */
   insertSignals(rows: SignalRow[]): Promise<StoredSignal[]>;
   /** The publisher allowlist: every publisher_domains row. */
@@ -181,6 +188,27 @@ export interface IngestStore {
    * crashed invocation never closes its row) and are not returned.
    */
   openRunStartedSince(since: Date): Promise<{ id: string; startedAt: Date } | null>;
+}
+
+/**
+ * The newest observation per metric, out of rows ordered newest first.
+ *
+ * Pure, so the rule the runner compares against is testable without a
+ * database: the first row seen for a key is that metric's last observation.
+ */
+export function readLastObservations(
+  rows: Array<{ metric_key: string; observed: number | string | null; outcome: string | null }>,
+): Map<string, PreviousObservation> {
+  const latest = new Map<string, PreviousObservation>();
+  for (const row of rows) {
+    if (latest.has(row.metric_key)) continue;
+    const observed = row.observed === null ? null : Number(row.observed);
+    latest.set(row.metric_key, {
+      observed: observed !== null && Number.isFinite(observed) ? observed : null,
+      reported: outcomeReported((row.outcome ?? "") as MetricOutcome),
+    });
+  }
+  return latest;
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +268,21 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
         .limit(10_000);
       if (error) throw new Error(`Failed to load snapshot history ${metricKey}: ${error.message}`);
       return data.map((row) => ({ metricKey: row.metric_key, value: Number(row.value), recordedAt: new Date(row.recorded_at) }));
+    },
+
+    async lastObservations(personId, dataSourceId) {
+      // Newest first across every metric of this source, then the first row
+      // per key wins. A source declares a handful of metrics, so a hundred
+      // rows reaches back past all of them several times over.
+      const { data, error } = await client
+        .from("raw_metric_observations")
+        .select("metric_key, observed, outcome, recorded_at")
+        .eq("person_id", personId)
+        .eq("data_source_id", dataSourceId)
+        .order("recorded_at", { ascending: false })
+        .limit(100);
+      if (error) throw new Error(`Failed to load the last observations: ${error.message}`);
+      return readLastObservations(data ?? []);
     },
 
     async insertSignals(rows) {
@@ -567,6 +610,17 @@ export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): Memor
         .filter((s) => s.recordedAt.getTime() >= since.getTime())
         .sort((a, b) => a.recordedAt.getTime() - b.recordedAt.getTime())
         .map((s) => ({ metricKey, value: s.value, recordedAt: s.recordedAt }));
+    },
+
+    async lastObservations(personId, dataSourceId) {
+      // Newest first, ties broken by insertion order (the later row wins), so
+      // this reads the same way the indexed query does in production.
+      const rows = observations
+        .map((row, index) => ({ row, index }))
+        .filter(({ row }) => row.personId === personId && row.dataSourceId === dataSourceId)
+        .sort((a, b) => b.row.recordedAt.getTime() - a.row.recordedAt.getTime() || b.index - a.index)
+        .map(({ row }) => ({ metric_key: row.metricKey, observed: row.observed, outcome: row.outcome }));
+      return readLastObservations(rows);
     },
 
     async insertSignals(rows) {

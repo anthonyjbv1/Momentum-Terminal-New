@@ -93,7 +93,49 @@ export interface MetricConfigs {
   inputs: Record<string, string>;
 }
 
-const DEFAULT_THRESHOLD_STD_DEVS = 1.0;
+/**
+ * THE DEADBAND, in standard deviations of the person's own baseline: below it
+ * a reading is normal and the metric emits nothing. TUNABLE per metric
+ * (`threshold_std_devs` on the source row); this is the default, and every
+ * metric currently takes it.
+ *
+ * 2.0, raised from 1.0 in Phase 21. At 1.0σ "unusual" meant "one reading in
+ * three": for a normal statistic |z| > 1 occurs 31.7% of the time, and the
+ * board bore that out — news_volume_24h emitted on 45.5% of its observations
+ * and viral_moment_rate on 33.6%. That is a description of the middle of the
+ * distribution, not of an anomaly; the threshold was the finding, not the
+ * data. At 2.0σ the tail is 4.6% under normal theory, which is closer to what
+ * the word the headline uses is worth.
+ */
+export const DEFAULT_THRESHOLD_STD_DEVS = 2.0;
+
+/**
+ * EMIT ON CHANGE (Phase 21). Two observations of one metric are THE SAME
+ * READING when their observed quantities differ by no more than this,
+ * relative to their own magnitude.
+ *
+ * An IDENTITY check, not a "small change" filter: a reading that moves at all
+ * is a new reading and emits, whatever the size of the move. Magnitude is the
+ * deadband's job, not this one's. The epsilon exists only so that a quantity
+ * recomputed from the same inputs — a rate divided by a slightly different
+ * elapsed time, a float reassembled out of the ledger — reads as unchanged
+ * rather than as news.
+ *
+ * One part in a trillion: about a thousand times double precision's own
+ * round-off (2.2e-16), which is enough to absorb a value that took a different
+ * arithmetic route to the same number, and small enough that no real move is
+ * ever swallowed — a count would have to reach 10^12 before a change of one
+ * unit fell inside it, and the quantities compared here are article counts,
+ * per-hour rates and growth fractions.
+ */
+export const UNCHANGED_RELATIVE_EPSILON = 1e-12;
+
+/** True when two observed quantities are the same reading. Scale-relative, with an absolute floor for values near zero. */
+export function isUnchangedObservation(current: number, previous: number): boolean {
+  if (!Number.isFinite(current) || !Number.isFinite(previous)) return false;
+  if (current === previous) return true;
+  return Math.abs(current - previous) <= UNCHANGED_RELATIVE_EPSILON * Math.max(1, Math.abs(current), Math.abs(previous));
+}
 
 function isRecord(value: Json | undefined): value is { [key: string]: Json | undefined } {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -292,7 +334,38 @@ export function observationSeries(points: SnapshotPoint[], kind: MetricDeltaKind
 // Observing one reading
 // ---------------------------------------------------------------------------
 
-export type MetricOutcome = "no_config" | "first_contact" | "insufficient_baseline" | "inside_band" | "emitted";
+/**
+ * What became of one reading. `unchanged` (Phase 21) is the emit-on-change
+ * rule: the reading is outside the deadband and WOULD emit, but it is the
+ * same reading the previous observation already put on the record, so it is
+ * not news a second time. It is a distinct outcome rather than a silent drop
+ * so the ledger still says why nothing was emitted.
+ */
+export type MetricOutcome = "no_config" | "first_contact" | "insufficient_baseline" | "inside_band" | "unchanged" | "emitted";
+
+/**
+ * The observation immediately before this one, for the same person, source
+ * and metric.
+ *
+ * `reported` means that observation put its state on the record: it emitted a
+ * signal, or it was itself suppressed as an unchanged repeat of one. Carrying
+ * both is what makes a RUN of identical readings collapse to its first: the
+ * second is suppressed against the first's `emitted`, the third against the
+ * second's `unchanged`, and so on. It is also what keeps the rule from
+ * swallowing a metric's first real emission — an observation that was
+ * `insufficient_baseline` or `inside_band` reported nothing, so the reading
+ * after it is news even if the number is identical.
+ */
+export interface PreviousObservation {
+  /** The observed quantity (not the raw level): what the sigma and the headline are computed from. */
+  observed: number | null;
+  reported: boolean;
+}
+
+/** Whether an outcome put the reading on the record, for the next observation to compare against. */
+export function outcomeReported(outcome: MetricOutcome): boolean {
+  return outcome === "emitted" || outcome === "unchanged";
+}
 
 export interface MetricObservation {
   metricKey: string;
@@ -314,11 +387,13 @@ export interface ObserveMetricInput {
   /** Snapshots recorded before this reading, oldest first. May reach further back than the window; it is cut here. */
   history: SnapshotPoint[];
   current: SnapshotPoint;
+  /** The observation immediately before this one, for the emit-on-change rule. Absent means none has been recorded. */
+  previousObservation?: PreviousObservation | null;
 }
 
 /** Judges one fresh reading against the person's own trailing history. Pure. */
 export function observeMetric(input: ObserveMetricInput): MetricObservation {
-  const { metricKey, config, history, current } = input;
+  const { metricKey, config, history, current, previousObservation = null } = input;
   const last = history.length > 0 ? history[history.length - 1] : null;
   const base = { metricKey, config, value: current.value, recordedAt: current.recordedAt, previous: last?.value ?? null };
 
@@ -340,7 +415,21 @@ export function observeMetric(input: ObserveMetricInput): MetricObservation {
     { current: latest.observed, baseline: series.map((point) => point.observed) },
     { minSamples: config.minSamples, sdFloor: config.sdFloor, thresholdStdDevs: config.thresholdStdDevs },
   );
-  const outcome: MetricOutcome = !reading.sufficient ? "insufficient_baseline" : reading.atBaseline || reading.band === "inside" ? "inside_band" : "emitted";
+  // A metric describes a STATE; the event is the state CHANGING. A reading
+  // outside the deadband that repeats the reading already on the record is
+  // the same fact told again, not a second fact.
+  const repeatsTheRecord =
+    previousObservation !== null &&
+    previousObservation.reported &&
+    previousObservation.observed !== null &&
+    isUnchangedObservation(latest.observed, previousObservation.observed);
+  const outcome: MetricOutcome = !reading.sufficient
+    ? "insufficient_baseline"
+    : reading.atBaseline || reading.band === "inside"
+      ? "inside_band"
+      : repeatsTheRecord
+        ? "unchanged"
+        : "emitted";
   return { ...base, ...shared, observed: latest.observed, reading, outcome };
 }
 

@@ -272,6 +272,47 @@ describe("runIngestion", () => {
       expect(store.signals).toHaveLength(1);
     });
 
+    it("EMIT ON CHANGE: a level that holds says it once, and says it again when it moves", async () => {
+      // Phase 21, end to end through the store: the runner reads what each
+      // metric last put on the record and compares this reading against it.
+      // Sixty calm hours, then an unusual level that persists.
+      const steps = makeSource({
+        id: "src-x",
+        name: "x",
+        is_active: true,
+        config: { metrics: { steps: { label: "steps", polarity: 1, delta: "level", baseline_window_hours: 240, min_samples: 6, sd_floor: 0.5, scale: 1 } } },
+      });
+      const calm = Array.from({ length: 60 }, (_, i) => ({
+        personId: person.id,
+        dataSourceId: "src-x",
+        metricKey: "steps",
+        value: 10 + (i % 2),
+        recordedAt: hour(i - 60),
+      }));
+      let steps_ = 40;
+      store = createMemoryIngestStore({ sources: [steps], mappings: { "src-x": [{ person, externalIdentifier: "id" }] }, snapshots: calm });
+      const stepRegistry = buildRegistry([levelConnector("x", () => ({ steps: steps_ }))]);
+      const runSteps = (at: Date) => runIngestion({ store, now: at, registry: stepRegistry, force: true, log: (line) => lines.push(line) });
+
+      for (const [i, value] of [40, 40, 40, 40, 41, 40].entries()) {
+        steps_ = value;
+        await runSteps(hour(i));
+      }
+
+      // Said once, then held; a move to 41 is news, and so is the move back.
+      expect(store.observations.map((o) => o.outcome)).toEqual(["emitted", "unchanged", "unchanged", "unchanged", "emitted", "emitted"]);
+      expect(store.signals).toHaveLength(3);
+
+      // Every reading is on the ledger with its statistics, signal or not: a
+      // suppressed repeat is recorded, not lost.
+      expect(store.observations).toHaveLength(6);
+      expect(store.snapshots.filter((s) => s.recordedAt >= NOW)).toHaveLength(6);
+      const suppressed = store.observations[1];
+      expect(suppressed).toMatchObject({ outcome: "unchanged", value: 40, observed: 40, signalId: null });
+      expect(Math.abs(Number(suppressed.sigma))).toBeGreaterThan(2);
+      expect(lines.filter((l) => l.event === "observation").map((l) => l.outcome)).toEqual(store.observations.map((o) => o.outcome));
+    });
+
     it("a metric without a declaration is snapshot-only, and a malformed declaration is reported", async () => {
       const looseSource = makeSource({
         id: "src-x",
