@@ -48,11 +48,19 @@ import { youtubeGet } from "./youtube";
  *
  * MATCHING (Phase 22, Part 2). Two routes, in this order, and nothing else:
  *
- *   channel   the video is ON the subject's own channel: snippet.channelId
- *             equals the mapping's config.channel_id. Unambiguous — a Drake
- *             University highlight reel cannot be on Drake's channel — so no
- *             exclusion is consulted. A mapping without a channel id has no
- *             channel route; adding one is a row update, never a deploy.
+ *   channel   the video is ON one of the subject's own channels:
+ *             snippet.channelId is in the mapping's config.channel_ids.
+ *             Unambiguous — a Drake University highlight reel cannot be on
+ *             Drake's channel — so no exclusion is consulted. A SET rather
+ *             than one id because a musician has both a personal channel and
+ *             a label-operated VEVO channel and both trend; either would
+ *             otherwise have to be given up. A mapping may instead (or also)
+ *             name config.handles, which the connector resolves through
+ *             channels.list?forHandle= — one quota unit, cached for the
+ *             process, reported through the note channel so an operator can
+ *             pin what it found. Pinning stops the lookup. A mapping with
+ *             neither has no channel route, which costs recall and nothing
+ *             else.
  *   title     the video's TITLE names the subject as whole words, by the
  *             same matcher the publisher feeds use (matchesTerm: "Drake's"
  *             matches, "Drakeford" does not), and the mapping's
@@ -118,19 +126,139 @@ export function readTrendingConfig(config: Record<string, Json | undefined>): Yo
 /** The shape of a YouTube channel id: "UC" and twenty-two URL-safe characters. Anything else is not a channel route. */
 const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
 
-/** The per-subject half: the names a title must carry, and the channel the subject owns, if the mapping names one. */
+/** A YouTube handle: "@" and 3–30 letters, digits, underscores, hyphens or dots. */
+const HANDLE = /^@[A-Za-z0-9._-]{3,30}$/;
+
+/**
+ * The per-subject half: the names a title must carry, and the channels the
+ * subject OWNS.
+ *
+ * MORE THAN ONE CHANNEL, on purpose. A musician typically has both a personal
+ * channel and a label-operated VEVO channel, and both trend; a single
+ * channel_id would force a choice and send the other down the title route. The
+ * channel route matches ANY of the ids, so nothing has to be chosen.
+ *
+ * IDS ARE PINNED, HANDLES ARE RESOLVED. A pinned id costs nothing and is
+ * authoritative. A handle is resolved through channels.list?forHandle= (one
+ * quota unit, cached) and reported through the poll's note channel so an
+ * operator can pin what it found; pinning stops the lookup. Handles exist
+ * because a channel id is not something anyone knows by heart, and because
+ * resolution is the only way to learn one WITHOUT scraping a web page.
+ */
 export interface TrendingSubject {
   /** Whole-word, case-insensitive; the mapping's external_identifier is always the first. */
   terms: string[];
-  /** config.channel_id, validated to the channel-id shape; null when the mapping names none. */
-  channelId: string | null;
+  /** config.channel_ids (or the legacy singular config.channel_id), validated to the channel-id shape. */
+  channelIds: string[];
+  /**
+   * config.handles (or the singular config.handle), normalised to "@name".
+   * Every handle named is resolved each poll (cached for the process), so
+   * stopping the lookup means pinning what it found in channel_ids AND
+   * dropping the handle — which is the two-step an operator follows once a
+   * resolution has been read and judged.
+   */
+  handles: string[];
+}
+
+function stringsFrom(value: Json | undefined): string[] {
+  if (typeof value === "string") return [value];
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+/** Deduplicates while keeping the order the configuration wrote. */
+function unique(values: string[]): string[] {
+  return values.filter((value, index) => values.indexOf(value) === index);
 }
 
 export function readTrendingSubject(config: Record<string, Json | undefined> | null | undefined, identifier: string, person: { display_name: string }): TrendingSubject {
   const subject = readSubjectConfig(config, identifier, person);
-  const raw = config && typeof config === "object" ? config.channel_id : undefined;
-  const channelId = typeof raw === "string" && CHANNEL_ID.test(raw.trim()) ? raw.trim() : null;
-  return { terms: subject.terms, channelId };
+  const record = config && typeof config === "object" ? config : {};
+  const channelIds = unique([...stringsFrom(record.channel_id), ...stringsFrom(record.channel_ids)].map((id) => id.trim()).filter((id) => CHANNEL_ID.test(id)));
+  // A handle may be written with or without the "@"; it is stored either way and compared in one shape.
+  const handles = unique(
+    [...stringsFrom(record.handle), ...stringsFrom(record.handles)]
+      .map((handle) => handle.trim())
+      .map((handle) => (handle.startsWith("@") ? handle : `@${handle}`))
+      .filter((handle) => HANDLE.test(handle)),
+  );
+  return { terms: subject.terms, channelIds, handles };
+}
+
+// ---------------------------------------------------------------------------
+// Resolving a handle to a channel id
+// ---------------------------------------------------------------------------
+
+/** What channels.list told us about one handle. */
+export interface ResolvedChannel {
+  handle: string;
+  channelId: string;
+  title: string;
+  /** null when the channel hides it; it is read only to help an operator judge whether this is the person. */
+  subscriberCount: number | null;
+}
+
+interface YouTubeChannelsByHandleResponse {
+  items?: Array<{ id?: string; snippet?: { title?: string }; statistics?: { subscriberCount?: string; hiddenSubscriberCount?: boolean } }>;
+}
+
+/**
+ * One handle to one channel, through the OFFICIAL route: channels.list with
+ * forHandle. One quota unit, whatever parts are asked for. Never a fetch of
+ * youtube.com — a handle is resolved by the API or not at all.
+ *
+ * Returns null when the handle names no channel. That is not an error: an
+ * unresolved handle simply leaves the subject on the title route, which works.
+ */
+export async function resolveChannelHandle(handle: string, apiKey: string, fetchImpl: typeof fetch): Promise<ResolvedChannel | null> {
+  const body = await youtubeGet<YouTubeChannelsByHandleResponse>("channels", { part: "snippet,statistics", forHandle: handle }, apiKey, fetchImpl);
+  const item = body.items?.[0];
+  if (!item?.id || !CHANNEL_ID.test(item.id)) return null;
+  const hidden = Boolean(item.statistics?.hiddenSubscriberCount);
+  const subscribers = hidden || item.statistics?.subscriberCount === undefined ? null : Number(item.statistics.subscriberCount);
+  return {
+    handle,
+    channelId: item.id,
+    title: item.snippet?.title?.trim() || item.id,
+    subscriberCount: subscribers !== null && Number.isFinite(subscribers) ? subscribers : null,
+  };
+}
+
+/**
+ * Resolutions already paid for, keyed by handle. A handle maps to a channel
+ * for as long as the creator keeps it, so this is cached for the life of the
+ * process rather than the run: sixteen subjects polled every twenty-five
+ * minutes must not each spend a unit re-deriving a constant. `null` caches a
+ * handle that resolved to nothing, so a dead handle costs one unit and not one
+ * per poll.
+ */
+const handleCache = new Map<string, ResolvedChannel | null>();
+
+/** For tests. */
+export function resetTrendingHandleCache(): void {
+  handleCache.clear();
+}
+
+/** Resolves the handles that are not already pinned, at most one upstream call each, cached. */
+export async function resolveHandles(handles: string[], apiKey: string, fetchImpl: typeof fetch): Promise<Array<ResolvedChannel | { handle: string; error: string }>> {
+  const out: Array<ResolvedChannel | { handle: string; error: string }> = [];
+  for (const handle of handles) {
+    if (handleCache.has(handle)) {
+      const cached = handleCache.get(handle) ?? null;
+      if (cached) out.push(cached);
+      continue;
+    }
+    try {
+      const resolved = await resolveChannelHandle(handle, apiKey, fetchImpl);
+      handleCache.set(handle, resolved);
+      if (resolved) out.push(resolved);
+      else out.push({ handle, error: "names no channel" });
+    } catch (error) {
+      // A failed lookup is never a failed poll: the subject keeps the title
+      // route and the operator sees why through the note channel.
+      out.push({ handle, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +373,9 @@ const DESCRIPTION_EXCLUSION_CHARS = 600;
  * on the chart, almost every poll.
  */
 export function matchTrendingVideo(video: TrendingVideo, subject: TrendingSubject, rules: Disambiguation): TrendingOutcome | null {
-  if (subject.channelId && video.channelId === subject.channelId) return { match: { route: "channel", term: null } };
+  // Any of the subject's own channels: a personal channel and a VEVO channel
+  // are both theirs, and neither has to be chosen over the other.
+  if (subject.channelIds.includes(video.channelId)) return { match: { route: "channel", term: null } };
 
   // Admission is the TITLE and nothing else: not the description, not the
   // tags, not the channel's name (see the module note).
@@ -337,9 +467,28 @@ export const youtubeTrendingConnector: DataConnector = {
     if (!apiKey) throw new ConnectorError("YOUTUBE_API_KEY is not set");
 
     const config = readTrendingConfig(context.config);
-    const subject = readTrendingSubject(context.personConfig, identifier, person);
+    const declared = readTrendingSubject(context.personConfig, identifier, person);
     const rules = readDisambiguation(context.personConfig);
     const chart = await chartFor(context, config, apiKey);
+
+    // Handles the mapping still names are resolved here, one unit each and
+    // cached, and every outcome is reported through the note channel: a
+    // resolution so an operator can pin it and stop paying for it, a failure
+    // so a handle that has gone stale is visible rather than silently leaving
+    // the subject on the title route.
+    const resolved = declared.handles.length > 0 ? await resolveHandles(declared.handles, apiKey, context.fetch) : [];
+    for (const outcome of resolved) {
+      if ("error" in outcome) {
+        context.note?.(`handle ${outcome.handle} did not resolve (${outcome.error}); ${person.slug} keeps the title route for it`);
+        continue;
+      }
+      const audience = outcome.subscriberCount === null ? "subscribers hidden" : `${outcome.subscriberCount.toLocaleString("en-US")} subscribers`;
+      context.note?.(`handle ${outcome.handle} resolves to ${outcome.channelId} ("${outcome.title}", ${audience}); pin it in config.channel_ids and drop the handle to stop the lookup`);
+    }
+    const subject: TrendingSubject = {
+      ...declared,
+      channelIds: unique([...declared.channelIds, ...resolved.flatMap((outcome) => ("error" in outcome ? [] : [outcome.channelId]))]),
+    };
 
     const signals: RawSignal[] = [];
     for (const video of chart) {

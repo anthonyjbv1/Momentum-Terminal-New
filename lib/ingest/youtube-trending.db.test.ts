@@ -32,8 +32,11 @@ interface MappingRow {
   display_name: string;
   identifier: string;
   is_active: boolean;
-  config: { channel_id?: string; match_terms?: string[]; disambiguation?: { exclude_terms: string[]; require_any: string[] } };
+  config: { channel_ids?: string[]; handles?: string[]; match_terms?: string[]; disambiguation?: { exclude_terms: string[]; require_any: string[] } };
 }
+
+const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
+const HANDLE = /^@[A-Za-z0-9._-]{3,30}$/;
 
 const source = async () => (await database.rows<SourceRow>("select display_name, tier, poll_interval_minutes, is_active, config from public.data_sources where name = 'youtube_trending'"))[0];
 const mappings = () =>
@@ -81,15 +84,49 @@ describe("the mappings", () => {
     }
   });
 
-  it("carry a channel route ONLY where a channel id was already verified — MrBeast's youtube mapping — and nowhere guessed", async () => {
+  it("pin ONLY channel ids the board already held — MrBeast's, from his youtube mapping — and guess none", async () => {
     const rows = await mappings();
     const [youtube] = await database.rows<{ external_identifier: string }>(
       "select m.external_identifier from public.person_data_sources m join public.people p on p.id = m.person_id join public.data_sources d on d.id = m.data_source_id where d.name = 'youtube' and p.slug = 'mrbeast'",
     );
-    const withChannel = rows.filter((r) => r.config.channel_id !== undefined);
-    expect(withChannel.map((r) => r.slug)).toEqual(["mrbeast"]);
-    expect(withChannel[0].config.channel_id).toBe(youtube.external_identifier);
-    expect(withChannel[0].config.channel_id).toMatch(/^UC[A-Za-z0-9_-]{22}$/);
+    const pinned = rows.filter((r) => (r.config.channel_ids ?? []).length > 0);
+    expect(pinned.map((r) => r.slug)).toEqual(["mrbeast"]);
+    expect(pinned[0].config.channel_ids).toEqual([youtube.external_identifier]);
+    // The singular key is gone: the connector reads a set, so the row carries one.
+    for (const row of rows) {
+      expect(row.config, row.slug).not.toHaveProperty("channel_id");
+      for (const id of row.config.channel_ids ?? []) expect(id, `${row.slug}: ${id}`).toMatch(CHANNEL_ID);
+    }
+  });
+
+  it("name handles for exactly the subjects with a YouTube presence of their own, each a well-formed handle", async () => {
+    const rows = await mappings();
+    const byHandle = Object.fromEntries(rows.filter((r) => (r.config.handles ?? []).length > 0).map((r) => [r.slug, r.config.handles]));
+    expect(byHandle).toEqual({
+      // The priority: his own uploads carry a stream title, not his name, so
+      // the title route misses them and only the channel route catches them.
+      "kai-cenat": ["@KaiCenat"],
+      // Personal AND label channel: a VEVO upload is the artist's own music.
+      drake: ["@Drake", "@DrakeVEVO"],
+      "kendrick-lamar": ["@KendrickLamar", "@KendrickLamarVEVO"],
+      "adin-ross": ["@adinross"],
+      // Rides along once so the next poll re-resolves the pinned id rather than assuming it still points where it did.
+      mrbeast: ["@MrBeast"],
+    });
+    for (const [slug, handles] of Object.entries(byHandle)) {
+      for (const handle of handles!) expect(handle, `${slug}: ${handle}`).toMatch(HANDLE);
+    }
+  });
+
+  it("maps NO executive to a channel: a corporate channel is the company's upload schedule, not the person's", async () => {
+    const executives = await database.rows<{ slug: string }>("select slug from public.people where category = 'executive' and is_active order by slug");
+    expect(executives.length).toBeGreaterThanOrEqual(9);
+    const rows = await mappings();
+    const bySlug = new Map(rows.map((r) => [r.slug, r]));
+    for (const { slug } of executives) {
+      expect(bySlug.get(slug)!.config.channel_ids ?? [], slug).toEqual([]);
+      expect(bySlug.get(slug)!.config.handles ?? [], slug).toEqual([]);
+    }
   });
 
   it("admit no bare surname: match_terms is empty on every row, so a title must name the person in full", async () => {
@@ -119,15 +156,21 @@ describe("the mappings", () => {
     for (const term of ["drake university", "drake maye", "drake bell", "drake london", "drake & josh", "drake and josh"]) {
       expect(terms, term).toContain(term);
     }
-    expect(drake.config.channel_id).toBeUndefined();
+    // His channels are named by handle and not yet pinned: resolution runs
+    // where the key is, and the exclusions still guard the title route.
+    expect(drake.config.channel_ids ?? []).toEqual([]);
+    expect(drake.config.handles).toEqual(["@Drake", "@DrakeVEVO"]);
   });
 
-  it("is idempotent: re-running the seed changes nothing", async () => {
+  it("is idempotent: re-running the seed and its follow-up, in order, changes nothing", async () => {
     const before = await mappings();
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
-    const sql = readFileSync(join(__dirname, "..", "..", "supabase", "migrations", "20260920192009_phase22_youtube_trending.sql"), "utf8");
-    await database.exec(sql);
+    // In order, as a fresh database applies them: the seed rewrites each row's
+    // config wholesale, and the follow-up puts the ids and handles back.
+    for (const file of ["20260920192009_phase22_youtube_trending.sql", "20260920213950_phase22_trending_channel_handles.sql"]) {
+      await database.exec(readFileSync(join(__dirname, "..", "..", "supabase", "migrations", file), "utf8"));
+    }
     expect(await mappings()).toEqual(before);
     expect((await database.rows("select count(*)::int as n from public.data_sources where name = 'youtube_trending'"))[0]).toEqual({ n: 1 });
   });

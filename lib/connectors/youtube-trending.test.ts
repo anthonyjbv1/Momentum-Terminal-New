@@ -16,6 +16,9 @@ import {
   readTrendingConfig,
   readTrendingSubject,
   resetTrendingChartCache,
+  resetTrendingHandleCache,
+  resolveChannelHandle,
+  resolveHandles,
   trendingSignal,
   youtubeTrendingConnector,
   type TrendingVideo,
@@ -32,6 +35,8 @@ const MRBEAST_CHANNEL = "UCX6OQ3DkcsbYNE6H8uQQuVA";
 /** A channel id of the right shape that belongs to nobody on the board. */
 const uc = (seed: string) => `UC${seed.padEnd(22, "0").slice(0, 22)}`;
 const DRAKE_CHANNEL = uc("drakeofficial");
+/** The label-operated channel the same artist's music videos go up on. Both are Drake's. */
+const DRAKE_VEVO = uc("drakevevo");
 
 const mrbeast = makePerson();
 const drake = makePerson({ id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", slug: "drake", display_name: "Drake", full_name: "Aubrey Drake Graham", category: "musician" });
@@ -78,11 +83,21 @@ function video(overrides: Partial<TrendingVideo> = {}): TrendingVideo {
 interface Harness {
   context: (personConfig?: Record<string, unknown>, sourceId?: string, now?: Date) => ConnectorContext;
   excluded: ExcludedItem[];
+  notes: string[];
   fetch: ReturnType<typeof fakeFetchRoutes>;
 }
 
+/** Handles the fake API knows about, so a resolution in a connector test is a real round trip. */
+const HANDLE_DIRECTORY: Record<string, { id: string; title: string; subscribers: string }> = {
+  "@MrBeast": { id: MRBEAST_CHANNEL, title: "MrBeast", subscribers: "450000000" },
+  "@KaiCenat": { id: uc("kaicenatown"), title: "Kai Cenat", subscribers: "12000000" },
+  "@Drake": { id: DRAKE_CHANNEL, title: "Drake", subscribers: "30000000" },
+  "@DrakeVEVO": { id: DRAKE_VEVO, title: "DrakeVEVO", subscribers: "28000000" },
+};
+
 function harness(pages: Array<ReturnType<typeof chartResponse>> = [chartResponse(CHART)]): Harness {
   const excluded: ExcludedItem[] = [];
+  const notes: string[] = [];
   const fetch = fakeFetchRoutes([
     {
       match: "/youtube/v3/videos?",
@@ -92,9 +107,17 @@ function harness(pages: Array<ReturnType<typeof chartResponse>> = [chartResponse
         return pages[index] ?? chartResponse([]);
       },
     },
+    {
+      match: "/youtube/v3/channels?",
+      body: (url: string) => {
+        const entry = HANDLE_DIRECTORY[new URL(url).searchParams.get("forHandle") ?? ""];
+        return entry ? { items: [{ id: entry.id, snippet: { title: entry.title }, statistics: { subscriberCount: entry.subscribers } }] } : { items: [] };
+      },
+    },
   ]);
   return {
     excluded,
+    notes,
     fetch,
     context: (personConfig = {}, sourceId = "src-trending", now = NOW) => ({
       source: makeSource({ id: sourceId, name: YOUTUBE_TRENDING_SOURCE_NAME, tier: 2, poll_interval_minutes: 25 }),
@@ -104,6 +127,7 @@ function harness(pages: Array<ReturnType<typeof chartResponse>> = [chartResponse
       fetch,
       personConfig: personConfig as ConnectorContext["personConfig"],
       exclude: (item) => excluded.push(item),
+      note: (message) => notes.push(message),
     }),
   };
 }
@@ -112,6 +136,7 @@ const previousKey = process.env.YOUTUBE_API_KEY;
 beforeEach(() => {
   process.env.YOUTUBE_API_KEY = "test-key";
   resetTrendingChartCache();
+  resetTrendingHandleCache();
 });
 afterEach(() => {
   if (previousKey === undefined) delete process.env.YOUTUBE_API_KEY;
@@ -127,13 +152,69 @@ describe("configuration", () => {
   });
 
   it("reads the subject's terms the way the publisher feeds do, and a channel id only when it has the shape of one", () => {
-    expect(readTrendingSubject({ channel_id: MRBEAST_CHANNEL }, "MrBeast", mrbeast)).toEqual({ terms: ["MrBeast"], channelId: MRBEAST_CHANNEL });
-    expect(readTrendingSubject({ match_terms: ["Beast"] }, "MrBeast", mrbeast)).toEqual({ terms: ["MrBeast", "Beast"], channelId: null });
-    // A handle, a URL or a truncated id is not a channel route; it is ignored rather than matched against nothing.
+    expect(readTrendingSubject({ channel_id: MRBEAST_CHANNEL }, "MrBeast", mrbeast)).toEqual({ terms: ["MrBeast"], channelIds: [MRBEAST_CHANNEL], handles: [] });
+    expect(readTrendingSubject({ match_terms: ["Beast"] }, "MrBeast", mrbeast)).toEqual({ terms: ["MrBeast", "Beast"], channelIds: [], handles: [] });
+    // A handle, a URL or a truncated id is not a channel ID; it is ignored rather than matched against nothing.
     for (const bad of ["@mrbeast", "UC123", "https://youtube.com/channel/UCX6OQ3DkcsbYNE6H8uQQuVA", 42]) {
-      expect(readTrendingSubject({ channel_id: bad }, "MrBeast", mrbeast).channelId, String(bad)).toBeNull();
+      expect(readTrendingSubject({ channel_ids: [bad] }, "MrBeast", mrbeast).channelIds, String(bad)).toEqual([]);
     }
-    expect(readTrendingSubject(null, "MrBeast", mrbeast)).toEqual({ terms: ["MrBeast"], channelId: null });
+    expect(readTrendingSubject(null, "MrBeast", mrbeast)).toEqual({ terms: ["MrBeast"], channelIds: [], handles: [] });
+  });
+
+  it("takes a SET of channels, so a personal channel and a VEVO channel never have to be chosen between", () => {
+    const subject = readTrendingSubject({ channel_ids: [DRAKE_CHANNEL, DRAKE_VEVO], channel_id: DRAKE_CHANNEL }, "Drake", drake);
+    // The legacy singular and the array are unioned, and a repeat is not counted twice.
+    expect(subject.channelIds).toEqual([DRAKE_CHANNEL, DRAKE_VEVO]);
+  });
+
+  it("normalises handles to one shape and refuses anything that is not one", () => {
+    expect(readTrendingSubject({ handles: ["@KaiCenat", "kaicenat"] }, "Kai Cenat", kai).handles).toEqual(["@KaiCenat", "@kaicenat"]);
+    expect(readTrendingSubject({ handle: "@Drake" }, "Drake", drake).handles).toEqual(["@Drake"]);
+    // A URL, a space, an empty handle or a non-string is not a handle.
+    for (const bad of ["https://youtube.com/@drake", "@a", "@two words", "@", 42, ""]) {
+      expect(readTrendingSubject({ handles: [bad] }, "Drake", drake).handles, String(bad)).toEqual([]);
+    }
+  });
+});
+
+describe("resolving a handle to a channel", () => {
+  const channelsResponse = (id: string, title: string, subscribers?: string, hidden = false) => ({
+    items: [{ id, snippet: { title }, statistics: hidden ? { hiddenSubscriberCount: true } : { subscriberCount: subscribers ?? "1000" } }],
+  });
+
+  it("uses channels.list with forHandle — the official route, one unit — and never fetches a web page", async () => {
+    const fetch = fakeFetchRoutes([{ match: "/youtube/v3/channels?", body: channelsResponse(MRBEAST_CHANNEL, "MrBeast", "450000000") }]);
+    expect(await resolveChannelHandle("@MrBeast", "k", fetch)).toEqual({ handle: "@MrBeast", channelId: MRBEAST_CHANNEL, title: "MrBeast", subscriberCount: 450_000_000 });
+    const url = new URL(fetch.calls[0]);
+    expect(url.origin + url.pathname).toBe("https://www.googleapis.com/youtube/v3/channels");
+    expect(url.searchParams.get("forHandle")).toBe("@MrBeast");
+    expect(url.hostname).toBe("www.googleapis.com");
+  });
+
+  it("returns null for a handle that names no channel, and reads a hidden subscriber count as unknown", async () => {
+    expect(await resolveChannelHandle("@nobody", "k", fakeFetchRoutes([{ match: "/channels?", body: { items: [] } }]))).toBeNull();
+    const hidden = await resolveChannelHandle("@x", "k", fakeFetchRoutes([{ match: "/channels?", body: channelsResponse(DRAKE_CHANNEL, "Drake", undefined, true) }]));
+    expect(hidden?.subscriberCount).toBeNull();
+  });
+
+  it("pays for a handle once: the resolution is cached, and so is a handle that resolved to nothing", async () => {
+    const fetch = fakeFetchRoutes([{ match: "/channels?", body: channelsResponse(MRBEAST_CHANNEL, "MrBeast") }]);
+    await resolveHandles(["@MrBeast"], "k", fetch);
+    await resolveHandles(["@MrBeast"], "k", fetch);
+    await resolveHandles(["@MrBeast"], "k", fetch);
+    expect(fetch.calls).toHaveLength(1);
+
+    const dead = fakeFetchRoutes([{ match: "/channels?", body: { items: [] } }]);
+    expect(await resolveHandles(["@gone"], "k", dead)).toEqual([{ handle: "@gone", error: "names no channel" }]);
+    expect(await resolveHandles(["@gone"], "k", dead)).toEqual([]);
+    expect(dead.calls).toHaveLength(1);
+  });
+
+  it("reports an upstream failure rather than throwing: a failed lookup is never a failed poll", async () => {
+    const fetch = fakeFetchRoutes([{ match: "/channels?", body: { error: { message: "quotaExceeded" } }, status: 403 }]);
+    const [outcome] = await resolveHandles(["@KaiCenat"], "k", fetch);
+    expect(outcome).toMatchObject({ handle: "@KaiCenat" });
+    expect("error" in outcome && outcome.error).toContain("403");
   });
 });
 
@@ -324,6 +405,58 @@ describe("the connector", () => {
     // Two people, one video, two keys: the collaboration is credited to both.
     expect(beast[1].dedupeKey).toBe("youtube_trending:video:v-collab:mrbeast");
     expect(cenat[0].dedupeKey).toBe("youtube_trending:video:v-collab:kai-cenat");
+  });
+
+  it("catches an upload whose title does NOT name the person, once their handle resolves — the gap channel ids close", async () => {
+    // Kai Cenat's own uploads conventionally carry a stream title and not his
+    // name, so the title route misses them entirely. This is that video.
+    const own = chartItem("v-kai", "HE PULLED UP TO THE MANSION AT 3AM 😭", HANDLE_DIRECTORY["@KaiCenat"].id, "Kai Cenat");
+    const h = harness([chartResponse([own])]);
+
+    // Without a channel route: nothing, because the title names nobody.
+    expect(await youtubeTrendingConnector.fetchForPerson(kai, "Kai Cenat", h.context())).toEqual([]);
+
+    // With the handle: resolved through channels.list, and it is his.
+    resetTrendingChartCache();
+    const signals = await youtubeTrendingConnector.fetchForPerson(kai, "Kai Cenat", h.context({ handles: ["@KaiCenat"] }));
+    expect(signals).toHaveLength(1);
+    expect(signals[0].rawPayload.route).toBe("channel");
+    expect(signals[0].headline).toBe('Kai Cenat is trending at #1 on YouTube: "HE PULLED UP TO THE MANSION AT 3AM 😭".');
+    // And the resolution is reported, with what an operator needs to judge it and pin it.
+    expect(h.notes).toHaveLength(1);
+    expect(h.notes[0]).toContain("@KaiCenat");
+    expect(h.notes[0]).toContain(HANDLE_DIRECTORY["@KaiCenat"].id);
+    expect(h.notes[0]).toContain('"Kai Cenat"');
+    expect(h.notes[0]).toContain("12,000,000 subscribers");
+  });
+
+  it("treats a personal channel and a VEVO channel as the same person's, and says 'is trending' for both", async () => {
+    const personal = chartItem("v-vlog", "a day in my life", DRAKE_CHANNEL, "Drake");
+    const vevo = chartItem("v-mv", "Drake - NOKIA (Official Music Video)", DRAKE_VEVO, "DrakeVEVO");
+    const h = harness([chartResponse([personal, vevo])]);
+    const signals = await youtubeTrendingConnector.fetchForPerson(drake, "Drake", h.context({ handles: ["@Drake", "@DrakeVEVO"] }));
+    expect(signals.map((s) => [s.rawPayload.video_id, s.rawPayload.route])).toEqual([["v-vlog", "channel"], ["v-mv", "channel"]]);
+    // Both read as HIS trending, not as videos about him.
+    for (const signal of signals) expect(signal.headline).toMatch(/^Drake is trending at #\d+ on YouTube/);
+  });
+
+  it("spends nothing on a handle once its id is pinned", async () => {
+    const own = chartItem("v-kai", "no name in this title", HANDLE_DIRECTORY["@KaiCenat"].id, "Kai Cenat");
+    const h = harness([chartResponse([own])]);
+    const signals = await youtubeTrendingConnector.fetchForPerson(kai, "Kai Cenat", h.context({ channel_ids: [HANDLE_DIRECTORY["@KaiCenat"].id] }));
+    expect(signals).toHaveLength(1);
+    // The chart, and not one call more: no channels.list, and nothing to note.
+    expect(h.fetch.calls.filter((url) => url.includes("/channels?"))).toEqual([]);
+    expect(h.notes).toEqual([]);
+  });
+
+  it("keeps the title route and says so when a handle does not resolve; a failed lookup is never a failed poll", async () => {
+    const h = harness();
+    const signals = await youtubeTrendingConnector.fetchForPerson(mrbeast, "MrBeast", h.context({ handles: ["@notarealhandle"] }));
+    // v-collab names him in its title, so he is still caught.
+    expect(signals.map((s) => [s.rawPayload.video_id, s.rawPayload.route])).toEqual([["v-collab", "title"]]);
+    expect(h.notes[0]).toContain("@notarealhandle did not resolve");
+    expect(h.notes[0]).toContain("names no channel");
   });
 
   it("is deterministic: the same chart at the same clock yields the same sentences and keys", async () => {
