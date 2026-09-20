@@ -235,6 +235,8 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260919164206_phase21plus_publish_observed_gate.sql` | The metric-privacy allow-list gains `observed` and `baseline`, behind a per-metric `publish_observed` that DEFAULTS OFF, plus a rule that a signal carries both or neither; set on the six public counts (`news_volume_24h`, `company_news_volume_24h`, `viral_moment_rate`, `stream_hours_7d`, `stream_days_7d`) and NOT on `session_peak_viewers`, which is an audience size rather than a count of items. The headline digit refusal is unchanged |
 | `20260919164303_phase21plus_publish_observed_clips.sql` | `clips_per_stream_hour` opts in too: the previous migration looked for it under `config.live.metrics`, and the twitch row declares all five of its metrics under `config.metrics`. The guarded WHERE made the miss silent rather than an error |
 | `20260920000325_phase21plus_feed_entries_metric_payload.sql` | `feed_entries()` carries each METRIC signal's payload inside its `evidence` objects (null for events, whose payloads hold publisher-resolution detail). A `create or replace` rather than a drop: the key goes inside a column that is already `jsonb`, so the signature, the grants and the keyset pagination are untouched |
+| `20260920215500_phase22_trending_pin_channel_ids.sql` | The resolutions, judged and pinned: MrBeast, Kai Cenat, Kendrick Lamar (personal + VEVO), Adin Ross and DrakeVEVO into `channel_ids`, every `handles` key dropped so the lookup stops. `@Drake` is **refused** — it resolves to a 491-subscriber namesake, and arming it would have credited Aubrey Graham with that person's uploads; his main channel stays unmapped rather than inferred from a channel title seen on the chart |
+| `20260920213950_phase22_trending_channel_handles.sql` | Channel ids for the trending chart: MrBeast's verified id into `channel_ids` (a **set**, so a personal and a VEVO channel never have to be chosen between) with his handle riding along once so the next poll re-resolves it rather than assuming; and `handles` for `kai-cenat` (the priority — his titles do not name him), `drake`, `kendrick-lamar` and `adin-ross`, resolved by the connector through `channels.list?forHandle=` where the API key lives. No executive mapped: a corporate channel is the company's upload schedule, not the person's |
 | `20260920192009_phase22_youtube_trending.sql` | The `youtube_trending` row (YouTube's own chart, tier 2, 25 minutes — off the multiple of fifteen and off the top of the hour, an effective half hour — and NO metrics, because a trending rank is never baselined) and a mapping for every active person keyed by display name: `channel_id` only where the board already held a verified one (MrBeast, copied from the `youtube` mapping), `match_terms` empty so a title must name the person in full, and the Phase 12+ disambiguation block inherited from the `publisher_rss` mapping, with Drake's list gaining the sitcom |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
@@ -2285,7 +2287,7 @@ Two routes, in this order, and nothing else:
 
 | route | what admits | why it is safe |
 |---|---|---|
-| **channel** | `snippet.channelId` equals the mapping's `config.channel_id` | a Drake University highlight reel cannot be on Drake's channel; no exclusion is consulted |
+| **channel** | `snippet.channelId` is in the mapping's `config.channel_ids` | a Drake University highlight reel cannot be on Drake's channel; no exclusion is consulted |
 | **title** | the video's **title** names the subject as whole words (`matchesTerm`, the publisher feeds' matcher: "Drake's" matches, "DrakeVEVO" and "Drakeford" do not) and the mapping's disambiguation rules do not refuse it | the rules are the Phase 12+ block on the `person_data_sources` row — the same exclusions the two news doors apply, judged by the same code — read over the title, the channel's name and the first 600 characters of the description |
 
 Refused, because a false positive here is a visible error on a consumer
@@ -2304,16 +2306,76 @@ surface where a miss is nothing:
   unscoped, gaming beside cooking beside news, so every seeded mapping carries
   `match_terms: []` and a title must name the person in full. An alias is a
   row update if one is ever wanted.
-- **a guessed channel id.** `channel_id` is set only where the board already
-  held a verified one — MrBeast's, copied from the `youtube` mapping. For the
-  others the channel route waits on a one-unit `channels.list?forHandle=`
-  lookup and a row update; until then their own uploads are caught by the title
-  route only when the title names them, which for music videos it conventionally
-  does and for a streamer's highlights often does not.
+- **a guessed channel id.** An id is pinned only once it has been resolved
+  through the official API and judged; see *Channel ids, by handle* below.
 
 The chart is fetched **once per run** and shared by every subject (a module
 cache keyed on the run's clock, as the publisher catalogue and the API-Sports
 games list are): sixteen mappings, one request.
+
+### Channel ids, by handle
+
+Phase 22 shipped with exactly one verified channel id (MrBeast's, copied from
+his `youtube` mapping), so everyone else was on the title route alone — worst
+where the chart matters most, because **Kai Cenat's own uploads carry a stream
+title and not his name** and so were invisible to us.
+
+A channel id is not something anyone knows by heart, and the only way to learn
+one without scraping a web page is `channels.list?forHandle=` — one quota unit.
+The key for that call lives in production and nowhere else (Vercel holds it as
+a *sensitive* variable, unreadable by design), so resolution belongs in the
+connector rather than in a one-off script. Two keys on the mapping:
+
+| key | what it is |
+|---|---|
+| `channel_ids` | verified ids. Free, authoritative, matched as a **set** |
+| `handles` | resolved each poll, cached for the process, every outcome reported through the poll's `note` channel — a resolution with its id, channel title and subscriber count so an operator can *judge* it before pinning; a failure with its reason, so a stale handle is visible rather than silently dropping the subject to the title route |
+
+Pinning the id **and dropping the handle** stops the lookup. Until then it is
+one unit per handle per poll.
+
+A **set** of channels, not one, is the answer to the VEVO question. A musician
+has both a personal channel and a label-operated VEVO channel and both trend;
+a single id forced a choice. DrakeVEVO trending *is* Drake trending — his own
+music, his own distribution — and the credit runs the right way: DrakeVEVO
+carries "Drake ft. X", while "X ft. Drake" lives on X's VEVO and is never
+credited here. So mapping VEVO risks a **miss** on a feature, never a false
+positive, and the title route catches those when the title names him.
+
+The one sharp edge: a handle is **trusted the moment it resolves**, so a wrong
+handle would arm the channel route for somebody else's uploads. The note exists
+so a mistake shows on the next poll rather than after a false headline — and it
+earned its keep on the first one.
+
+**What the 21:45 poll of 2026-09-20 returned, and the judgement:**
+
+| handle | resolved | channel | subscribers | |
+|---|---|---|---|---|
+| `@MrBeast` | `UCX6OQ3DkcsbYNE6H8uQQuVA` | MrBeast | 516,000,000 | **pinned** — identical to the id the board already held, so it is re-verified rather than assumed |
+| `@KaiCenat` | `UCoEmptob-eEGKk18c2VplJg` | Kai Cenat | 8,200,000 | **pinned** — the one this exists for |
+| `@KendrickLamar` | `UC3lBXcrKFnFAFkfVk5WuKcQ` | Kendrick Lamar | 20,300,000 | **pinned** |
+| `@KendrickLamarVEVO` | `UCoYfzC2zMlc9M-Odgaf6OSg` | KendrickLamarVEVO | 6,830,000 | **pinned** |
+| `@DrakeVEVO` | `UCQznUf1SjfDqx65hX3zRDiA` | DrakeVEVO | 8,970,000 | **pinned** |
+| `@adinross` | `UCey-eDTR5J6xU6pZ2f4guoA` | **Adin Live** | 4,620,000 | **pinned**, discrepancy stated: the channel is titled "Adin Live", not "Adin Ross". The handle is exactly his name and 4.62M is his order of magnitude; a squatter holds neither |
+| `@Drake` | `UCNTQH0uJzryQB4rRLGlv-Ww` | drake | **491** | **REFUSED.** Not him — a namesake or squatter holds the handle. Arming it would have credited Aubrey Graham with that person's uploads the first time one charted |
+
+**Still open, said plainly:** Drake's *main* channel is unmapped. The live fire
+caught "DRAKE - CLASSIC" at #1 from `UCByOQJjav0CUDwxCk-jVNRQ`, titled "Drake" —
+a third channel, neither the 491-subscriber `@Drake` nor DrakeVEVO — and that is
+where his music actually goes up. A channel title seen on the chart is evidence
+of a *name*, not proof of *ownership*, so it is not inferred. Closing it needs
+the handle that resolves to that id. Until then Drake keeps DrakeVEVO plus the
+title route, which is what caught the #1 video.
+
+**No executive is mapped**, and that is the finding rather than an omission.
+NVIDIA's channel is not Jensen Huang's and Meta's is not Zuckerberg's; mapping
+either would credit the person with the company's upload schedule. Beyond the
+corporate channels there is nothing to map — what exists for these nine is
+conference, interview and clip channels owned by other people. And even where a
+personal channel exists the channel route adds almost nothing, because an
+executive's video is conventionally titled with their name and the title route
+already catches it. The route earns its keep for creators whose titles do not
+name them, which is the opposite case.
 
 ### Coverage is uneven, and that is the point
 

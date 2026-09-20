@@ -36,7 +36,6 @@ interface MappingRow {
 }
 
 const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
-const HANDLE = /^@[A-Za-z0-9._-]{3,30}$/;
 
 const source = async () => (await database.rows<SourceRow>("select display_name, tier, poll_interval_minutes, is_active, config from public.data_sources where name = 'youtube_trending'"))[0];
 const mappings = () =>
@@ -84,38 +83,44 @@ describe("the mappings", () => {
     }
   });
 
-  it("pin ONLY channel ids the board already held — MrBeast's, from his youtube mapping — and guess none", async () => {
+  it("pin exactly the channels that were resolved through the official API and judged to be the person's own", async () => {
     const rows = await mappings();
-    const [youtube] = await database.rows<{ external_identifier: string }>(
-      "select m.external_identifier from public.person_data_sources m join public.people p on p.id = m.person_id join public.data_sources d on d.id = m.data_source_id where d.name = 'youtube' and p.slug = 'mrbeast'",
-    );
-    const pinned = rows.filter((r) => (r.config.channel_ids ?? []).length > 0);
-    expect(pinned.map((r) => r.slug)).toEqual(["mrbeast"]);
-    expect(pinned[0].config.channel_ids).toEqual([youtube.external_identifier]);
-    // The singular key is gone: the connector reads a set, so the row carries one.
+    const pinned = Object.fromEntries(rows.filter((r) => (r.config.channel_ids ?? []).length > 0).map((r) => [r.slug, r.config.channel_ids]));
+    expect(pinned).toEqual({
+      // Re-verified rather than assumed: @MrBeast resolved to the id the board
+      // already held, which is what his handle rode along for.
+      mrbeast: ["UCX6OQ3DkcsbYNE6H8uQQuVA"],
+      // THE ONE THIS FOLLOW-UP EXISTS FOR: his titles do not name him.
+      "kai-cenat": ["UCoEmptob-eEGKk18c2VplJg"],
+      // Personal AND label: the set doing the job it was widened for.
+      "kendrick-lamar": ["UC3lBXcrKFnFAFkfVk5WuKcQ", "UCoYfzC2zMlc9M-Odgaf6OSg"],
+      // The channel is titled "Adin Live"; the handle @adinross and 4.62M subscribers make it his.
+      "adin-ross": ["UCey-eDTR5J6xU6pZ2f4guoA"],
+      // VEVO ONLY. @Drake resolved to a 491-subscriber namesake and was refused; see below.
+      drake: ["UCQznUf1SjfDqx65hX3zRDiA"],
+    });
+    // The singular key is gone (the connector reads a set) and every id is well formed.
     for (const row of rows) {
       expect(row.config, row.slug).not.toHaveProperty("channel_id");
       for (const id of row.config.channel_ids ?? []) expect(id, `${row.slug}: ${id}`).toMatch(CHANNEL_ID);
     }
   });
 
-  it("name handles for exactly the subjects with a YouTube presence of their own, each a well-formed handle", async () => {
-    const rows = await mappings();
-    const byHandle = Object.fromEntries(rows.filter((r) => (r.config.handles ?? []).length > 0).map((r) => [r.slug, r.config.handles]));
-    expect(byHandle).toEqual({
-      // The priority: his own uploads carry a stream title, not his name, so
-      // the title route misses them and only the channel route catches them.
-      "kai-cenat": ["@KaiCenat"],
-      // Personal AND label channel: a VEVO upload is the artist's own music.
-      drake: ["@Drake", "@DrakeVEVO"],
-      "kendrick-lamar": ["@KendrickLamar", "@KendrickLamarVEVO"],
-      "adin-ross": ["@adinross"],
-      // Rides along once so the next poll re-resolves the pinned id rather than assuming it still points where it did.
-      mrbeast: ["@MrBeast"],
-    });
-    for (const [slug, handles] of Object.entries(byHandle)) {
-      for (const handle of handles!) expect(handle, `${slug}: ${handle}`).toMatch(HANDLE);
+  it("leave no handle behind once its resolution has been judged: a pinned id costs nothing, a handle costs a unit a poll", async () => {
+    for (const row of await mappings()) {
+      expect(row.config.handles ?? [], row.slug).toEqual([]);
     }
+  });
+
+  it("NEVER pin the @Drake handle: it resolves to a 491-subscriber namesake, which is the error the note channel exists to catch", async () => {
+    const drake = (await mappings()).find((r) => r.slug === "drake")!;
+    // The namesake's id must appear nowhere: arming it would credit Aubrey
+    // Graham with that person's uploads the first time one charted.
+    expect(drake.config.channel_ids).not.toContain("UCNTQH0uJzryQB4rRLGlv-Ww");
+    expect(drake.config.channel_ids).toEqual(["UCQznUf1SjfDqx65hX3zRDiA"]);
+    // And his main channel, seen on the chart at #1 but never verified by
+    // handle, is NOT inferred from a channel title either.
+    expect(drake.config.channel_ids).not.toContain("UCByOQJjav0CUDwxCk-jVNRQ");
   });
 
   it("maps NO executive to a channel: a corporate channel is the company's upload schedule, not the person's", async () => {
@@ -156,10 +161,6 @@ describe("the mappings", () => {
     for (const term of ["drake university", "drake maye", "drake bell", "drake london", "drake & josh", "drake and josh"]) {
       expect(terms, term).toContain(term);
     }
-    // His channels are named by handle and not yet pinned: resolution runs
-    // where the key is, and the exclusions still guard the title route.
-    expect(drake.config.channel_ids ?? []).toEqual([]);
-    expect(drake.config.handles).toEqual(["@Drake", "@DrakeVEVO"]);
   });
 
   it("is idempotent: re-running the seed and its follow-up, in order, changes nothing", async () => {
@@ -168,7 +169,11 @@ describe("the mappings", () => {
     const { join } = await import("node:path");
     // In order, as a fresh database applies them: the seed rewrites each row's
     // config wholesale, and the follow-up puts the ids and handles back.
-    for (const file of ["20260920192009_phase22_youtube_trending.sql", "20260920213950_phase22_trending_channel_handles.sql"]) {
+    for (const file of [
+      "20260920192009_phase22_youtube_trending.sql",
+      "20260920213950_phase22_trending_channel_handles.sql",
+      "20260920215500_phase22_trending_pin_channel_ids.sql",
+    ]) {
       await database.exec(readFileSync(join(__dirname, "..", "..", "supabase", "migrations", file), "utf8"));
     }
     expect(await mappings()).toEqual(before);
