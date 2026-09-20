@@ -236,9 +236,22 @@ function formatMultiple(value: number): string {
  * saying "their usual", never by an appended "for him". See the note on
  * pronouns at the top of this file.
  */
+/**
+ * What a count counts, in both numbers. BOTH forms are declared rather than
+ * derived, because the head noun is not always the first word ("company
+ * stories" → "company story") nor the last ("clips an hour" → "clip an hour"),
+ * and a rule that has to find it would be wrong on one of the seventeen.
+ */
+export interface MetricUnit {
+  /** The form used when the displayed figure is exactly 1: "story", "clip an hour". */
+  one: string;
+  /** The form used for every other figure, zero and fractions included: "stories", "clips an hour". */
+  many: string;
+}
+
 export interface MetricVoice {
   /** What the count counts, for `{count}` and for the expand. Absent when the metric publishes no counts. */
-  unit?: string;
+  unit?: MetricUnit;
   /** 3.5σ and above: momentum-native, because something is genuinely happening. */
   spiking: string[];
   /** 2.5–3.5σ: concrete, because the number carries itself. */
@@ -252,7 +265,7 @@ export interface MetricVoice {
 export const METRIC_VOICE: Record<string, MetricVoice> = {
   // --- the two news doors --------------------------------------------------
   news_volume_24h: {
-    unit: "stories",
+    unit: { one: "story", many: "stories" },
     spiking: ["Attention on {name} is spiking", "{their} news flow just accelerated", "{name} is all over the news right now"],
     concrete: ["{count} on {name} today — {comparison}", "Coverage of {name} is running {running}", "{count} on {name} today, {comparison}"],
     elevated: ["Coverage of {name} is running hot", "Unusually busy stretch for {name}", "{name} is getting more coverage than usual"],
@@ -262,14 +275,14 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
     // Deliberately about the company and never the person: this counts
     // articles about the business, and conflating the two would credit
     // someone with their employer's news.
-    unit: "company stories",
+    unit: { one: "company story", many: "company stories" },
     spiking: ["{their} company is all over the news", "News about {their} company just accelerated"],
     concrete: ["{count} about {their} company — {comparison}", "Coverage of {their} company is running {running}"],
     elevated: ["{their} company is in the news more than usual", "Busy stretch for {their} company"],
     quiet: ["Quiet stretch for {their} company", "Coverage of {their} company has cooled off"],
   },
   viral_moment_rate: {
-    unit: "viral moments",
+    unit: { one: "viral moment", many: "viral moments" },
     spiking: ["{name} is everywhere right now", "{their} clips are spreading fast", "People cannot stop sharing {their} moments"],
     concrete: ["{count} from {name} spreading — {comparison}", "People are sharing {their} moments {running}", "{their} moments are spreading {running}"],
     elevated: ["People are sharing {their} moments more than usual", "{their} clips are travelling further than usual"],
@@ -296,14 +309,14 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
     quiet: ["{their} newest uploads are moving more slowly than usual", "{their} latest videos are under their usual pace"],
   },
   commentary_volume_24h: {
-    unit: "videos",
+    unit: { one: "video", many: "videos" },
     spiking: ["YouTube cannot stop talking about {name}", "{name} is the subject of the day on YouTube"],
     concrete: ["{count} about {name} on YouTube — {comparison}", "YouTube is talking about {name} {running}"],
     elevated: ["YouTube is talking about {name} more than usual", "More creators are covering {name} than usual"],
     quiet: ["YouTube has gone quieter on {name}", "Fewer creators are covering {name} than usual"],
   },
   upload_rate: {
-    unit: "uploads a day",
+    unit: { one: "upload a day", many: "uploads a day" },
     spiking: ["{name} is uploading at a tear", "{their} upload schedule has gone into overdrive"],
     concrete: ["{name} is uploading {running}", "{their} upload cadence is running {running}"],
     elevated: ["{name} is uploading more often than usual", "{their} upload schedule has picked up"],
@@ -313,7 +326,7 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
     // Observe-only since Phase 21 (a sum over a changing basket of uploads),
     // so it emits nothing today. Written for the day the connector gives it a
     // basket-stable definition.
-    unit: "comments",
+    unit: { one: "comment", many: "comments" },
     spiking: ["{their} comment sections have erupted", "Viewers are flooding {their} comments"],
     concrete: ["{their} comment sections are running {running}", "Comments on {their} videos are running {running}"],
     elevated: ["{their} comment sections are busier than usual", "Viewers are commenting more than usual on {name}"],
@@ -328,21 +341,21 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
     quiet: ["Follower growth has slowed for {name}", "{name} is gaining followers more slowly than usual"],
   },
   stream_hours_7d: {
-    unit: "hours",
+    unit: { one: "hour", many: "hours" },
     spiking: ["{name} has barely been offline", "{name} is living on stream this week"],
     concrete: ["{name} streamed {count} this week — {comparison}", "{name} has been live {running}"],
     elevated: ["{name} has been live more than usual", "Longer week on stream than usual for {name}"],
     quiet: ["{name} has been live less than usual", "Shorter week on stream than usual for {name}"],
   },
   stream_days_7d: {
-    unit: "days",
+    unit: { one: "day", many: "days" },
     spiking: ["{name} has streamed almost every day", "{name} is on a streaming run"],
     concrete: ["{name} was live on {count} this week — {comparison}", "{name} is streaming {running}"],
     elevated: ["{name} is streaming on more days than usual", "{name} has been on more often than usual"],
     quiet: ["{name} is streaming on fewer days than usual", "{name} has been on less often than usual"],
   },
   clips_per_stream_hour: {
-    unit: "clips an hour",
+    unit: { one: "clip an hour", many: "clips an hour" },
     spiking: ["{their} stream is getting clipped constantly", "Clips are pouring off {their} stream"],
     concrete: ["{count} off {their} stream — {comparison}", "{their} stream is getting clipped {running}"],
     elevated: ["{their} stream is getting clipped more than usual", "More clip-worthy stream than usual for {name}"],
@@ -360,7 +373,7 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
 
   // --- American football ---------------------------------------------------
   game_passing_yards: {
-    unit: "yards",
+    unit: { one: "yard", many: "yards" },
     spiking: ["{name} put up a huge passing game", "{name} threw the ball all over the field"],
     concrete: ["{count} through the air for {name} — {comparison}", "{name} is throwing the ball {running}"],
     elevated: ["{name} is throwing for more than usual", "Bigger passing game than usual for {name}"],
@@ -373,7 +386,7 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
     quiet: ["{name} is rating below their usual", "Off day by {their} standards"],
   },
   game_interceptions: {
-    unit: "interceptions",
+    unit: { one: "interception", many: "interceptions" },
     spiking: ["{name} is giving the ball away", "Turnovers are piling up on {name}"],
     concrete: ["{count} thrown by {name} — {comparison}", "{name} is throwing interceptions {running}"],
     elevated: ["{name} is throwing more interceptions than usual", "Looser with the ball than usual for {name}"],
@@ -417,14 +430,24 @@ export function spanWords(hours: number): string {
   return weeks <= 14 ? `${weeks} weeks` : `${Math.round(hours / 720)} months`;
 }
 
+/**
+ * The unit that agrees with a figure, AS IT IS DISPLAYED. English takes the
+ * singular for exactly one and the plural for everything else, zero and
+ * fractions included — "0 stories", "1 story", "1.4 stories" — so the test is
+ * the rounded figure the reader will see, never the raw value behind it.
+ */
+export function unitFor(value: number, unit: MetricUnit): string {
+  return value === 1 ? unit.one : unit.many;
+}
+
 /** A count small enough to print in a headline without tripping the privacy trigger's digit rules. */
-export function countWords(value: number, unit: string): string {
+export function countWords(value: number, unit: MetricUnit): string {
   const rounded = Math.round(value);
   // Over a thousand is said in words rather than digits: the privacy trigger
   // refuses a run of four digits in a metric headline, and it is right to —
   // "1,247 clips" is a raw level wearing a comma. "Over a thousand" is not.
-  if (rounded > MAX_PLAIN_COUNT) return `over a thousand ${unit}`;
-  return `${rounded} ${unit}`;
+  if (rounded > MAX_PLAIN_COUNT) return `over a thousand ${unit.many}`;
+  return `${rounded} ${unitFor(rounded, unit)}`;
 }
 
 /**
@@ -498,10 +521,10 @@ export function metricDetail(input: MetricReadingText & { name: string; samples?
   const unit = voice.unit;
 
   if (unit && typeof input.observed === "number" && Number.isFinite(input.observed)) {
-    lines.push({ label: "Observed", value: `${formatCount(input.observed)} ${unit}` });
+    lines.push({ label: "Observed", value: countLine(input.observed, unit) });
   }
   if (unit && typeof input.baseline === "number" && Number.isFinite(input.baseline)) {
-    lines.push({ label: "Their usual pace", value: `${formatCount(input.baseline)} ${unit}` });
+    lines.push({ label: "Their usual pace", value: countLine(input.baseline, unit) });
   }
 
   const comparison = comparisonPhrase(input.observed, input.baseline);
@@ -521,7 +544,18 @@ export function possessive(name: string): string {
   return name.endsWith("s") ? `${name}'` : `${name}'s`;
 }
 
-/** A count for the expand, where the privacy trigger's headline rules do not apply but readability still does. */
+/**
+ * A count and its unit for the expand, where the privacy trigger's headline
+ * rules do not apply but readability still does. The unit agrees with the
+ * figure AFTER rounding, so a baseline of 1.02 reads "1 story" and one of 1.4
+ * reads "1.4 stories".
+ */
+function countLine(value: number, unit: MetricUnit): string {
+  const rounded = Math.round(value * 10) / 10;
+  return `${formatCount(value)} ${unitFor(rounded, unit)}`;
+}
+
+/** A count for the expand, to one decimal, thousands separated. */
 function formatCount(value: number): string {
   const rounded = Math.round(value * 10) / 10;
   return Number.isInteger(rounded) ? rounded.toLocaleString("en-US") : rounded.toFixed(1);

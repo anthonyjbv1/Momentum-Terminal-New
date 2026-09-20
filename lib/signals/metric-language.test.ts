@@ -230,9 +230,41 @@ describe("the comparison stays to the person themselves", () => {
 
 describe("a count never becomes a raw level in a headline", () => {
   it("says a four-digit count in words, because the privacy trigger refuses the digits", () => {
-    expect(countWords(1247, "clips")).toBe("over a thousand clips");
-    expect(countWords(999, "clips")).toBe("999 clips");
-    expect(countWords(12.4, "stories")).toBe("12 stories");
+    const clips = { one: "clip", many: "clips" };
+    const stories = { one: "story", many: "stories" };
+    expect(countWords(1247, clips)).toBe("over a thousand clips");
+    expect(countWords(999, clips)).toBe("999 clips");
+    expect(countWords(12.4, stories)).toBe("12 stories");
+  });
+
+  it("agrees with the figure a reader actually sees, not the value behind it", () => {
+    const stories = { one: "story", many: "stories" };
+    // Exactly one takes the singular; zero and fractions take the plural, and
+    // the test is the ROUNDED figure, because that is what is printed.
+    expect(countWords(1, stories)).toBe("1 story");
+    expect(countWords(1.4, stories)).toBe("1 story");
+    expect(countWords(0, stories)).toBe("0 stories");
+    expect(countWords(2, stories)).toBe("2 stories");
+  });
+
+  it("every unit that can be printed declares both numbers", () => {
+    for (const [metric, voice] of Object.entries(METRIC_VOICE)) {
+      if (!voice.unit) continue;
+      expect(voice.unit.one, metric).toBeTruthy();
+      expect(voice.unit.many, metric).toBeTruthy();
+      // A singular that equals its plural would be a declaration nobody
+      // finished; every unit the board runs today differs in both numbers.
+      expect(voice.unit.one, metric).not.toBe(voice.unit.many);
+    }
+  });
+
+  it("the expand agrees too, at the one decimal it prints", () => {
+    const line = (observed: number) =>
+      metricDetail({ ...BASE, metric: "news_volume_24h", label: "news volume", name: "Drake", observed, baseline: 4 }).find((l) => l.label === "Observed")?.value;
+    expect(line(1)).toBe("1 story");
+    expect(line(1.02)).toBe("1 story");
+    expect(line(1.4)).toBe("1.4 stories");
+    expect(line(0)).toBe("0 stories");
   });
 
   it("so no sentence can carry a run of four digits, a thousands grouping or a compact count", () => {
