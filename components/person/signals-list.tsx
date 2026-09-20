@@ -152,6 +152,15 @@ function SignalItem({ item, personId, loggingEnabled, renderedAt }: { item: Prof
             </Detail>
           ) : null}
           {item.kind === "signal" ? <Detail label="Engine" value={item.processed ? "Scored" : "Awaiting scoring"} /> : null}
+          {/*
+            Phase 21+: what a metric actually observed, and what it was judged
+            against. The sentence above says "3x their usual pace"; these are
+            the numbers that claim is made of, so a reader can check it rather
+            than take it. Empty for every non-metric signal.
+          */}
+          {item.detail.map((line) => (
+            <Detail key={line.label} label={line.label} value={line.value} />
+          ))}
         </dl>
       ) : null}
     </article>

@@ -1,3 +1,4 @@
+import { sentenceForPayload } from "@/lib/signals/metric-language";
 import { directionAtPrecision, type Direction } from "@/components/ui/direction-indicator";
 import { categoryLabel, categoryOptions, type CategoryOption } from "@/lib/home/board-model";
 import { formatSigned } from "@/lib/person/profile-model";
@@ -92,6 +93,13 @@ export interface FeedEvidence {
   relation: FeedEvidenceRelation;
   /** The paired person, for inverse_pair evidence; null otherwise. */
   person: { name: string; slug: string } | null;
+  /**
+   * The signal's payload when it is a METRIC, else null (Phase 21+). The
+   * display layer renders a metric's sentence and its counts from this rather
+   * than from `headline`, which is what lets a signal stored in sigma read as
+   * plain language without rewriting it.
+   */
+  payload: unknown;
 }
 
 export interface FeedEntry {
@@ -167,7 +175,46 @@ function toEvidence(value: unknown): FeedEvidence[] {
       processed: typeof record.processed === "boolean" ? record.processed : null,
       relation,
       person: relation === "inverse_pair" && personName ? { name: personName, slug: personSlug } : null,
+      payload: record.payload ?? null,
     });
+  }
+  return out;
+}
+
+/**
+ * A metric signal's headline as a reader should meet it, re-rendered from its
+ * PAYLOAD rather than read from storage (Phase 21+).
+ *
+ * The payload is the source of truth for display, and the stored string is a
+ * denormalised copy. That ordering is what carries the ~1,950 headlines
+ * written in sigma before this phase: they re-render as plain language with no
+ * stored row rewritten. For a signal written since, the two agree exactly —
+ * the same function, the same inputs, the reading's own day.
+ */
+export function evidenceHeadline(item: FeedEvidence, fallbackName: string): string {
+  const name = item.person?.name ?? fallbackName;
+  return sentenceForPayload(item.payload, name, item.occurredAt) ?? item.headline;
+}
+
+/**
+ * A narrative's sentence with any metric headline it QUOTED replaced by that
+ * headline's plain-language rendering.
+ *
+ * The Engine's template narratives quote the signal verbatim — 'X's momentum
+ * slipped on "X's news volume is running -4.5σ below their own trailing
+ * fortnight"' — so 58 of the 88 narratives on the board carry σ inside text
+ * nothing can re-derive. But the quoted string is an exact substring and the
+ * signal that produced it is linked, so swapping one for the other is a
+ * faithful substitution rather than a rewrite: the Engine still said what it
+ * said, in words the reader can use.
+ */
+export function narrativeText(text: string, evidence: FeedEvidence[], fallbackName: string): string {
+  let out = text;
+  for (const item of evidence) {
+    const rendered = evidenceHeadline(item, fallbackName);
+    if (rendered !== item.headline && item.headline.length > 0 && out.includes(item.headline)) {
+      out = out.split(item.headline).join(rendered);
+    }
   }
   return out;
 }
@@ -226,7 +273,7 @@ export function toFeedEntry(row: FeedRow): FeedEntry | null {
       kind,
       person,
       text: frameSignal(person.name, sources[0] ?? null, impact, processed),
-      quote: row.text,
+      quote: own ? evidenceHeadline(own, person.name) : row.text,
       impact,
       direction: directionAtPrecision(impact, FEED_IMPACT_DECIMALS, 0),
       scoreBefore: null,
@@ -242,7 +289,7 @@ export function toFeedEntry(row: FeedRow): FeedEntry | null {
     id: row.id,
     kind,
     person,
-    text: row.text,
+    text: narrativeText(row.text, evidence, person.name),
     quote: null,
     impact,
     direction: directionAtPrecision(impact, FEED_IMPACT_DECIMALS, 0),

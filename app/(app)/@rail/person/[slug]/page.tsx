@@ -17,7 +17,7 @@ export default async function PersonRail({ params }: { params: Params }) {
   const [person, user] = await Promise.all([getPersonBySlug(slug).catch(() => null), getCurrentUser().catch(() => null)]);
   if (!person) return null;
 
-  const signals = await getPersonSignals(person.id);
+  const signals = await getPersonSignals(person.id, person.displayName);
 
   return <SignalsList items={signals} personId={person.id} personName={person.displayName} loggingEnabled={Boolean(user)} renderedAt={getRenderedAt()} />;
 }

@@ -150,14 +150,20 @@ export const getPersonProfile = cache(async (slug: string): Promise<PersonProfil
   };
 });
 
-/** The person's newest signals and Engine narratives, merged newest first. */
-export const getPersonSignals = cache(async (personId: string): Promise<ProfileSignal[]> => {
+/**
+ * The person's newest signals and Engine narratives, merged newest first.
+ *
+ * `personName` is what a metric signal's sentence is rendered WITH: the list
+ * shows plain language built from the payload rather than the stored headline,
+ * which is how a signal written before Phase 21+ reads without its sigma.
+ */
+export const getPersonSignals = cache(async (personId: string, personName: string): Promise<ProfileSignal[]> => {
   const supabase = createSupabaseAdminClient();
 
   const [signals, narratives] = await Promise.all([
     supabase
       .from("signals")
-      .select("id, headline, occurred_at, impact_score, sentiment_label, sentiment_confidence, processed, data_sources(display_name)")
+      .select("id, headline, occurred_at, impact_score, sentiment_label, sentiment_confidence, processed, raw_payload, data_sources(display_name)")
       .eq("person_id", personId)
       .order("occurred_at", { ascending: false })
       .order("id", { ascending: false })
@@ -178,5 +184,6 @@ export const getPersonSignals = cache(async (personId: string): Promise<ProfileS
     (signals.data ?? []) as unknown as SignalRow[],
     (narratives.data ?? []) as unknown as NarrativeRow[],
     SIGNAL_LIMIT,
+    personName,
   );
 });

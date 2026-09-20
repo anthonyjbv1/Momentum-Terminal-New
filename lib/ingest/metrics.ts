@@ -1,5 +1,6 @@
 import { baselineDeviation, type BaselineDeviation } from "@/lib/engine/baseline";
 import type { RawSignal } from "@/lib/connectors/types";
+import { metricSentence } from "@/lib/signals/metric-language";
 import type { Json } from "@/types/database";
 
 /**
@@ -25,13 +26,22 @@ import type { Json } from "@/types/database";
  *   sd_floor               floor for the baseline sd, in the observation's units
  *   scale                  how strongly a sigma of this metric should read,
  *                          consumed by the metric scorer
- *   threshold_std_devs     the deadband (default 1.0σ)
+ *   threshold_std_devs     the deadband (default 2.0σ since Phase 21)
+ *   publish_observed       whether the observed quantity may reach a reader.
+ *                          EXPLICIT, default false (Phase 21+)
  *
  * The normalisation is the point. The raw level is written to the raw
  * snapshot table (service role only) and never leaves it: the signal that
  * comes out carries the direction, the normalised magnitude (sigma) and the
- * metric's metadata, and the headline says "+1.4σ above their own trailing
- * week", never a number of subscribers.
+ * metric's metadata, never a number of subscribers.
+ *
+ * Since Phase 21+ the HEADLINE is plain language rather than sigma —
+ * "12 stories on Drake today — 3x their usual pace" — written by
+ * lib/signals/metric-language.ts. σ stays in the payload for the Engine and
+ * the operator console, and reaches no reader. A metric whose declaration
+ * opts in with `publish_observed` also carries its observed count and the
+ * baseline pace, which is what lets the consumer app show the arithmetic
+ * instead of asking anyone to trust a statistic.
  *
  * Derived metrics (config.derived) are computed from another metric's
  * snapshot history and then normalised like any other: the upload cadence
@@ -53,6 +63,22 @@ export interface MetricConfig {
   sdFloor: number;
   scale: number;
   thresholdStdDevs: number;
+  /**
+   * Whether this metric's OBSERVED QUANTITY may reach a reader (Phase 21+).
+   *
+   * EXPLICIT, AND FALSE UNLESS DECLARED. A count of news stories and a
+   * subscriber total are different categories of fact: the first is public,
+   * small, and already visible in the Feed as the articles it counts; the
+   * second is an absolute audience level, which Phase 7 exists to keep out of
+   * a signal. Only the first may be published, and only because its
+   * declaration says so — a `level` metric added later must not start
+   * publishing its raw value because nobody thought about it.
+   *
+   * When true, `metricSignal` puts the observed value and the baseline mean
+   * in the payload so the consumer app can say "12 stories against a usual 4"
+   * rather than a sigma. When absent or false it writes neither.
+   */
+  publishObserved: boolean;
 }
 
 export type DerivedMetricKind = "rate" | "spike_count";
@@ -224,6 +250,9 @@ export function readMetricConfigs(config: Record<string, Json | undefined>): Met
           sdFloor,
           scale,
           thresholdStdDevs,
+          // Exactly true opts in. Anything else — absent, "true", 1, null —
+          // is off, because a privacy default must not be reachable by a typo.
+          publishObserved: entry.publish_observed === true,
         });
       }
     }
@@ -482,6 +511,11 @@ export const METRIC_PAYLOAD_KEYS = [
   "threshold_std_devs",
   "scale",
   "source",
+  // Phase 21+, written ONLY for a metric whose declaration carries
+  // publish_observed. This list is the outer bound the privacy trigger
+  // enforces, not a description of what every payload holds.
+  "observed",
+  "baseline",
 ] as const;
 
 export function formatSigma(sigma: number): string {
@@ -501,9 +535,20 @@ export function describeWindow(hours: number): string {
 
 /**
  * The signal for an emitted observation. Direction and normalised magnitude
- * only: the headline speaks in sigma against the person's own window and the
- * payload is limited to METRIC_PAYLOAD_KEYS. The level, the previous level,
- * the delta, the mean and the sd stay in the raw tables.
+ * only: the payload is limited to METRIC_PAYLOAD_KEYS, and the previous level,
+ * the delta and the sd stay in the raw tables.
+ *
+ * THE HEADLINE IS PLAIN LANGUAGE (Phase 21+), written by
+ * lib/signals/metric-language.ts rather than in sigma. It is stored rather
+ * than rendered on the way out because `signals.headline` is what the Engine's
+ * narrative templates quote, what memory reads and what the LLM sees — fixing
+ * the display alone would leave σ in every sentence the Engine wrote about a
+ * metric. The consumer surfaces re-render from the payload anyway, which is
+ * what carries the 1,950 headlines already stored in sigma.
+ *
+ * THE OBSERVED COUNT IS GATED. `publish_observed` on the metric's declaration
+ * decides whether the observed quantity and the baseline pace reach the
+ * payload; absent, neither does. See MetricConfig.publishObserved.
  */
 export function metricSignal(input: {
   person: { display_name: string };
@@ -519,10 +564,28 @@ export function metricSignal(input: {
   const sigma = Math.round(reading.sigma * 100) / 100;
   const sign: 1 | -1 = sigma > 0 ? 1 : -1;
   const direction = (config.polarity * sign) as 1 | -1;
-  const possessive = person.display_name.endsWith("s") ? `${person.display_name}'` : `${person.display_name}'s`;
-  const headline = `${possessive} ${config.label} is running ${formatSigma(sigma)} ${sign > 0 ? "above" : "below"} their own trailing ${describeWindow(config.baselineWindowHours)}`;
 
-  const rawPayload: Record<(typeof METRIC_PAYLOAD_KEYS)[number], unknown> = {
+  // Published only where the declaration opts in, and rounded to the precision
+  // a reader is shown: a stored headline and a later re-render of it must
+  // agree exactly, so both sides see the same numbers.
+  const published = config.publishObserved && observation.observed !== null && Number.isFinite(observation.observed) && Number.isFinite(reading.mean);
+  const observed = published ? round2(observation.observed as number) : null;
+  const baseline = published ? round2(reading.mean) : null;
+
+  const headline = metricSentence({
+    name: person.display_name,
+    metric: config.metricKey,
+    label: config.label,
+    sigma,
+    windowHours: config.baselineWindowHours,
+    observed,
+    baseline,
+    // The variant is stable per person per DAY, and the day is the reading's
+    // own — so re-rendering this signal tomorrow still produces this sentence.
+    day: observation.recordedAt.toISOString().slice(0, 10),
+  });
+
+  const rawPayload: Record<string, unknown> = {
     kind: "metric",
     metric: config.metricKey,
     label: config.label,
@@ -536,6 +599,9 @@ export function metricSignal(input: {
     threshold_std_devs: config.thresholdStdDevs,
     scale: config.scale,
     source: sourceName,
+    // Both or neither: half a comparison is a bare level, not transparency,
+    // and the privacy trigger refuses one without the other.
+    ...(published ? { observed, baseline } : {}),
   };
 
   return {
@@ -544,4 +610,8 @@ export function metricSignal(input: {
     occurredAt: observation.recordedAt,
     dedupeKey: `metric:${sourceName}:${externalIdentifier}:${config.metricKey}:${observation.recordedAt.toISOString()}`,
   };
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
 }

@@ -232,6 +232,9 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260917235241_phase16_twitch_live_mode.sql` | `live_sessions` (one broadcast per source and stream id, with its running aggregates) and `live_samples` (the live ledger), both service role only; `ingest_runs.trigger` admits `live`; the `twitch` row's `config.live` block (on, two-minute samples, the thresholds) and its two session metrics (`session_peak_viewers`, `clips_per_stream_hour`, a month of sessions, five before either says anything); `person_signal_volume()` no longer counts live moments as volume |
 | `20260919145502_phase21_metric_emission.sql` | `raw_metric_observations.outcome` admits `unchanged`, the Phase 21 emission rule's new outcome (outside the deadband, identical to the reading already on the record — suppressed, and itself on the record, which is what collapses a run to its first), with the column comment spelling out all six; the `youtube_comments` row's `comment_volume` moved out of `config.metrics` into `config.observe_only`, because the figure is a sum over a changing basket of uploads and cannot be calibrated until the connector defines it differently |
 | `20260919150046_phase21_forces_window_index.sql` | `score_events_person_created_idx` on `(person_id, created_at desc)`, the read behind the forces panel's one-hour window; the existing tick-keyed person index stays for the latest-tick read on the same page |
+| `20260919164206_phase21plus_publish_observed_gate.sql` | The metric-privacy allow-list gains `observed` and `baseline`, behind a per-metric `publish_observed` that DEFAULTS OFF, plus a rule that a signal carries both or neither; set on the six public counts (`news_volume_24h`, `company_news_volume_24h`, `viral_moment_rate`, `stream_hours_7d`, `stream_days_7d`) and NOT on `session_peak_viewers`, which is an audience size rather than a count of items. The headline digit refusal is unchanged |
+| `20260919164303_phase21plus_publish_observed_clips.sql` | `clips_per_stream_hour` opts in too: the previous migration looked for it under `config.live.metrics`, and the twitch row declares all five of its metrics under `config.metrics`. The guarded WHERE made the miss silent rather than an error |
+| `20260920000325_phase21plus_feed_entries_metric_payload.sql` | `feed_entries()` carries each METRIC signal's payload inside its `evidence` objects (null for events, whose payloads hold publisher-resolution detail). A `create or replace` rather than a drop: the key goes inside a column that is already `jsonb`, so the signature, the grants and the keyset pagination are untouched |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
 
@@ -951,6 +954,7 @@ The normalisation is the point. What each metric means is declared on its `data_
 | `sd_floor` | floor for the baseline sd, in the observation's units, so a flat history cannot make a small move many sigma |
 | `scale` | how strongly a sigma of this metric reads (the metric scorer multiplies by it) |
 | `threshold_std_devs` | the deadband, default **2.0σ** (raised from 1.0 in Phase 21; see [Metric emission](#metric-emission-phase-21)) |
+| `publish_observed` | whether the observed count may reach a reader. **Explicit, default false** (Phase 21+): set on small public counts, never on an audience level |
 
 `config.derived` declares metrics computed from another metric's snapshot history with no connector of their own: `upload_rate` (`kind: rate`: the change in `video_count` over the trailing week, per day, once the history spans the window) and `viral_moment_rate` (`kind: spike_count`: how many `news_volume_24h` readings in the trailing week sat two sd above the week's own mean). A derived level is snapshotted and normalised like any other.
 
@@ -2092,6 +2096,142 @@ one decimal the headline prints — concentrated in Elon Musk (4) and Kendrick
 Lamar (4). That residue is exactly what a Feed-level rule would catch, and it
 is now a rounding artifact rather than a repeated fact.
 
+## Signal language: no σ, and a voice per metric (Phase 21+)
+
+Every metric said one sentence: *"Drake's viral-moment frequency is running
++2.8σ above their own trailing fortnight."* Three faults. σ is a derived
+statistic a casual reader cannot check. "Their own trailing fortnight" is not a
+phrase anyone says. And one template across sixteen metrics was most of why the
+Feed read mechanical.
+
+`lib/signals/metric-language.ts` is the replacement, and it is **display only**:
+it is handed a reading that has already been judged and chooses words for it.
+`metric-language.scoring.test.ts` asserts that publishing a count changes the
+words and nothing the Engine reads — same sigma, same confidence, same anomaly
+band, same dedupe key.
+
+### σ is gone, and the counts underneath replace it
+
+The raw counts are **more** transparent, not less: *"12 stories today against a
+usual 4"* is checkable by anyone with the Feed in front of them, where +2.8σ is
+checkable by nobody. So the expand shows the observed quantity, the person's own
+pace, how they compare, and the window and sample size behind it. σ stays in the
+operator console, where the statistic is the point.
+
+That needed two keys the Phase 7 allow-list did not carry, so the boundary was
+widened by exactly two and a **gate** was put in front of them.
+`publish_observed` is per metric, **explicit, and false unless declared** — a
+count of news stories and a subscriber total are different categories of fact,
+and the second is what Phase 7 exists to keep out of a signal. Six metrics opt
+in: `news_volume_24h`, `company_news_volume_24h`, `viral_moment_rate`,
+`stream_hours_7d`, `stream_days_7d`, `clips_per_stream_hour`. Ten do not.
+
+**`session_peak_viewers` is deliberately out**, though it is a Twitch session
+metric and a `level`: peak concurrent viewers is an audience *size*, the same
+category as a subscriber total measured instantaneously rather than
+cumulatively. It keeps a register-only sentence and publishes no number. The
+four audience metrics (`subscriber_count`, `view_count`, `recent_video_views`,
+`follower_count`) cannot publish a total by any route — each is a
+`relative_rate`, so its observed quantity is a growth rate — and the privacy
+test pins both facts.
+
+The **headline digit refusal is unchanged**. A metric headline still may not
+carry a run of four digits, a thousands grouping or a compact count, and that is
+solved in the phrasing rather than by relaxing the rule: the language layer says
+"over a thousand clips" past 999, and "over 100x their usual pace" where the
+multiple itself would run to four digits — 45,000 stories against a usual 4 is
+"11250x", which is a raw level wearing an x.
+
+### Register follows magnitude, deterministically
+
+The voice is a function of the reading, never a random draw, so the same reading
+always produces the same words and a reader learns that "spiking" means more
+than "running hot" without being taught. Where a band holds several variants the
+choice is an FNV-1a hash of the person, the day and the metric, so a refresh
+cannot change the sentence under someone and a stored headline always matches a
+later re-render of itself.
+
+| Band | Register | Example |
+| --- | --- | --- |
+| **≥ 3.5σ** | momentum-native, because something is genuinely happening | *Attention on Drake is spiking* |
+| **2.5–3.5σ** | concrete, because the number carries itself | *12 stories on Drake today — 3x their usual pace* |
+| **2.0–2.5σ** | terminal, understated for a modest reading | *Coverage of Drake is running hot* |
+| **below their own pace** | terminal throughout, and never a concrete count | *Quiet stretch for Jensen Huang* |
+
+The boundaries are the ones proposed, kept because the board's own readings
+divide evenly across them: of the 458 readings in the seven days to 2026-09-19
+that clear the 2.0σ deadband, **34.5%** sit below pace, **27.5%** in 2.0–2.5,
+**21.6%** in 2.5–3.5 and **16.4%** above 3.5. No band is starved and none
+swallows the others, which is what a register scheme needs — a boundary that
+fired twice a week would teach a reader nothing.
+
+Bands read the **sign of the reading**, not the direction of its score impact.
+They coincide for every metric today (all declare polarity +1) and must not be
+conflated: a low reading is described as low whatever it does to the score. A
+reading below pace is terminal at **every** magnitude, because a concrete low
+count reads as an accusation — "four stories today against a usual twelve" says
+something about the person that "quiet week" does not.
+
+### Multiples above 2x, percentages below
+
+2x and over becomes a multiple rounded to the nearest half ("3x", "2.5x"); under
+2x becomes a percentage, because "1.3x their baseline" reads worse than "up
+30%". A reading **below** pace never takes a decimal multiple — "0.3x their
+baseline" is unreadable — and becomes a fraction where one lands near it ("a
+third of their usual pace") or a percentage otherwise. "Pace" throughout, never
+"average" or "baseline": a pace is a rate over time, which is what is being
+measured, and the other two sound like a report card.
+
+Two grammatical shapes are kept because one phrase cannot do both jobs:
+`standalone` follows a dash, `running` follows a progressive verb — which is why
+a multiple carries "at" in the second ("is running at 3x their usual pace") and
+not the first.
+
+### The comparison stays to the person, without guessing anyone's pronouns
+
+"For him" was doing real work: it is what makes the comparison fair, since Drake
+is measured against Drake and not against MrBeast. That survives — carried by
+naming the person and by "their usual", and stated outright in the expand
+("Measured against: Drake's own fortnight").
+
+It is **not** carried by he/she. The people on this board are real, `people`
+stores no pronouns, and a name does not tell you anybody's; guessing would
+misgender someone in production in a way "their" never does. A test asserts no
+sentence ever contains he, she, his or her. If pronouns are added to the roster
+as data, the possessive is the one place that changes.
+
+### Every metric says what it observed
+
+`METRIC_VOICE` gives each of the seventeen registered metrics its own sentences,
+per band, **written out in full**. The first attempt composed them from a noun
+phrase and a verb phrase per metric and produced *"Drake's clips and moments
+spreading just accelerated"* and *"Views on their newest uploads is elevated for
+MrBeast"*. English does not survive that kind of assembly. A test asserts no two
+metrics share a line, and that the three bands which do not depend on a number
+can always speak from the person's name alone; the concrete band, which is built
+around a number, borrows the elevated band's words when a metric publishes none.
+
+### Nothing stored was rewritten
+
+1,950 signals carry headlines written in σ, and 58 of the 88 narratives quote
+one verbatim — the Engine's template is *X's momentum slipped on "…"*, so the σ
+sits inside text nothing can re-derive.
+
+Rather than rewrite production rows, **the payload became the source of truth for
+display and the stored string a denormalised copy**. `feed_entries()` carries
+each metric signal's payload inside its `evidence` objects, so the Feed
+re-renders the sentence from the reading; the quoted headline inside a narrative
+is an exact substring with its signal linked, so swapping it for the rendering is
+a faithful substitution rather than a rewrite. Everything a historical payload
+needs — metric, label, sigma, window — has been there since Phase 7. Only the
+counts are new, so a historical entry shows the sentence and omits the
+arithmetic rather than inventing it.
+
+Ingestion also writes the new sentence into `signals.headline`, because that
+string is what the Engine's narrative templates quote, what memory reads and
+what the LLM sees. Fixing display alone would have left σ in every sentence the
+Engine wrote from that day on.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -2104,6 +2244,7 @@ is now a rounding artifact rather than a repeated fact.
 - **Phase 12+**: newest-first selection with a least-recently-served rotation across people, and memory event expiry (30 days, dated folds written as history, today's date and event ages in the person block).
 - **Phase 13**: publisher-direct feeds — the `publisher_feeds` catalogue read as one shared fetch per run, whole-word name matching scoped by topic, undated items refused, per-feed health and discovery written back onto the rows, the two news doors deduplicated as one story family with Google News kept as the fallback — and the ingestion cron at every fifteen minutes with every source interval off the multiple.
 - **Phase 13+**: athlete metrics beyond passing yards — `config.game_stats` on the API-Sports row (every per-game figure read from one request per game, each with its own anchor), `game_passer_rating` (+1) and `game_interceptions` (−1) registered beside yards with touchdowns and every composite figure refused, and the Signals force folding one source's metric signals of one moment into one reading carrying their mean, so a game is its event and its stat line and never three copies of the line.
+- **Phase 21+**: signal language — σ out of the consumer app entirely, replaced by the counts underneath it ("12 stories on Drake today — 3x their usual pace"), behind a per-metric `publish_observed` gate that is explicit and defaults off, set on six public counts and never on an audience level; register as a deterministic function of magnitude with the variant chosen by a hash of person and day, so a refresh never changes the sentence; multiples above 2x, percentages below, and never a decimal multiple for a reading below pace; a written-out voice per metric for all seventeen; the comparison to self kept by naming the person and "their usual" rather than by guessing pronouns the roster does not store; and the ~1,950 sigma headlines plus the 58 narratives quoting them re-rendered from the payload rather than rewritten in place.
 - **Phase 21**: the emission rule — a metric describes a STATE and the event is the state CHANGING, so a reading identical to the one already on the record is recorded as `unchanged` and emits nothing (an identity check at one part in a trillion, a run collapsing to its first because a suppressed repeat is itself on the record, a change and a change back both news, and a first emission after the baseline fills never suppressed); the deadband raised 1.0σ → 2.0σ with its derivation written down, since 1.0σ made "unusual" mean one reading in three; replayed together over the accumulated ledger, 1,930 emissions become 161, and 143 once `comment_volume` — a sum over a CHANGING basket of uploads, emitting on 78.2% of its observations against a baseline describing a basket that no longer exists — becomes observe-only until the connector defines it stably; and the forces panel showing each force's contribution over the last hour rather than one tick of it, because Gravity's 0.005 points a tick and Market Mood's 0.0006 cannot render at two decimals, with no force's weight or behaviour touched.
 - **Phase 19+**: Market Mood became a tide rather than a splash — the board's Signals movement read over a trailing 60 minutes (a mean across the ticks in it that moved anyone, so the scale is unchanged and only the frequency moves: non-zero on 99.8% of ticks against 3.5%, and the header figure changes 2.9 times an hour), applied as 1.41 points per hour × the person's own elapsed time exactly as Gravity applies its λ, with the rate DERIVED from the measured 21.27× rise in firing so the force's gross contribution is held where it was (−0.3%; net drift +23.7%, stated not hidden) and a cadence change can no longer re-level the board; the banner's Mood indicator wired to a real reading for the first time; and a displayed 0.00 never coloured again, on the five forces, the signals list, the Feed's evidence and the feed model, plus a "+0.00" that `formatChange` was printing.
 - **Phase 19**: Forecast, the crowd layer, capture and display — the Forecast section below the five forces (▲ Rising / ▼ Falling with one of seven reason tags, the split and top reasons once five votes exist, the count alone below that, an invitation with none), `forecast_votes` with the score at vote time, one active vote per user per person with supersede-not-delete history, select-own RLS and no client writes, `cast_forecast_vote()` with a 20-distinct-people-an-hour rate limit and the per-person `forecast_paused` kill switch, `forecast_summary()` returning aggregates only, the Rising / Falling buttons in the Buy / Sell styling, the `cast_forecast` event, the paper balance removed from the mobile header — and the Forecast force at weight 0.00, read by nothing, pinned by two zero-influence tests.

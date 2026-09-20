@@ -1,3 +1,4 @@
+import { detailForPayload } from "@/lib/signals/metric-language";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -15,6 +16,8 @@ import {
   toFeedEntry,
   type FeedEntry,
   type FeedRow,
+  evidenceHeadline,
+  narrativeText,
 } from "./feed-model";
 import { chronologicalRanker, rankFeed } from "./ranking";
 
@@ -193,5 +196,62 @@ describe("ranking", () => {
     const entries = [entry({ id: "old", occurredAt: iso(NOW - 5000) }), entry({ id: "new", occurredAt: iso(NOW) }), entry({ id: "mid", occurredAt: iso(NOW - 1000) })];
     expect(rankFeed(entries, { now: NOW }).map((item) => item.id)).toEqual(["new", "mid", "old"]);
     expect(rankFeed(entries, { now: NOW }, chronologicalRanker)).toEqual(rankFeed(entries, { now: NOW }));
+  });
+});
+
+describe("a metric signal reads as plain language, whenever it was stored (Phase 21+)", () => {
+  /** A payload as Phase 7 wrote them: everything but the counts, which came later. */
+  const historical = {
+    kind: "metric", metric: "news_volume_24h", label: "news volume",
+    sigma: -4.5, direction: -1, polarity: 1, samples: 312, min_samples: 24,
+    window_hours: 336, delta_kind: "level", threshold_std_devs: 1, scale: 1, source: "rss",
+  };
+  /** The same reading written since the gate opened. */
+  const current = { ...historical, sigma: 2.9, direction: 1, observed: 12, baseline: 4 };
+
+  const evidence = (payload: unknown, headline: string) => ({
+    id: "s1", headline, source: "RSS", impact: -0.4, occurredAt: "2026-09-19T12:00:00Z",
+    sentiment: null, confidence: null, processed: true, relation: "direct" as const, person: null, payload,
+  });
+
+  it("re-renders a headline stored in sigma, without rewriting the stored row", () => {
+    const stored = "Mark Zuckerberg's news volume is running -4.5σ below their own trailing fortnight";
+    const item = evidence(historical, stored);
+    const shown = evidenceHeadline(item, "Mark Zuckerberg");
+    expect(shown).not.toContain("σ");
+    expect(shown).toContain("Mark Zuckerberg");
+    // The stored string is untouched; the payload is what display reads.
+    expect(item.headline).toBe(stored);
+  });
+
+  it("substitutes the quoted headline inside a narrative the Engine already wrote", () => {
+    // 58 of the 88 narratives on the board are this exact shape: a template
+    // that quotes the signal verbatim, so the sigma is inside text nothing can
+    // re-derive. The quote is an exact substring, so swapping it is faithful.
+    const stored = "Mark Zuckerberg's news volume is running -4.5σ below their own trailing fortnight";
+    const text = `Mark Zuckerberg's momentum slipped on "${stored}".`;
+    const out = narrativeText(text, [evidence(historical, stored)], "Mark Zuckerberg");
+    expect(out).not.toContain("σ");
+    expect(out).toContain("Mark Zuckerberg's momentum slipped on");
+    expect(out.startsWith("Mark Zuckerberg's momentum slipped on")).toBe(true);
+  });
+
+  it("leaves an event signal's headline exactly as observed", () => {
+    const item = evidence(null, "MrBeast opens a theme park in Kansas");
+    expect(evidenceHeadline(item, "MrBeast")).toBe("MrBeast opens a theme park in Kansas");
+    expect(narrativeText('He moved on "MrBeast opens a theme park in Kansas".', [item], "MrBeast")).toContain("theme park");
+  });
+
+  it("shows the counts for a metric that publishes them, and none for one that does not", () => {
+    const withCounts = detailForPayload(current, "Drake");
+    expect(withCounts.map((line) => line.value)).toContain("12 stories");
+    expect(withCounts.map((line) => line.value)).toContain("4 stories");
+    expect(withCounts.some((line) => line.value.includes("3x their usual pace"))).toBe(true);
+
+    // A historical payload has no counts: the sentence still renders, the
+    // arithmetic is simply absent rather than invented.
+    const withoutCounts = detailForPayload(historical, "Drake");
+    expect(withoutCounts.some((line) => line.label === "Observed")).toBe(false);
+    expect(withoutCounts.some((line) => line.value.includes("fortnight"))).toBe(true);
   });
 });

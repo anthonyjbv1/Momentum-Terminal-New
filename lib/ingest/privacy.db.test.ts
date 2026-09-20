@@ -560,12 +560,96 @@ describe("the application", () => {
     expect(readers).toEqual(["lib/ingest/store.ts"]);
   });
 
-  it("selects raw_payload from signals only where the Engine scores and the runner writes", () => {
+  it("selects raw_payload from signals only where the Engine scores, the runner writes, or a METRIC is rendered", () => {
+    // Phase 7 let no user-facing file touch raw_payload at all. Phase 21+ has
+    // the consumer app render a metric signal's sentence and its counts FROM
+    // the payload, which is what carries the headlines stored in sigma. So the
+    // rule narrows rather than lifts: these two files may read it, and nothing
+    // else may start to without this list being changed deliberately.
+    //
+    // What makes it safe is the layer beneath: signals_enforce_metric_privacy
+    // allow-lists a metric payload's keys, so "the payload" is already the
+    // safe subset, and the two tests below hold that shut.
     const root = join(__dirname, "..", "..");
+    const allowed = ["lib/person/profile-model.ts", "lib/person/profile.ts"];
     const selectors = sourceFiles(root)
       .filter((file) => /^(app|components|lib\/(feed|person|home|portfolio))\//.test(relative(root, file)))
       .filter((file) => /raw_payload|rawPayload/.test(readFileSync(file, "utf8")))
-      .map((file) => relative(root, file));
-    expect(selectors).toEqual([]);
+      .map((file) => relative(root, file))
+      .sort();
+    expect(selectors).toEqual(allowed);
+
+    // And none of them names a raw statistic column: the payload is read, the
+    // raw tables are not.
+    for (const file of allowed) {
+      const text = readFileSync(join(root, file), "utf8");
+      for (const column of ["raw_source_snapshots", "raw_metric_observations", "sd_applied", "min_samples"]) {
+        expect(text, `${file} names ${column}`).not.toContain(column);
+      }
+    }
+  });
+});
+
+/**
+ * THE GATE (Phase 21+). A metric may publish its observed count, and only if
+ * its declaration says so. These hold the two ends of that shut: the database
+ * refuses a malformed attempt, and the roster declares it on counts alone.
+ */
+describe("publish_observed", () => {
+  it("refuses a published count without the pace it is read against", async () => {
+    const [person] = await database.rows<{ id: string }>("select id from public.people limit 1");
+    const [source] = await database.rows<{ id: string }>("select id from public.data_sources where name = 'rss'");
+    const insert = (payload: Record<string, unknown>) =>
+      database.rows(
+        `insert into public.signals (person_id, data_source_id, headline, raw_payload, occurred_at)
+         values ($1, $2, 'A reading', $3::jsonb, now()) returning id`,
+        [person.id, source.id, JSON.stringify(payload)],
+      );
+    const base = { kind: "metric", metric: "news_volume_24h", label: "news volume", sigma: 2.9, direction: 1, polarity: 1, window_hours: 336, source: "rss" };
+
+    // Half a comparison is a bare level, not transparency.
+    await expect(insert({ ...base, observed: 12 })).rejects.toThrow(/observed and baseline/);
+    await expect(insert({ ...base, baseline: 4 })).rejects.toThrow(/observed and baseline/);
+    // A count that is not a number is not a count.
+    await expect(insert({ ...base, observed: "twelve", baseline: 4 })).rejects.toThrow(/observed and baseline/);
+    // Anything outside the allow-list is still refused, gate or no gate.
+    await expect(insert({ ...base, value: 12 })).rejects.toThrow(/is not allowed/);
+
+    const [ok] = await database.rows<{ id: string }>(
+      `insert into public.signals (person_id, data_source_id, headline, raw_payload, occurred_at)
+       values ($1, $2, '12 stories today', $3::jsonb, now()) returning id`,
+      [person.id, source.id, JSON.stringify({ ...base, observed: 12, baseline: 4 })],
+    );
+    expect(ok.id).toBeTruthy();
+    await database.rows("delete from public.signals where id = $1", [ok.id]);
+  });
+
+  it("is declared on public counts alone, never on an audience level", async () => {
+    const rows = await database.rows<{ metric: string; publishes: boolean; delta: string }>(`
+      select m.key as metric,
+             coalesce((m.value->>'publish_observed')::boolean, false) as publishes,
+             m.value->>'delta' as delta
+        from public.data_sources d, jsonb_each(coalesce(d.config->'metrics','{}'::jsonb)) m
+       where d.is_active
+    `);
+    const publishing = rows.filter((row) => row.publishes).map((row) => row.metric).sort();
+    expect(publishing).toEqual([
+      "clips_per_stream_hour", "company_news_volume_24h", "news_volume_24h",
+      "stream_days_7d", "stream_hours_7d", "viral_moment_rate",
+    ]);
+
+    // An audience metric cannot publish a total by ANY route: none of them
+    // opts in, and each is a relative_rate anyway, so its observed quantity is
+    // a growth rate rather than a level.
+    for (const metric of ["subscriber_count", "view_count", "recent_video_views", "follower_count"]) {
+      const row = rows.find((candidate) => candidate.metric === metric);
+      expect(row, metric).toBeDefined();
+      expect(row!.publishes, `${metric} publishes`).toBe(false);
+      expect(row!.delta, `${metric} delta`).toBe("relative_rate");
+    }
+    // Peak concurrent viewers IS a level, and is kept out by the gate alone.
+    const peak = rows.find((row) => row.metric === "session_peak_viewers");
+    expect(peak?.delta).toBe("level");
+    expect(peak?.publishes).toBe(false);
   });
 });

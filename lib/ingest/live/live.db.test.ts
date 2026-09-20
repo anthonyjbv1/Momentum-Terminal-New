@@ -65,7 +65,12 @@ describe("Twitch declares live mode", () => {
     const [{ config }] = await database.rows<{ config: { live: Record<string, unknown>; metrics: Record<string, Record<string, unknown>> } }>("select config from public.data_sources where name = 'twitch'");
     expect(config.live).toMatchObject({ enabled: true, sample_interval_minutes: 2, warmup_minutes: 20, delta_window_minutes: 10, surge_fraction: 0.2, drop_fraction: null, min_viewers: 500, cooldown_minutes: 30, clip_window_minutes: 10, burst_multiple: 3, burst_min_clips: 5, floor_clips_per_hour: 6, end_after_missed_checks: 2 });
     expect(config.metrics.session_peak_viewers).toEqual({ label: "Twitch peak live audience per stream", delta: "level", polarity: 1, baseline_window_hours: 720, min_samples: 5, sd_floor: 50, scale: 0.8 });
-    expect(config.metrics.clips_per_stream_hour).toEqual({ label: "Twitch clips per stream hour", delta: "level", polarity: 1, baseline_window_hours: 720, min_samples: 5, sd_floor: 2, scale: 1 });
+    // clips_per_stream_hour opted into publishing its count in Phase 21+: it
+    // counts public artifacts off a public stream. session_peak_viewers did
+    // not and must not — a peak audience is an audience SIZE, not a count of
+    // items, and is exactly the category Phase 7 keeps out of a payload.
+    expect(config.metrics.clips_per_stream_hour).toEqual({ label: "Twitch clips per stream hour", delta: "level", polarity: 1, baseline_window_hours: 720, min_samples: 5, sd_floor: 2, scale: 1, publish_observed: true });
+    expect(config.metrics.session_peak_viewers).not.toHaveProperty("publish_observed");
     // The Phase 10 metrics are untouched.
     expect(Object.keys(config.metrics).sort()).toEqual(["clips_per_stream_hour", "follower_count", "session_peak_viewers", "stream_days_7d", "stream_hours_7d"]);
     // No other source declares live mode.

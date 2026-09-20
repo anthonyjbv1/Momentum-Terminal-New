@@ -1,3 +1,4 @@
+import { detailForPayload, sentenceForPayload, type MetricDetailLine } from "@/lib/signals/metric-language";
 import { directionAtPrecision, directionOf, type Direction } from "@/components/ui/direction-indicator";
 
 /** Decimals a force's contribution is shown to, everywhere it is shown. Its colour follows the same rounding. */
@@ -476,6 +477,12 @@ export interface ProfileSignal {
   scoreAfter: number | null;
   /** Signals only: whether the Engine has scored it yet. */
   processed: boolean | null;
+  /**
+   * For a METRIC signal, the lines the expand shows: what was observed, the
+   * person's own pace, how they compare, and the window and sample behind it
+   * (Phase 21+). Empty for everything else.
+   */
+  detail: MetricDetailLine[];
 }
 
 export interface SignalRow {
@@ -487,6 +494,8 @@ export interface SignalRow {
   sentiment_confidence: number | string | null;
   processed: boolean | null;
   data_sources: { display_name: string } | null;
+  /** The signal's payload. For a METRIC it is what the headline and the expand are rendered from (Phase 21+). */
+  raw_payload?: unknown;
 }
 
 export interface NarrativeRow {
@@ -499,13 +508,20 @@ export interface NarrativeRow {
 
 export const ENGINE_SOURCE_LABEL = "The Engine";
 
-export function mergeSignals(signals: SignalRow[], narratives: NarrativeRow[], limit = 30): ProfileSignal[] {
+/**
+ * `personName` renders a metric signal's headline and its expand from the
+ * PAYLOAD rather than from the stored string, exactly as the Feed does — so a
+ * signal stored in sigma reads as plain language here too. Absent (a caller
+ * that has no person to hand), stored headlines are shown as they are.
+ */
+export function mergeSignals(signals: SignalRow[], narratives: NarrativeRow[], limit = 30, personName?: string): ProfileSignal[] {
   const items: ProfileSignal[] = [
     ...signals.map((row) => ({
       id: `signal:${row.id}`,
       kind: "signal" as const,
       source: row.data_sources?.display_name ?? "Unknown source",
-      headline: row.headline,
+      headline: (personName ? sentenceForPayload(row.raw_payload, personName, row.occurred_at) : null) ?? row.headline,
+      detail: personName ? detailForPayload(row.raw_payload, personName) : [],
       occurredAt: row.occurred_at,
       impact: toNullableNumber(row.impact_score),
       sentiment: row.sentiment_label ? { label: row.sentiment_label, confidence: toNullableNumber(row.sentiment_confidence) } : null,
@@ -528,6 +544,7 @@ export function mergeSignals(signals: SignalRow[], narratives: NarrativeRow[], l
         scoreBefore: before,
         scoreAfter: after,
         processed: null,
+        detail: [],
       };
     }),
   ];

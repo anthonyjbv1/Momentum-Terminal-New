@@ -254,8 +254,14 @@ describe("runIngestion", () => {
       expect(burst.sourcesRun[0]).toMatchObject({ signalsCreated: 1, metricSignals: 1, eventSignals: 0, observations: 1 });
       expect(store.signals).toHaveLength(1);
       const signal = store.signals[0];
-      expect(signal.headline).toMatch(/^MrBeast's follower growth is running \+\d+\.\dσ above their own trailing 2 days$/);
-      expect(Object.keys(signal.rawPayload).sort()).toEqual([...METRIC_PAYLOAD_KEYS].sort());
+      // Phase 21+: the stored headline is plain language, and carries no sigma.
+    expect(signal.headline).not.toMatch(/σ|trailing|baseline/i);
+    expect(signal.headline).toContain("MrBeast");
+      // The allow-list is the OUTER BOUND since Phase 21+, not an exact set:
+      // observed and baseline appear only for a metric that opts in, and
+      // `followers` does not.
+      expect(Object.keys(signal.rawPayload).every((key) => (METRIC_PAYLOAD_KEYS as readonly string[]).includes(key))).toBe(true);
+      expect(Object.keys(signal.rawPayload)).not.toContain("observed");
       expect(signal.rawPayload).toMatchObject({ kind: "metric", metric: "followers", direction: 1, polarity: 1, samples: 10, min_samples: 6, window_hours: 48, delta_kind: "relative_rate", scale: 1, source: "x" });
       expect(JSON.stringify(signal)).not.toContain("1049000");
       expect(JSON.stringify(signal)).not.toContain("40000");
@@ -372,7 +378,8 @@ describe("runIngestion", () => {
       await run(hour(i));
     }
     expect(store.signals.length).toBeGreaterThan(0);
-    expect(store.signals[0].headline).toMatch(/^MrBeast's upload cadence is running \+\d+\.\dσ above their own trailing 10 days$/);
+    expect(store.signals[0].headline).not.toMatch(/σ|trailing|baseline/i);
+    expect(store.signals[0].headline).toContain("MrBeast");
     expect(store.signals[0].rawPayload).toMatchObject({ kind: "metric", metric: "upload_rate", direction: 1, polarity: 1, delta_kind: "level" });
   });
 

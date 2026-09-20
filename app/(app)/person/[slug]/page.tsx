@@ -56,17 +56,17 @@ export default async function PersonPage({ params }: { params: Params }) {
     <div className="flex flex-col gap-10 pb-28 md:pb-0">
       <BackLink />
       <Suspense fallback={<ProfileSkeleton />}>
-        <ProfileBody slug={slug} personId={person.id} />
+        <ProfileBody slug={slug} personId={person.id} personName={person.displayName} />
       </Suspense>
     </div>
   );
 }
 
 /** Everything below the back link: the readings, streamed in once they are loaded. */
-async function ProfileBody({ slug, personId }: { slug: string; personId: string }) {
+async function ProfileBody({ slug, personId, personName }: { slug: string; personId: string; personName: string }) {
   const [profile, signals, user, settings, viewer, forecast, forecastViewer] = await Promise.all([
     getPersonProfile(slug),
-    getPersonSignals(personId),
+    getPersonSignals(personId, personName),
     getCurrentUser(),
     getPlatformSettings(),
     getViewerTradingState(personId),

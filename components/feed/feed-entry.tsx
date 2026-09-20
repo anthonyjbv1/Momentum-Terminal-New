@@ -5,9 +5,10 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { cn } from "@/lib/cn";
-import { categoryLabel, type FeedEntry as FeedEntryModel } from "@/lib/feed/feed-model";
+import { categoryLabel, type FeedEntry as FeedEntryModel, evidenceHeadline } from "@/lib/feed/feed-model";
 import { relativeTime } from "@/lib/home/relative-time";
 import { FORCE_IMPACT_DECIMALS, formatSigned } from "@/lib/person/profile-model";
+import { detailForPayload, type MetricDetailLine } from "@/lib/signals/metric-language";
 import { Avatar } from "@/components/ui/avatar";
 import { DirectionIndicator, directionAtPrecision } from "@/components/ui/direction-indicator";
 
@@ -144,6 +145,15 @@ function Detail({ entry }: { entry: FeedEntryModel }) {
           </DetailItem>
         ) : null}
         <DetailItem label="Observed" value={detailTime.format(new Date(entry.occurredAt))} />
+        {/*
+          Phase 21+: for a metric signal this is where "why did this fire"
+          gets answered in counts — what was seen, the person's own pace, and
+          the window behind it. A reader who wants the arithmetic finds it
+          here rather than being asked to trust a statistic.
+        */}
+        {detailForPayload(own?.payload, entry.person.name).map((line) => (
+          <DetailItem key={line.label} label={line.label} value={line.value} />
+        ))}
       </dl>
     );
   }
@@ -178,7 +188,24 @@ function Detail({ entry }: { entry: FeedEntryModel }) {
                   ) : null}
                   {item.source ?? "Signal"}
                 </span>
-                <span className="text-sm leading-relaxed text-fg-secondary">&ldquo;{item.headline}&rdquo;</span>
+                {/*
+                  Phase 21+: a metric's sentence is re-rendered from its
+                  payload, so a signal stored in sigma reads as plain language
+                  here. Everything else quotes its stored headline untouched.
+                */}
+                <span className="text-sm leading-relaxed text-fg-secondary">&ldquo;{evidenceHeadline(item, entry.person.name)}&rdquo;</span>
+                {(() => {
+                  const lines = detailForPayload(item.payload, item.person?.name ?? entry.person.name);
+                  return lines.length > 0 ? (
+                    <span className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-muted">
+                      {lines.map((line: MetricDetailLine) => (
+                        <span key={line.label}>
+                          <span className="text-fg-faint">{line.label}:</span> {line.value}
+                        </span>
+                      ))}
+                    </span>
+                  ) : null;
+                })()}
               </div>
               {item.impact !== null ? (
                 <span className={cn("num shrink-0 text-xs font-medium", impactTones[directionAtPrecision(item.impact, FORCE_IMPACT_DECIMALS, 0)])}>

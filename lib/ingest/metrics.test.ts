@@ -21,6 +21,7 @@ const SUBSCRIBERS: MetricConfig = {
   sdFloor: 1e-5,
   scale: 1,
   thresholdStdDevs: 1,
+  publishObserved: false,
 };
 
 /** Hourly snapshots growing by `perHour` each hour from `start`, with optional overrides per hour index. */
@@ -47,7 +48,7 @@ describe("readMetricConfigs", () => {
     expect(metrics).toEqual([
       // subscriber_count declares no threshold, so it takes the default; popularity overrides it.
       { ...SUBSCRIBERS, thresholdStdDevs: DEFAULT_THRESHOLD_STD_DEVS },
-      { metricKey: "popularity", label: "popularity", polarity: 1, delta: "level", baselineWindowHours: 720, minSamples: 48, sdFloor: 0.1, scale: 1, thresholdStdDevs: 1.5 },
+      { metricKey: "popularity", label: "popularity", polarity: 1, delta: "level", baselineWindowHours: 720, minSamples: 48, sdFloor: 0.1, scale: 1, thresholdStdDevs: 1.5, publishObserved: false },
     ]);
     expect(derived).toEqual([{ metricKey: "upload_rate", from: "video_count", kind: "rate", windowHours: 168, perHours: 24, minSpanHours: 24, spikeStdDevs: 2, spikeSdFloor: 0.5, minSourceSamples: 24 }]);
   });
@@ -291,15 +292,23 @@ describe("metricSignal", () => {
   const history = series(1_000_000, 100, 48);
   const burst = observeMetric({ metricKey: "subscriber_count", config: SUBSCRIBERS, history, current: { value: history[47].value + 5_000, recordedAt: hour(48) } });
 
-  it("speaks in sigma against the person's own window and carries direction and magnitude only", () => {
+  it("speaks PLAIN LANGUAGE and carries direction and magnitude only", () => {
     const signal = metricSignal({ person: { display_name: "MrBeast" }, sourceName: "youtube", externalIdentifier: "UCX6OQ3DkcsbYNE6H8uQQuVA", observation: burst });
-    expect(signal.headline).toMatch(/^MrBeast's YouTube subscriber growth is running \+\d+\.\dσ above their own trailing week$/);
+    // Phase 21+: the stored headline is the sentence a reader sees, because
+    // it is also what the Engine's narrative templates quote and what memory
+    // reads. σ lives in the payload, for the Engine and the operator console.
+    expect(signal.headline).not.toMatch(/σ|sigma|trailing|baseline/i);
+    expect(signal.headline).toContain("MrBeast");
     expect(signal.headline).not.toMatch(/\d{4,}|\d{1,3}(,\d{3})+|\d(\.\d+)?\s?[KMB]\b/);
     expect(signal.occurredAt).toEqual(hour(48));
     expect(signal.dedupeKey).toBe(`metric:youtube:UCX6OQ3DkcsbYNE6H8uQQuVA:subscriber_count:${hour(48).toISOString()}`);
-    expect(Object.keys(signal.rawPayload).sort()).toEqual([...METRIC_PAYLOAD_KEYS].sort());
     expect(signal.rawPayload).toMatchObject({ kind: "metric", metric: "subscriber_count", direction: 1, polarity: 1, samples: 48, min_samples: 24, window_hours: 168, delta_kind: "relative_rate", scale: 1, source: "youtube" });
     expect(signal.rawPayload.sigma).toBeCloseTo(burst.reading!.sigma, 2);
+    // Every key is allow-listed, and subscriber_count does not opt in, so no
+    // observed quantity travels with it.
+    expect(Object.keys(signal.rawPayload).every((key) => (METRIC_PAYLOAD_KEYS as readonly string[]).includes(key))).toBe(true);
+    expect(signal.rawPayload).not.toHaveProperty("observed");
+    expect(signal.rawPayload).not.toHaveProperty("baseline");
     // None of the underlying numbers travel: the level, the previous level, the delta, the mean, the sd.
     const serialized = JSON.stringify(signal);
     for (const forbidden of [String(burst.value), String(burst.previous), String(burst.delta), "mean", "sd", "value", "previous", "delta\""]) {
@@ -307,13 +316,40 @@ describe("metricSignal", () => {
     }
   });
 
-  it("direction is the declared polarity times the sign of the move", () => {
+  it("publishes the observed count ONLY for a metric whose declaration opts in", () => {
+    const countable: MetricConfig = { ...SUBSCRIBERS, metricKey: "news_volume_24h", label: "news volume", delta: "level", baselineWindowHours: 336, sdFloor: 1, publishObserved: true };
+    const steady = Array.from({ length: 40 }, (_, i) => ({ value: 4 + (i % 2), recordedAt: hour(i) }));
+    const surge = observeMetric({ metricKey: "news_volume_24h", config: countable, history: steady, current: { value: 12, recordedAt: hour(40) } });
+    const signal = metricSignal({ person: { display_name: "Drake" }, sourceName: "rss", externalIdentifier: "x", observation: surge });
+
+    expect(signal.rawPayload.observed).toBe(12);
+    expect(typeof signal.rawPayload.baseline).toBe("number");
+    // The same reading, the same metric, publication off: no count either way.
+    const gated = metricSignal({
+      person: { display_name: "Drake" },
+      sourceName: "rss",
+      externalIdentifier: "x",
+      observation: observeMetric({ metricKey: "news_volume_24h", config: { ...countable, publishObserved: false }, history: steady, current: { value: 12, recordedAt: hour(40) } }),
+    });
+    expect(gated.rawPayload).not.toHaveProperty("observed");
+    expect(gated.rawPayload).not.toHaveProperty("baseline");
+  });
+
+  it("direction is the declared polarity times the sign of the move, whatever the words say", () => {
+    // The sentence describes the READING; direction describes what it does to
+    // the score. A polarity -1 metric rising is a fall, and the words still
+    // say it rose.
     const inverse = observeMetric({ metricKey: "subscriber_count", config: { ...SUBSCRIBERS, polarity: -1 }, history, current: { value: history[47].value + 5_000, recordedAt: hour(48) } });
     const signal = metricSignal({ person: { display_name: "Drake" }, sourceName: "youtube", externalIdentifier: "x", observation: inverse });
     expect(signal.rawPayload).toMatchObject({ direction: -1, polarity: -1 });
-    expect(signal.headline).toContain("above");
+    expect(signal.headline).toMatch(/gaining subscribers|piling onto/);
+
     const fall = observeMetric({ metricKey: "subscriber_count", config: SUBSCRIBERS, history, current: { value: history[47].value - 5_000, recordedAt: hour(48) } });
-    expect(metricSignal({ person: { display_name: "James" }, sourceName: "youtube", externalIdentifier: "x", observation: fall }).headline).toMatch(/^James' YouTube subscriber growth is running -\d+\.\dσ below/);
+    const falling = metricSignal({ person: { display_name: "James" }, sourceName: "youtube", externalIdentifier: "x", observation: fall });
+    expect(falling.rawPayload).toMatchObject({ direction: -1, polarity: 1 });
+    expect(falling.headline).toMatch(/slowed|more slowly/);
+    // The possessive follows one rule for the whole app.
+    expect(falling.headline).not.toContain("James's");
   });
 
   it("refuses to build a signal for anything not emitted", () => {
