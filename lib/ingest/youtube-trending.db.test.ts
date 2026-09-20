@@ -94,7 +94,11 @@ describe("the mappings", () => {
       "kai-cenat": ["UCoEmptob-eEGKk18c2VplJg"],
       // Personal AND label: the set doing the job it was widened for.
       "kendrick-lamar": ["UC3lBXcrKFnFAFkfVk5WuKcQ", "UCoYfzC2zMlc9M-Odgaf6OSg"],
-      // The channel is titled "Adin Live"; the handle @adinross and 4.62M subscribers make it his.
+      // NOT A DEFECT, though it reads as one: this channel is titled "Adin
+      // Live" and not "Adin Ross". Two independent confirmations of ownership
+      // — it holds the handle @AdinRoss, and it lists kick.com/adinross among
+      // its links — verified at 4.62M subscribers. Creators routinely name a
+      // channel differently from themselves. Do not "correct" this.
       "adin-ross": ["UCey-eDTR5J6xU6pZ2f4guoA"],
       // VEVO ONLY. @Drake resolved to a 491-subscriber namesake and was refused; see below.
       drake: ["UCQznUf1SjfDqx65hX3zRDiA"],
@@ -108,7 +112,10 @@ describe("the mappings", () => {
 
   it("leave no handle behind once its resolution has been judged: a pinned id costs nothing, a handle costs a unit a poll", async () => {
     for (const row of await mappings()) {
-      expect(row.config.handles ?? [], row.slug).toEqual([]);
+      // Drake is the one open case: @DrakeOfficial is seeded and awaiting the
+      // resolution that would pin his main channel. Everyone else is settled.
+      const expected = row.slug === "drake" ? ["@DrakeOfficial"] : [];
+      expect(row.config.handles ?? [], row.slug).toEqual(expected);
     }
   });
 
@@ -173,6 +180,7 @@ describe("the mappings", () => {
       "20260920192009_phase22_youtube_trending.sql",
       "20260920213950_phase22_trending_channel_handles.sql",
       "20260920215500_phase22_trending_pin_channel_ids.sql",
+      "20260920220000_phase22_drake_official_handle.sql",
     ]) {
       await database.exec(readFileSync(join(__dirname, "..", "..", "supabase", "migrations", file), "utf8"));
     }

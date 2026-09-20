@@ -2356,16 +2356,26 @@ earned its keep on the first one.
 | `@KendrickLamar` | `UC3lBXcrKFnFAFkfVk5WuKcQ` | Kendrick Lamar | 20,300,000 | **pinned** |
 | `@KendrickLamarVEVO` | `UCoYfzC2zMlc9M-Odgaf6OSg` | KendrickLamarVEVO | 6,830,000 | **pinned** |
 | `@DrakeVEVO` | `UCQznUf1SjfDqx65hX3zRDiA` | DrakeVEVO | 8,970,000 | **pinned** |
-| `@adinross` | `UCey-eDTR5J6xU6pZ2f4guoA` | **Adin Live** | 4,620,000 | **pinned**, discrepancy stated: the channel is titled "Adin Live", not "Adin Ross". The handle is exactly his name and 4.62M is his order of magnitude; a squatter holds neither |
+| `@adinross` | `UCey-eDTR5J6xU6pZ2f4guoA` | **Adin Live** | 4,620,000 | **pinned** — see below |
 | `@Drake` | `UCNTQH0uJzryQB4rRLGlv-Ww` | drake | **491** | **REFUSED.** Not him — a namesake or squatter holds the handle. Arming it would have credited Aubrey Graham with that person's uploads the first time one charted |
 
-**Still open, said plainly:** Drake's *main* channel is unmapped. The live fire
-caught "DRAKE - CLASSIC" at #1 from `UCByOQJjav0CUDwxCk-jVNRQ`, titled "Drake" —
-a third channel, neither the 491-subscriber `@Drake` nor DrakeVEVO — and that is
-where his music actually goes up. A channel title seen on the chart is evidence
-of a *name*, not proof of *ownership*, so it is not inferred. Closing it needs
-the handle that resolves to that id. Until then Drake keeps DrakeVEVO plus the
-title route, which is what caught the #1 video.
+**Adin Ross is not a defect, though the row reads as one.** The channel is
+titled "Adin Live" and not "Adin Ross". Ownership has two independent
+confirmations: it holds the handle `@AdinRoss`, and it lists
+`kick.com/adinross` among its links — verified, at 4.62M subscribers. Creators
+routinely name a channel differently from themselves. **Do not "correct" this
+pin.**
+
+**Drake's main channel.** `@Drake` being a 491-subscriber namesake left his
+active channel unmapped: the live fire caught "DRAKE - CLASSIC" at #1 from
+`UCByOQJjav0CUDwxCk-jVNRQ`, titled "Drake" — a third channel, neither the
+namesake nor DrakeVEVO — and that is where his music actually goes up. The
+handle is `@DrakeOfficial` (OVO owl, verified, 33.1M subscribers, links to
+ovosound.com and drakerelated.com). It is **seeded as a handle rather than
+pinned as an id**, because a channel title seen on the chart is evidence of a
+*name* and not proof of *ownership*: the id is pinned only once
+`channels.list?forHandle=@DrakeOfficial` returns that id, which is verification
+through a handle rather than inference from a sighting.
 
 **No executive is mapped**, and that is the finding rather than an omission.
 NVIDIA's channel is not Jensen Huang's and Meta's is not Zuckerberg's; mapping
