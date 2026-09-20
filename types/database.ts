@@ -635,6 +635,7 @@ export type Database = {
           target_attention: number | null
           target_direction: number | null
           forecast_paused: boolean
+          is_discoverable: boolean
           target_offset: number
         }
         Insert: {
@@ -660,6 +661,7 @@ export type Database = {
           target_attention?: number | null
           target_direction?: number | null
           forecast_paused?: boolean
+          is_discoverable?: boolean
           target_offset?: number
         }
         Update: {
@@ -685,6 +687,7 @@ export type Database = {
           target_attention?: number | null
           target_direction?: number | null
           forecast_paused?: boolean
+          is_discoverable?: boolean
           target_offset?: number
         }
         Relationships: []
@@ -2016,6 +2019,21 @@ export type Database = {
           reduce_cents: number
         }[]
       }
+      search_people: {
+        Args: { p_limit?: number; p_query: string }
+        Returns: {
+          avatar_url: string | null
+          category: string
+          change: number | null
+          current_score: number
+          display_name: string
+          id: string
+          match_rank: number
+          slug: string
+        }[]
+      }
+      search_key: { Args: { p_text: string }; Returns: string }
+      search_terms: { Args: { p_text: string }; Returns: string }
       shorting_enabled: { Args: never; Returns: boolean }
       snapshot_portfolios: {
         Args: { p_at: string; p_tick_number?: number }

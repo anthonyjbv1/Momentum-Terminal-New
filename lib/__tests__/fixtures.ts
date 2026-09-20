@@ -23,6 +23,7 @@ export function makePerson(overrides: Partial<Person> = {}): Person {
     consent_tier: 0,
     is_active: true,
     forecast_paused: false,
+    is_discoverable: true,
     created_at: "2026-09-05T00:00:00.000Z",
     last_tick_at: null,
     buy_price: 50.5,

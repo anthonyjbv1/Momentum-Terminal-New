@@ -178,9 +178,9 @@ describe("the mappings", () => {
     for (const file of [
       "20260920192009_phase22_youtube_trending.sql",
       "20260920213950_phase22_trending_channel_handles.sql",
-      "20260920215500_phase22_trending_pin_channel_ids.sql",
-      "20260920220000_phase22_drake_official_handle.sql",
-      "20260920221800_phase22_pin_drake_official.sql",
+      "20260920214752_phase22_trending_pin_channel_ids.sql",
+      "20260920215816_phase22_drake_official_handle.sql",
+      "20260920222317_phase22_pin_drake_official.sql",
     ]) {
       await database.exec(readFileSync(join(__dirname, "..", "..", "supabase", "migrations", file), "utf8"));
     }

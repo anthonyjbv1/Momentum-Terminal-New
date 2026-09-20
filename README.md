@@ -2,7 +2,7 @@
 
 A social data terminal where users take **HIGH** or **LOW** positions on individual people. Each person has a continuously updating Momentum Score driven by their observable real-world data. Users profit when a score moves in their predicted direction; the platform is the sole counterparty. The scoring system is called **the Engine**; its five forces are **Gravity**, **Signals**, **Market Mood**, **Conviction** and **Trading Activity**.
 
-> **Status: Phase 7 (metric connectors + auth gate) complete.** The whole app now sits behind a signed-in session while the test is closed (`lib/auth-gate.ts`, one file, removable in one step; robots disallowed, every response `noindex`). Four data sources are registered as data, not code — `youtube` (channel metrics and commentary volume), `youtube_comments`, `rss`, `spotify` — with MrBeast and Drake mapped; every metric a connector reads is snapshotted into a service-role-only raw table, differenced, normalised against the person's own trailing baseline (the same `lib/engine/baseline.ts` Trading Activity uses) and turned into a signal that carries **direction and sigma only**, never a level; a trigger on `signals` refuses anything more, and the metric scorer feeds the Signals force in the same units as a headline with an explicit per-metric polarity. Every poll and observation is logged; `/api/admin/health` reads per-source health and LLM cost per tick. On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation, the editorial-monochrome shell, the live Home board, the person profile page and the Feed, **trading is live, on paper**: Buy opens a HIGH position at the server-read Buy quote, Sell closes it FIFO at the Sell quote, every amount is integer cents, and every order is one atomic RPC (`place_order()`) behind a tolerance band, the long-only gate and four inert risk levers. **`/portfolio` closes the loop**: total value, cash, unrealized and realized P&L, every open position marked at the Sell quote with its weighted-average entry, a value line recorded at every tick and every trade, and the full trade history with a keyset cursor — all computed by the database in integer cents, never by the browser; a close on the portfolio routes into the same 6e trade sheet. The paper balance starts at $10,000 and the close cooldown is 60 s (one full tick and more; policy pending). `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0, every chart is honestly empty, every STATE reads Stable, every force reads idle, the Feed is quiet and the value line has only the points that orders record, and each surface says so. The profile screen, search results and the recommendation layer are later phases.
+> **Status: Phase 7 (metric connectors + auth gate) complete.** The whole app now sits behind a signed-in session while the test is closed (`lib/auth-gate.ts`, one file, removable in one step; robots disallowed, every response `noindex`). Four data sources are registered as data, not code — `youtube` (channel metrics and commentary volume), `youtube_comments`, `rss`, `spotify` — with MrBeast and Drake mapped; every metric a connector reads is snapshotted into a service-role-only raw table, differenced, normalised against the person's own trailing baseline (the same `lib/engine/baseline.ts` Trading Activity uses) and turned into a signal that carries **direction and sigma only**, never a level; a trigger on `signals` refuses anything more, and the metric scorer feeds the Signals force in the same units as a headline with an explicit per-metric polarity. Every poll and observation is logged; `/api/admin/health` reads per-source health and LLM cost per tick. On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation, the editorial-monochrome shell, the live Home board, the person profile page and the Feed, **trading is live, on paper**: Buy opens a HIGH position at the server-read Buy quote, Sell closes it FIFO at the Sell quote, every amount is integer cents, and every order is one atomic RPC (`place_order()`) behind a tolerance band, the long-only gate and four inert risk levers. **`/portfolio` closes the loop**: total value, cash, unrealized and realized P&L, every open position marked at the Sell quote with its weighted-average entry, a value line recorded at every tick and every trade, and the full trade history with a keyset cursor — all computed by the database in integer cents, never by the browser; a close on the portfolio routes into the same 6e trade sheet. The paper balance starts at $10,000 and the close cooldown is 60 s (one full tick and more; policy pending). `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0, every chart is honestly empty, every STATE reads Stable, every force reads idle, the Feed is quiet and the value line has only the points that orders record, and each surface says so. The profile screen and the recommendation layer are later phases.
 
 ## Stack
 
@@ -235,11 +235,12 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260919164206_phase21plus_publish_observed_gate.sql` | The metric-privacy allow-list gains `observed` and `baseline`, behind a per-metric `publish_observed` that DEFAULTS OFF, plus a rule that a signal carries both or neither; set on the six public counts (`news_volume_24h`, `company_news_volume_24h`, `viral_moment_rate`, `stream_hours_7d`, `stream_days_7d`) and NOT on `session_peak_viewers`, which is an audience size rather than a count of items. The headline digit refusal is unchanged |
 | `20260919164303_phase21plus_publish_observed_clips.sql` | `clips_per_stream_hour` opts in too: the previous migration looked for it under `config.live.metrics`, and the twitch row declares all five of its metrics under `config.metrics`. The guarded WHERE made the miss silent rather than an error |
 | `20260920000325_phase21plus_feed_entries_metric_payload.sql` | `feed_entries()` carries each METRIC signal's payload inside its `evidence` objects (null for events, whose payloads hold publisher-resolution detail). A `create or replace` rather than a drop: the key goes inside a column that is already `jsonb`, so the signature, the grants and the keyset pagination are untouched |
-| `20260920221800_phase22_pin_drake_official.sql` | `@DrakeOfficial` resolved to `UCByOQJjav0CUDwxCk-jVNRQ` ("Drake", 33.1M) — the same channel the 21:15 chart sighting suggested, arrived at independently — so it is pinned beside DrakeVEVO and the handle dropped. The `@Drake` refusal stands; the namesake id is pinned nowhere |
-| `20260920220000_phase22_drake_official_handle.sql` | `@DrakeOfficial` seeded as a handle rather than its id inferred from a chart sighting, plus the Adin Ross corroboration recorded (the channel is titled "Adin Live"; it holds `@AdinRoss` and lists kick.com/adinross, so the pin is not a defect to be "corrected") |
-| `20260920215500_phase22_trending_pin_channel_ids.sql` | The resolutions, judged and pinned: MrBeast, Kai Cenat, Kendrick Lamar (personal + VEVO), Adin Ross and DrakeVEVO into `channel_ids`, every `handles` key dropped so the lookup stops. `@Drake` is **refused** — it resolves to a 491-subscriber namesake, and arming it would have credited Aubrey Graham with that person's uploads; his main channel stays unmapped rather than inferred from a channel title seen on the chart |
+| `20260920222317_phase22_pin_drake_official.sql` | `@DrakeOfficial` resolved to `UCByOQJjav0CUDwxCk-jVNRQ` ("Drake", 33.1M) — the same channel the 21:15 chart sighting suggested, arrived at independently — so it is pinned beside DrakeVEVO and the handle dropped. The `@Drake` refusal stands; the namesake id is pinned nowhere |
+| `20260920215816_phase22_drake_official_handle.sql` | `@DrakeOfficial` seeded as a handle rather than its id inferred from a chart sighting, plus the Adin Ross corroboration recorded (the channel is titled "Adin Live"; it holds `@AdinRoss` and lists kick.com/adinross, so the pin is not a defect to be "corrected") |
+| `20260920214752_phase22_trending_pin_channel_ids.sql` | The resolutions, judged and pinned: MrBeast, Kai Cenat, Kendrick Lamar (personal + VEVO), Adin Ross and DrakeVEVO into `channel_ids`, every `handles` key dropped so the lookup stops. `@Drake` is **refused** — it resolves to a 491-subscriber namesake, and arming it would have credited Aubrey Graham with that person's uploads; his main channel stays unmapped rather than inferred from a channel title seen on the chart |
 | `20260920213950_phase22_trending_channel_handles.sql` | Channel ids for the trending chart: MrBeast's verified id into `channel_ids` (a **set**, so a personal and a VEVO channel never have to be chosen between) with his handle riding along once so the next poll re-resolves it rather than assuming; and `handles` for `kai-cenat` (the priority — his titles do not name him), `drake`, `kendrick-lamar` and `adin-ross`, resolved by the connector through `channels.list?forHandle=` where the API key lives. No executive mapped: a corporate channel is the company's upload schedule, not the person's |
 | `20260920192009_phase22_youtube_trending.sql` | The `youtube_trending` row (YouTube's own chart, tier 2, 25 minutes — off the multiple of fifteen and off the top of the hour, an effective half hour — and NO metrics, because a trending rank is never baselined) and a mapping for every active person keyed by display name: `channel_id` only where the board already held a verified one (MrBeast, copied from the `youtube` mapping), `match_terms` empty so a title must name the person in full, and the Phase 12+ disambiguation block inherited from the `publisher_rss` mapping, with Drake's list gaining the sitcom |
+| `20260920232615_phase23_search.sql` | `people.is_discoverable` (the Phase 23 consent flag: boolean, not null, **default false**, the forecast_paused shape at the opposite polarity) set true for the sixteen by slug, one name at a time; `search_terms()` and `search_key()`, the two immutable normalisations that make a query forgiving of case, punctuation and Latin diacritics; three partial expression indexes on `people` — its first — scoped to `is_active and is_discoverable`, so the index is the discoverable set; and `search_people(text, integer)`, security invoker, which tests the flag inside the function so a person who has not opted in is unreachable through it for any caller and at any limit |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
 
@@ -704,7 +705,8 @@ Wired to the Phase 5 client, fire-and-forget:
 | `view_person` | a card scrolls at least halfway into view, once per person (`{ source: "home" }`) |
 | `view_person` | a card is tapped (`{ source: "home_tap" }`) — the intentional click, distinct from the impression |
 | `time_spent` | for as long as a card stays visible; the client queue coalesces per person, so scrolling up and back down costs one row |
-| `search` | a query in the search sheet settles for 700 ms |
+| `search` | a query settles for 700 ms **with its results already back**, so the event carries the `result_count` the person actually saw (`{ query, result_count }`) |
+| `view_person` | a search result is opened, by Enter on the highlighted row or by tap (`{ source: "search" }`) |
 
 Logging is skipped entirely when nobody is signed in, since the log endpoint would reject those events anyway.
 
@@ -2444,6 +2446,112 @@ complete days and every person was at one or two, so it was already 1.0 for
 everyone; the restart moves its engagement out by about three days and changes
 no current score.
 
+## Search, and who may be found (Phase 23)
+
+Search is the first surface a beta invitee touches, and the first thing most
+people type is their own name. That fact decided two things about this phase.
+
+**The consent flag comes first, and it ships off.** `people.is_discoverable`
+is a boolean, not null, default **false** — the same shape as
+`forecast_paused` at the opposite polarity, which is the precedent for a
+per-person switch of exactly this kind. Every privacy gate in this codebase
+ships off and must be opted into (`publish_observed`, `forecast_paused`,
+`shorting_enabled`, the drift flag), and being listed under your own name as
+something with a score is a heavier thing to be opted into than any of them.
+The sixteen current subjects are turned on **in the migration, by slug, one
+name at a time** rather than by a `where is_active` sweep or a "public figure"
+branch in application code: an explicit list is a record of a decision, and
+the seventeenth person starts off until somebody writes their slug down the
+same way.
+
+**Enforcement is one predicate, and it is in the database.** The flag is
+tested inside `search_people()` itself, so a person who has not opted in is
+not reachable through the RPC at all: not by a different spelling, not by a
+larger limit, not by a caller holding the service role. `lib/search/search.ts`
+reads through the admin client — RLS bypassed — and still sees only the
+discoverable, which is the property the tests assert directly.
+
+**A connections tier extends this without reshaping it.** `is_discoverable`
+stays the outer gate (off means unreachable, full stop); the tier arrives as a
+second column that can only narrow within it, plus one more conjunct in the
+same gate block:
+
+```sql
+alter table public.people add column discoverable_to text not null
+  default 'everyone' check (discoverable_to in ('everyone', 'connections'));
+
+-- inside search_people(), beside the flag:
+and (p.discoverable_to = 'everyone'
+     or exists (select 1 from public.connections c
+                 where c.person_id = p.id and c.user_id = (select auth.uid())))
+```
+
+No existing row changes meaning, the partial indexes stay valid because their
+predicate is the boolean, the returned columns are unchanged and no call site
+moves. It is also why `search_people()` is **security invoker** rather than
+definer: it runs as the caller, so `auth.uid()` is the connected user's —
+exactly what a connections check needs and exactly what a definer function
+would have thrown away.
+
+**Forgiving of case and punctuation** means two immutable normalisations, both
+indexable. `search_terms()` reduces a string to lowercase space-separated
+words with the Latin diacritics folded (`'Jen-Hsun Huang'` → `jen hsun
+huang`); `search_key()` drops the separators too (`jenhsunhuang`), so
+"Kai Cenat", "kai-cenat", "KaiCenat" and "@kaicenat" all land on the same
+string. The terms form is what lets "cenat" be recognised as the start of a
+word rather than a fragment; the key form is what makes the handle and the
+name the same query. Folding uses `translate()` over an explicit pair list
+rather than `unaccent()`, which is an extension, is not immutable, and so
+cannot appear in an index expression. One consequence worth stating: because
+`search_key()` emits only `[a-z0-9]`, interpolating a needle into a `LIKE`
+pattern is safe — no `%`, `_` or backslash survives normalisation.
+
+Matches are ranked by the database, not the client: the name exactly, the name
+starting with it, a word of the name, a word of the full name, anywhere in the
+name, anywhere in the full name or slug — then score descending, then name,
+then id, which is the board's own total order, so two identical calls return
+identical lists. `change` comes back on the same row, derived over the
+trailing hour the way `home_momentum()` derives it, so a result row and the
+board cannot show different directions for the same person.
+
+**What breaks first, and roughly when.** Sixteen rows today. The anchored half
+of the match rides the three partial expression indexes — the first indexes
+`people` has ever carried. The contains half ("beast" inside "mrbeast") cannot:
+a b-tree answers `'needle%'` and nothing else, so those branches scan the
+discoverable set. That is what gives first, and it gives by getting slow, not
+by getting wrong. A few hundred people is nothing; it stays comfortable into
+the low tens of thousands; somewhere past roughly 50k discoverable people the
+fix is `pg_trgm` — a GIN index on the same `search_key()` expressions turns
+the contains branch into an index scan without changing one match rule or one
+returned column. It is deliberately not installed now: the local test harness
+runs stock Postgres with no extensions, and sixteen rows do not need it. The
+`change` join is bounded per matched person (25 people × 240 rows), so it
+grows with tick density rather than with the roster.
+
+**The words.** Two states, two different jobs, both in
+`lib/search/search-model.ts` where a test can read them.
+
+Before anything is typed:
+
+> **Find a person.**
+> Type a name or a handle. Everyone here carries a score that moves with what
+> happens to them — open a result to see what moved it.
+
+When a query finds nobody:
+
+> **No one here by that name.**
+> The list is short, and it grows one name at a time. If you were looking for
+> yourself and came up empty, that is not an oversight — nobody is on this
+> list by accident.
+
+"0 results" is a log; the second state is the one that matters, because of who
+is reading it and what they just typed. It answers the question actually being
+asked — *why am I not here* — plainly, without treating the absence as a
+malfunction and without pretending the roster is a consent register. Neither
+state quotes a count, so nothing goes stale the day the seventeenth person is
+added, and both follow the Phase 21+ rules: plain words, no jargon, no guessed
+pronouns, no σ.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -2456,6 +2564,7 @@ no current score.
 - **Phase 12+**: newest-first selection with a least-recently-served rotation across people, and memory event expiry (30 days, dated folds written as history, today's date and event ages in the person block).
 - **Phase 13**: publisher-direct feeds — the `publisher_feeds` catalogue read as one shared fetch per run, whole-word name matching scoped by topic, undated items refused, per-feed health and discovery written back onto the rows, the two news doors deduplicated as one story family with Google News kept as the fallback — and the ingestion cron at every fifteen minutes with every source interval off the multiple.
 - **Phase 13+**: athlete metrics beyond passing yards — `config.game_stats` on the API-Sports row (every per-game figure read from one request per game, each with its own anchor), `game_passer_rating` (+1) and `game_interceptions` (−1) registered beside yards with touchdowns and every composite figure refused, and the Signals force folding one source's metric signals of one moment into one reading carrying their mean, so a game is its event and its stat line and never three copies of the line.
+- **Phase 23**: search — a per-person `is_discoverable` flag that ships **off** and is switched on for the sixteen by slug in the migration, enforced inside `search_people()` so a person who has not opted in is unreachable through it for any caller and at any limit; name, full name and slug matched partially and forgivingly of case, punctuation and Latin diacritics through two immutable normalisations; ranked and tie-broken in the database on the board's own total order, with the trailing-hour change on the same row so a result and the board cannot disagree; three partial expression indexes (the first `people` has ever had) covering the anchored half and an honest note on the contains half; and the placeholder replaced by two written states, one saying what search is for and one answering what somebody who searched their own name and found nothing is really asking.
 - **Phase 22**: YouTube Trending as a signal — the official `videos.list?chart=mostPopular` read once per run and shared by all sixteen (one unit a poll, 48 a day), an APPEARANCE emitted as an event and never the rank as a metric, because a baselined opaque rank cannot be explained to counsel; deduplicated per video per subject as Phase 16 keys a broadcast; two matching routes only (the subject's own channel, or the title naming them in full through the inherited Phase 12+ exclusions) with description-only, channel-name-only, bare-surname and guessed-channel matches refused; no second event on a rank change; sentences under the Phase 21+ rules; 25-minute interval off the multiple of fifteen.
 - **Phase 21+**: signal language — σ out of the consumer app entirely, replaced by the counts underneath it ("12 stories on Drake today — 3x their usual pace"), behind a per-metric `publish_observed` gate that is explicit and defaults off, set on six public counts and never on an audience level; register as a deterministic function of magnitude with the variant chosen by a hash of person and day, so a refresh never changes the sentence; multiples above 2x, percentages below, and never a decimal multiple for a reading below pace; a written-out voice per metric for all seventeen; the comparison to self kept by naming the person and "their usual" rather than by guessing pronouns the roster does not store; and the ~1,950 sigma headlines plus the 58 narratives quoting them re-rendered from the payload rather than rewritten in place.
 - **Phase 21**: the emission rule — a metric describes a STATE and the event is the state CHANGING, so a reading identical to the one already on the record is recorded as `unchanged` and emits nothing (an identity check at one part in a trillion, a run collapsing to its first because a suppressed repeat is itself on the record, a change and a change back both news, and a first emission after the baseline fills never suppressed); the deadband raised 1.0σ → 2.0σ with its derivation written down, since 1.0σ made "unusual" mean one reading in three; replayed together over the accumulated ledger, 1,930 emissions become 161, and 143 once `comment_volume` — a sum over a CHANGING basket of uploads, emitting on 78.2% of its observations against a baseline describing a basket that no longer exists — becomes observe-only until the connector defines it stably; and the forces panel showing each force's contribution over the last hour rather than one tick of it, because Gravity's 0.005 points a tick and Market Mood's 0.0006 cannot render at two decimals, with no force's weight or behaviour touched.
@@ -2490,4 +2599,4 @@ no current score.
 
 - **Phase 8+**: connector corrections: comment digests (one signal per video per poll, the distribution and the sample size, comments as evidence only), `comment_volume` as a metric on the shared baseline, Spotify's silent path turned into a named error, the dedup threshold lowered to 0.4 with the local-TV misses pinned as tests, 17 observed domains promoted and two corporate-PR domains held at the floor by decision, and derived-metric inputs declared.
 
-Deliberately not built yet: the profile screen, search results, the Forecast force's influence (the force exists at weight 0.00 and reads nothing; the crowd's votes are captured and displayed only), and the recommendation algorithm (For You). Shorting stays switched off; the risk levers stay inert (the cooldown's rise to 60 s is a policy floor, not a calibration); and both schedules are wired behind flags — the Engine's heartbeat behind `ENGINE_CRON_ENABLED` and the fifteen-minute ingestion behind `INGEST_CRON_ENABLED`, each of which ships unset.
+Deliberately not built yet: the profile screen, the Forecast force's influence (the force exists at weight 0.00 and reads nothing; the crowd's votes are captured and displayed only), and the recommendation algorithm (For You). Shorting stays switched off; the risk levers stay inert (the cooldown's rise to 60 s is a policy floor, not a calibration); and both schedules are wired behind flags — the Engine's heartbeat behind `ENGINE_CRON_ENABLED` and the fifteen-minute ingestion behind `INGEST_CRON_ENABLED`, each of which ships unset.
