@@ -273,9 +273,14 @@ describe("the registry", () => {
     // Exhaustive on purpose: a mapping that appears without being named here is
     // a person being polled that nobody decided to poll.
     // Phase 15: the twelve who had no source read the two news doors, and only those.
+    // Phase 22: everyone reads the trending chart under their display name;
+    // the chart is one fetch shared by all, and a person it never carries gets
+    // nothing from it. Sorts last for every person ("youtube_trending").
+    const trending = (slug: string, name: string) => [{ slug, source: "youtube_trending", identifier: name }];
     const news = (slug: string, name: string) => [
       { slug, source: "publisher_rss", identifier: name },
       { slug, source: "rss", identifier: expect.stringContaining(`news.google.com/rss/search?q=%22${name.replace(/ /g, "+")}%22`) },
+      ...trending(slug, name),
     ];
     // Phase 17: an executive also reads the company they are identified with,
     // for its news VOLUME and their own Form 4s. Never for its share price,
@@ -289,6 +294,7 @@ describe("the registry", () => {
       { slug: "drake", source: "publisher_rss", identifier: "Drake" },
       { slug: "drake", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Drake%22") },
       { slug: "drake", source: "spotify", identifier: "3TVXtAsR1Inumwj472S9r4" },
+      ...trending("drake", "Drake"),
       ...executive("elon-musk", "Elon Musk", "TSLA"),
       ...executive("jeff-bezos", "Jeff Bezos", "AMZN"),
       ...executive("jensen-huang", "Jensen Huang", "NVDA"),
@@ -297,6 +303,7 @@ describe("the registry", () => {
       { slug: "kai-cenat", source: "publisher_rss", identifier: "Kai Cenat" },
       { slug: "kai-cenat", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Kai+Cenat%22") },
       { slug: "kai-cenat", source: "twitch", identifier: "kaicenat" },
+      ...trending("kai-cenat", "Kai Cenat"),
       ...news("kendrick-lamar", "Kendrick Lamar"),
       ...executive("larry-ellison", "Larry Ellison", "ORCL"),
       ...executive("larry-page", "Larry Page", "GOOGL"),
@@ -306,9 +313,11 @@ describe("the registry", () => {
       { slug: "mrbeast", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22MrBeast%22") },
       { slug: "mrbeast", source: "youtube", identifier: "UCX6OQ3DkcsbYNE6H8uQQuVA" },
       { slug: "mrbeast", source: "youtube_comments", identifier: "UCX6OQ3DkcsbYNE6H8uQQuVA" },
+      ...trending("mrbeast", "MrBeast"),
       { slug: "patrick-mahomes", source: "apisports", identifier: "1197" },
       { slug: "patrick-mahomes", source: "publisher_rss", identifier: "Patrick Mahomes" },
       { slug: "patrick-mahomes", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Patrick+Mahomes%22") },
+      ...trending("patrick-mahomes", "Patrick Mahomes"),
       ...executive("sergey-brin", "Sergey Brin", "GOOGL"),
       ...executive("warren-buffett", "Warren Buffett", "BRK.B"),
     ]);
@@ -341,7 +350,8 @@ describe("the registry", () => {
       expect(source.poll_interval_minutes % CRON_PERIOD_MINUTES, `${source.name} polls every ${source.poll_interval_minutes} min, an exact multiple of ${CRON_PERIOD_MINUTES}`).not.toBe(0);
     }
     const byName = Object.fromEntries(active.map((source) => [source.name, source.poll_interval_minutes]));
-    expect(byName).toMatchObject({ rss: 10, publisher_rss: 10, apisports: 40, youtube: 55, youtube_comments: 55, twitch: 55 });
+    // Phase 22: 25 comes due every second fire, an effective thirty minutes — the chart's own refresh.
+    expect(byName).toMatchObject({ rss: 10, publisher_rss: 10, apisports: 40, youtube: 55, youtube_comments: 55, twitch: 55, youtube_trending: 25 });
   });
 
   it("registers every publisher feed under an allowed publisher of tier 1 to 3, with a topic and a mode", async () => {

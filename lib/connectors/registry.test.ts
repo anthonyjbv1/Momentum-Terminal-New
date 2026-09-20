@@ -6,11 +6,11 @@ import { buildRegistry, connectorRegistry, getConnector, listConnectorNames } fr
 import { createStubConnector } from "./stub";
 
 /** Every name in the data_sources seed must have a connector, and vice versa. */
-const SEEDED_SOURCE_NAMES = ["youtube", "youtube_comments", "twitch", "spotify", "forbes", "finnhub", "newsdata", "billboard", "apisports", "rss", "publisher_rss"];
+const SEEDED_SOURCE_NAMES = ["youtube", "youtube_comments", "youtube_trending", "twitch", "spotify", "forbes", "finnhub", "newsdata", "billboard", "apisports", "rss", "publisher_rss"];
 /** Implemented connectors; the rest are interface-compliant stubs. */
-const IMPLEMENTED = ["youtube", "youtube_comments", "spotify", "rss", "twitch", "apisports", "publisher_rss", "finnhub"];
+const IMPLEMENTED = ["youtube", "youtube_comments", "youtube_trending", "spotify", "rss", "twitch", "apisports", "publisher_rss", "finnhub"];
 /** Connectors that need a credential and say so. */
-const CREDENTIALED = ["youtube", "youtube_comments", "spotify", "twitch", "apisports", "finnhub"];
+const CREDENTIALED = ["youtube", "youtube_comments", "youtube_trending", "spotify", "twitch", "apisports", "finnhub"];
 
 describe("connector registry", () => {
   it("registers exactly the seeded data sources", () => {

@@ -10,6 +10,7 @@ import { twitchConnector } from "./twitch";
 import type { DataConnector } from "./types";
 import { youtubeConnector } from "./youtube";
 import { youtubeCommentsConnector } from "./youtube-comments";
+import { youtubeTrendingConnector } from "./youtube-trending";
 
 /**
  * Connector registry: data_sources.name -> implementation.
@@ -24,6 +25,7 @@ import { youtubeCommentsConnector } from "./youtube-comments";
 const ALL_CONNECTORS: readonly DataConnector[] = [
   youtubeConnector,
   youtubeCommentsConnector,
+  youtubeTrendingConnector,
   twitchConnector,
   spotifyConnector,
   forbesConnector,

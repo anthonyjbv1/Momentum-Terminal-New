@@ -235,6 +235,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260919164206_phase21plus_publish_observed_gate.sql` | The metric-privacy allow-list gains `observed` and `baseline`, behind a per-metric `publish_observed` that DEFAULTS OFF, plus a rule that a signal carries both or neither; set on the six public counts (`news_volume_24h`, `company_news_volume_24h`, `viral_moment_rate`, `stream_hours_7d`, `stream_days_7d`) and NOT on `session_peak_viewers`, which is an audience size rather than a count of items. The headline digit refusal is unchanged |
 | `20260919164303_phase21plus_publish_observed_clips.sql` | `clips_per_stream_hour` opts in too: the previous migration looked for it under `config.live.metrics`, and the twitch row declares all five of its metrics under `config.metrics`. The guarded WHERE made the miss silent rather than an error |
 | `20260920000325_phase21plus_feed_entries_metric_payload.sql` | `feed_entries()` carries each METRIC signal's payload inside its `evidence` objects (null for events, whose payloads hold publisher-resolution detail). A `create or replace` rather than a drop: the key goes inside a column that is already `jsonb`, so the signature, the grants and the keyset pagination are untouched |
+| `20260920192009_phase22_youtube_trending.sql` | The `youtube_trending` row (YouTube's own chart, tier 2, 25 minutes — off the multiple of fifteen and off the top of the hour, an effective half hour — and NO metrics, because a trending rank is never baselined) and a mapping for every active person keyed by display name: `channel_id` only where the board already held a verified one (MrBeast, copied from the `youtube` mapping), `match_terms` empty so a title must name the person in full, and the Phase 12+ disambiguation block inherited from the `publisher_rss` mapping, with Drake's list gaining the sitcom |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
 
@@ -1094,7 +1095,7 @@ The same day fixed a runner fault the failure exposed: events and metrics are tw
 
 ### Poll intervals below the hour
 
-The runner skips a source when `minutes since last poll < poll_interval_minutes`. The ingestion cron fires on its period and the previous run's poll lands a few seconds after it, so a period later the check sees a fraction **less** than the period: an interval that is an exact multiple of the period always loses that race and the source polls half as often as its interval claims. On the hourly schedule both Phase 10 rows sat off the multiple (55 for Twitch, 175 for API-Sports). Since Phase 13 the period is fifteen minutes and the rule is `poll_interval_minutes % 15 !== 0`, asserted for every active source: 10 (`rss`, `publisher_rss`) polls on every fire, 40 (`apisports`) every third, 55 (`youtube`, `youtube_comments`, `twitch`) every fourth — the hour.
+The runner skips a source when `minutes since last poll < poll_interval_minutes`. The ingestion cron fires on its period and the previous run's poll lands a few seconds after it, so a period later the check sees a fraction **less** than the period: an interval that is an exact multiple of the period always loses that race and the source polls half as often as its interval claims. On the hourly schedule both Phase 10 rows sat off the multiple (55 for Twitch, 175 for API-Sports). Since Phase 13 the period is fifteen minutes and the rule is `poll_interval_minutes % 15 !== 0`, asserted for every active source: 10 (`rss`, `publisher_rss`) polls on every fire, 25 (`youtube_trending`, Phase 22) every second, 35 (`finnhub`) every third but cycling through the quarter-hours, 40 (`apisports`) every third, 55 (`youtube`, `youtube_comments`, `twitch`) every fourth — the hour.
 
 ### Credentials
 
@@ -2232,6 +2233,137 @@ string is what the Engine's narrative templates quote, what memory reads and
 what the LLM sees. Fixing display alone would have left σ in every sentence the
 Engine wrote from that day on.
 
+## YouTube Trending as a signal (Phase 22)
+
+YouTube's trending chart is the closest thing to a real-time attention signal
+available legitimately. It refreshes about every half hour, it is national and
+non-personalised (identical for every observer, which is what makes an
+appearance reproducible), and YouTube's own ranking already weighs a video's
+performance **relative to its channel's norm** — a creator who usually draws
+ten thousand views drawing half a million is the strongest input to it. So an
+appearance is not raw popularity; it is a momentum reading YouTube computed
+across all of YouTube.
+
+`lib/connectors/youtube-trending.ts` reads it through the **official Data API
+only**: `videos.list` with `chart=mostPopular`, one quota unit a call, against
+`search.list`'s hundred (which `commentary_volume_24h` already spends).
+`charts.youtube.com` has no public API and is not scraped — that is the same
+category as the follower scrapers the board cut.
+
+### Event, not metric — and the reason is regulatory
+
+The platform's posture is that the score is a transparent, rules-based
+function of public inputs. A trending **rank** is the output of an
+undisclosed algorithm nobody here can explain or audit; a sigma built on it
+would make part of the methodology "because YouTube said so", and there is no
+way to describe a baselined opaque rank to counsel that survives the question
+"what does 2.3σ of trending position mean?". An **appearance** is a dated,
+verifiable occurrence: the video was on the chart, anyone can check. So the
+connector has no `fetchMetrics`, the source row declares no metrics, the rank
+is never snapshotted, baselined or normalised, and it reaches a reader only
+as the fact it is — "trending at #3" — the way a viewer count rides on a
+Twitch broadcast.
+
+**One signal per video per subject.** The chart is read every half hour and
+a video sits on it for hours, so the dedupe key is the video and the subject
+it is credited to (`youtube_trending:video:<id>:<slug>`), as Phase 16 keys a
+broadcast on its stream id. The subject is in the key because, unlike a
+broadcast, one video can be about two people on the board — a collaboration
+— and the source-level unique constraint would otherwise credit whichever of
+them polled first.
+
+**A rank change is not a second event.** "Entered the top ten" would make the
+rank an input to emission, which is exactly the exposure above; and it
+re-reports the same fact, which the Engine would then score twice. The rank at
+first sighting travels in the headline and the payload as an observation about
+a moment. If a later phase wants peak rank and time on chart, the right shape is
+a retrospective ledger like `live_sessions`, not a stream of events.
+
+### Matching, and what is refused
+
+Two routes, in this order, and nothing else:
+
+| route | what admits | why it is safe |
+|---|---|---|
+| **channel** | `snippet.channelId` equals the mapping's `config.channel_id` | a Drake University highlight reel cannot be on Drake's channel; no exclusion is consulted |
+| **title** | the video's **title** names the subject as whole words (`matchesTerm`, the publisher feeds' matcher: "Drake's" matches, "DrakeVEVO" and "Drakeford" do not) and the mapping's disambiguation rules do not refuse it | the rules are the Phase 12+ block on the `person_data_sources` row — the same exclusions the two news doors apply, judged by the same code — read over the title, the channel's name and the first 600 characters of the description |
+
+Refused, because a false positive here is a visible error on a consumer
+surface where a miss is nothing:
+
+- **a match in the description or tags alone.** Descriptions are keyword farms
+  (`#drake #kendrick #mrbeast`) and list collaborators and inspirations; "inspired
+  by MrBeast" is not a MrBeast appearance. The description is read for
+  *exclusion* only — the same asymmetry `disambiguation.ts` states: substring
+  matching is right for refusing and wrong for admitting.
+- **a match on the channel's name alone.** "Drake Fan Page" trending is not
+  Drake trending. (The channel's name *is* read for exclusion: "Drake University
+  Athletics" refuses a title that says only "Drake vs Iowa State".)
+- **bare surnames.** The publisher mappings admit "Musk", "Bezos", "Kendrick"
+  because a business-section feed supplies the context; the trending chart is
+  unscoped, gaming beside cooking beside news, so every seeded mapping carries
+  `match_terms: []` and a title must name the person in full. An alias is a
+  row update if one is ever wanted.
+- **a guessed channel id.** `channel_id` is set only where the board already
+  held a verified one — MrBeast's, copied from the `youtube` mapping. For the
+  others the channel route waits on a one-unit `channels.list?forHandle=`
+  lookup and a row update; until then their own uploads are caught by the title
+  route only when the title names them, which for music videos it conventionally
+  does and for a streamer's highlights often does not.
+
+The chart is fetched **once per run** and shared by every subject (a module
+cache keyed on the run's clock, as the publisher catalogue and the API-Sports
+games list are): sixteen mappings, one request.
+
+### Coverage is uneven, and that is the point
+
+A person the chart never carries is unaffected: no match, no signal, no score
+impact, no exclusion, and a poll row that says ok with nothing produced —
+asserted at the runner in `runner.trending.test.ts`. Expected firing, as priors
+to be replaced by the poll log: MrBeast most weeks (his own uploads by channel,
+collaborations and reaction videos by title); Kai Cenat, Drake, Kendrick Lamar
+and Patrick Mahomes in bursts around uploads, releases and games; Elon Musk a
+few interview and news clips a month; Zuckerberg, Bezos and Jensen Huang around
+keynotes; Warren Buffett a handful of times a year; Page, Brin, Ellison, Dell
+and the founder essentially never.
+
+### Language
+
+An event has no σ bands, so its sentences are written directly, under the
+Phase 21+ rules — no σ, the person named, "their" and never a guessed pronoun,
+and the one number a public fact anyone can check on the chart:
+
+> MrBeast is trending at #3 on YouTube: "I Survived 7 Days In Solitary Confinement".
+>
+> A video about Drake is trending at #12 on YouTube: "Drake - NOKIA (Official Music Video)", from DrakeVEVO.
+
+A video on the subject's own channel is *their* trending; a video about them
+says so and names its channel, so the two read differently at a glance. The
+payload carries the channel and the video under `channelTitle` / `videoTitle`
+/ `publishedAt` — the keys the sentiment prompt's allow-list already admits —
+so the model sees which video without the list widening; the rank reaches it
+only inside the sentence, never as a field.
+
+### Cost and cadence
+
+`poll_interval_minutes = 25`: off the multiple of fifteen, off the top of the
+hour, and every second fire of the fifteen-minute cron — an effective half hour,
+which is the chart's own refresh; polling faster buys nothing. One unit a poll
+at the default depth of 50 (four at the full 200), so **48 units a day against
+10,000**. On the Engine side a trending event is scored like any event: it joins
+the person's chunk in the next tick's call (Haiku 4.5 at ≈ 1,630 input and 240
+output tokens a call in the last seven days, ≈ $0.0028), adding roughly eighty
+input and forty output tokens — about $0.0003 — or a whole call, $0.003, when
+it is the person's only signal that tick. At the expected rate of five to
+fifteen a week board-wide that is under five cents a week, either way.
+
+One side effect stated rather than hidden: `person_signal_volume()` dates a
+person's volume regime from their **newest** mapping, so sixteen new rows
+restart every regime on the day they land. The volume weight needs seven
+complete days and every person was at one or two, so it was already 1.0 for
+everyone; the restart moves its engagement out by about three days and changes
+no current score.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -2244,6 +2376,7 @@ Engine wrote from that day on.
 - **Phase 12+**: newest-first selection with a least-recently-served rotation across people, and memory event expiry (30 days, dated folds written as history, today's date and event ages in the person block).
 - **Phase 13**: publisher-direct feeds — the `publisher_feeds` catalogue read as one shared fetch per run, whole-word name matching scoped by topic, undated items refused, per-feed health and discovery written back onto the rows, the two news doors deduplicated as one story family with Google News kept as the fallback — and the ingestion cron at every fifteen minutes with every source interval off the multiple.
 - **Phase 13+**: athlete metrics beyond passing yards — `config.game_stats` on the API-Sports row (every per-game figure read from one request per game, each with its own anchor), `game_passer_rating` (+1) and `game_interceptions` (−1) registered beside yards with touchdowns and every composite figure refused, and the Signals force folding one source's metric signals of one moment into one reading carrying their mean, so a game is its event and its stat line and never three copies of the line.
+- **Phase 22**: YouTube Trending as a signal — the official `videos.list?chart=mostPopular` read once per run and shared by all sixteen (one unit a poll, 48 a day), an APPEARANCE emitted as an event and never the rank as a metric, because a baselined opaque rank cannot be explained to counsel; deduplicated per video per subject as Phase 16 keys a broadcast; two matching routes only (the subject's own channel, or the title naming them in full through the inherited Phase 12+ exclusions) with description-only, channel-name-only, bare-surname and guessed-channel matches refused; no second event on a rank change; sentences under the Phase 21+ rules; 25-minute interval off the multiple of fifteen.
 - **Phase 21+**: signal language — σ out of the consumer app entirely, replaced by the counts underneath it ("12 stories on Drake today — 3x their usual pace"), behind a per-metric `publish_observed` gate that is explicit and defaults off, set on six public counts and never on an audience level; register as a deterministic function of magnitude with the variant chosen by a hash of person and day, so a refresh never changes the sentence; multiples above 2x, percentages below, and never a decimal multiple for a reading below pace; a written-out voice per metric for all seventeen; the comparison to self kept by naming the person and "their usual" rather than by guessing pronouns the roster does not store; and the ~1,950 sigma headlines plus the 58 narratives quoting them re-rendered from the payload rather than rewritten in place.
 - **Phase 21**: the emission rule — a metric describes a STATE and the event is the state CHANGING, so a reading identical to the one already on the record is recorded as `unchanged` and emits nothing (an identity check at one part in a trillion, a run collapsing to its first because a suppressed repeat is itself on the record, a change and a change back both news, and a first emission after the baseline fills never suppressed); the deadband raised 1.0σ → 2.0σ with its derivation written down, since 1.0σ made "unusual" mean one reading in three; replayed together over the accumulated ledger, 1,930 emissions become 161, and 143 once `comment_volume` — a sum over a CHANGING basket of uploads, emitting on 78.2% of its observations against a baseline describing a basket that no longer exists — becomes observe-only until the connector defines it stably; and the forces panel showing each force's contribution over the last hour rather than one tick of it, because Gravity's 0.005 points a tick and Market Mood's 0.0006 cannot render at two decimals, with no force's weight or behaviour touched.
 - **Phase 19+**: Market Mood became a tide rather than a splash — the board's Signals movement read over a trailing 60 minutes (a mean across the ticks in it that moved anyone, so the scale is unchanged and only the frequency moves: non-zero on 99.8% of ticks against 3.5%, and the header figure changes 2.9 times an hour), applied as 1.41 points per hour × the person's own elapsed time exactly as Gravity applies its λ, with the rate DERIVED from the measured 21.27× rise in firing so the force's gross contribution is held where it was (−0.3%; net drift +23.7%, stated not hidden) and a cadence change can no longer re-level the board; the banner's Mood indicator wired to a real reading for the first time; and a displayed 0.00 never coloured again, on the five forces, the signals list, the Feed's evidence and the feed model, plus a "+0.00" that `formatChange` was printing.
