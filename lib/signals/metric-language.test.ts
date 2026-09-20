@@ -149,6 +149,18 @@ describe("multiples above 2x, percentages below", () => {
     expect(comparisonPhrase(3, 10)?.standalone).toBe("down 70% on their usual pace");
   });
 
+  it("says nothing at all rather than 'down 100%', because zero is an absence and not a shortfall", () => {
+    // The first signal to land after Phase 21+ shipped was exactly this shape:
+    // no stories at all against a usual pace of 5.3.
+    expect(comparisonPhrase(0, 5.33)?.standalone).toBe("nothing at all against their usual pace");
+    expect(comparisonPhrase(0, 5.33)?.running).toBe("nowhere near their usual pace");
+    expect(comparisonPhrase(0, 5.33)?.standalone).not.toMatch(/100%/);
+    // And the expand says it in the reader's words, not the arithmetic's.
+    const detail = metricDetail({ ...BASE, metric: "news_volume_24h", label: "news volume", name: "Larry Ellison", sigma: -2.29, observed: 0, baseline: 5.33 });
+    expect(detail.find((line) => line.label === "Against their own pace")?.value).toBe("Nothing at all against their usual pace");
+    expect(detail.find((line) => line.label === "Observed")?.value).toBe("0 stories");
+  });
+
   it("says nothing rather than something false when a pace is zero or absent", () => {
     expect(comparisonPhrase(12, 0)).toBeNull();
     expect(comparisonPhrase(12, null)).toBeNull();

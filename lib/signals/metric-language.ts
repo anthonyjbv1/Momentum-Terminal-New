@@ -189,6 +189,12 @@ export function comparisonPhrase(observed: number | null | undefined, baseline: 
   }
   if (ratio === 1) return { standalone: "level with their usual pace", running: "level with their usual pace", ratio };
 
+  // Nothing at all is not "down 100%". A percentage describes a shortfall from
+  // something; zero is the absence of the thing, and the first live signal
+  // after Phase 21+ shipped was exactly this — Larry Ellison, no stories
+  // against a usual pace of 5.3. About 1.5% of emitted readings are zero.
+  if (ratio === 0) return { standalone: "nothing at all against their usual pace", running: "nowhere near their usual pace", ratio };
+
   // Below pace. A fraction when it lands near one, a percentage otherwise.
   const denominator = Math.round(1 / ratio);
   if (denominator >= 2 && denominator <= 5 && Math.abs(1 / ratio - denominator) <= 0.12) {
