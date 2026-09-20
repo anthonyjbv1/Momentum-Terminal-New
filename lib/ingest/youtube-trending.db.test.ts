@@ -100,8 +100,10 @@ describe("the mappings", () => {
       // its links — verified at 4.62M subscribers. Creators routinely name a
       // channel differently from themselves. Do not "correct" this.
       "adin-ross": ["UCey-eDTR5J6xU6pZ2f4guoA"],
-      // VEVO ONLY. @Drake resolved to a 491-subscriber namesake and was refused; see below.
-      drake: ["UCQznUf1SjfDqx65hX3zRDiA"],
+      // Both channels that matter, which is what the set was widened for: the
+      // active one (@DrakeOfficial, 33.1M, where releases go up) and the label
+      // catalogue (@DrakeVEVO). @Drake itself was refused; see below.
+      drake: ["UCByOQJjav0CUDwxCk-jVNRQ", "UCQznUf1SjfDqx65hX3zRDiA"],
     });
     // The singular key is gone (the connector reads a set) and every id is well formed.
     for (const row of rows) {
@@ -112,10 +114,7 @@ describe("the mappings", () => {
 
   it("leave no handle behind once its resolution has been judged: a pinned id costs nothing, a handle costs a unit a poll", async () => {
     for (const row of await mappings()) {
-      // Drake is the one open case: @DrakeOfficial is seeded and awaiting the
-      // resolution that would pin his main channel. Everyone else is settled.
-      const expected = row.slug === "drake" ? ["@DrakeOfficial"] : [];
-      expect(row.config.handles ?? [], row.slug).toEqual(expected);
+      expect(row.config.handles ?? [], row.slug).toEqual([]);
     }
   });
 
@@ -124,10 +123,10 @@ describe("the mappings", () => {
     // The namesake's id must appear nowhere: arming it would credit Aubrey
     // Graham with that person's uploads the first time one charted.
     expect(drake.config.channel_ids).not.toContain("UCNTQH0uJzryQB4rRLGlv-Ww");
-    expect(drake.config.channel_ids).toEqual(["UCQznUf1SjfDqx65hX3zRDiA"]);
-    // And his main channel, seen on the chart at #1 but never verified by
-    // handle, is NOT inferred from a channel title either.
-    expect(drake.config.channel_ids).not.toContain("UCByOQJjav0CUDwxCk-jVNRQ");
+    // His main channel IS pinned, but it arrived through @DrakeOfficial
+    // resolving to it — not through the chart sighting that suggested it. The
+    // sighting was evidence of a NAME; the resolution is evidence of OWNERSHIP.
+    expect(drake.config.channel_ids).toEqual(["UCByOQJjav0CUDwxCk-jVNRQ", "UCQznUf1SjfDqx65hX3zRDiA"]);
   });
 
   it("maps NO executive to a channel: a corporate channel is the company's upload schedule, not the person's", async () => {
@@ -181,6 +180,7 @@ describe("the mappings", () => {
       "20260920213950_phase22_trending_channel_handles.sql",
       "20260920215500_phase22_trending_pin_channel_ids.sql",
       "20260920220000_phase22_drake_official_handle.sql",
+      "20260920221800_phase22_pin_drake_official.sql",
     ]) {
       await database.exec(readFileSync(join(__dirname, "..", "..", "supabase", "migrations", file), "utf8"));
     }

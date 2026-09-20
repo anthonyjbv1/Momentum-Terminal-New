@@ -235,6 +235,8 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260919164206_phase21plus_publish_observed_gate.sql` | The metric-privacy allow-list gains `observed` and `baseline`, behind a per-metric `publish_observed` that DEFAULTS OFF, plus a rule that a signal carries both or neither; set on the six public counts (`news_volume_24h`, `company_news_volume_24h`, `viral_moment_rate`, `stream_hours_7d`, `stream_days_7d`) and NOT on `session_peak_viewers`, which is an audience size rather than a count of items. The headline digit refusal is unchanged |
 | `20260919164303_phase21plus_publish_observed_clips.sql` | `clips_per_stream_hour` opts in too: the previous migration looked for it under `config.live.metrics`, and the twitch row declares all five of its metrics under `config.metrics`. The guarded WHERE made the miss silent rather than an error |
 | `20260920000325_phase21plus_feed_entries_metric_payload.sql` | `feed_entries()` carries each METRIC signal's payload inside its `evidence` objects (null for events, whose payloads hold publisher-resolution detail). A `create or replace` rather than a drop: the key goes inside a column that is already `jsonb`, so the signature, the grants and the keyset pagination are untouched |
+| `20260920221800_phase22_pin_drake_official.sql` | `@DrakeOfficial` resolved to `UCByOQJjav0CUDwxCk-jVNRQ` ("Drake", 33.1M) — the same channel the 21:15 chart sighting suggested, arrived at independently — so it is pinned beside DrakeVEVO and the handle dropped. The `@Drake` refusal stands; the namesake id is pinned nowhere |
+| `20260920220000_phase22_drake_official_handle.sql` | `@DrakeOfficial` seeded as a handle rather than its id inferred from a chart sighting, plus the Adin Ross corroboration recorded (the channel is titled "Adin Live"; it holds `@AdinRoss` and lists kick.com/adinross, so the pin is not a defect to be "corrected") |
 | `20260920215500_phase22_trending_pin_channel_ids.sql` | The resolutions, judged and pinned: MrBeast, Kai Cenat, Kendrick Lamar (personal + VEVO), Adin Ross and DrakeVEVO into `channel_ids`, every `handles` key dropped so the lookup stops. `@Drake` is **refused** — it resolves to a 491-subscriber namesake, and arming it would have credited Aubrey Graham with that person's uploads; his main channel stays unmapped rather than inferred from a channel title seen on the chart |
 | `20260920213950_phase22_trending_channel_handles.sql` | Channel ids for the trending chart: MrBeast's verified id into `channel_ids` (a **set**, so a personal and a VEVO channel never have to be chosen between) with his handle riding along once so the next poll re-resolves it rather than assuming; and `handles` for `kai-cenat` (the priority — his titles do not name him), `drake`, `kendrick-lamar` and `adin-ross`, resolved by the connector through `channels.list?forHandle=` where the API key lives. No executive mapped: a corporate channel is the company's upload schedule, not the person's |
 | `20260920192009_phase22_youtube_trending.sql` | The `youtube_trending` row (YouTube's own chart, tier 2, 25 minutes — off the multiple of fifteen and off the top of the hour, an effective half hour — and NO metrics, because a trending rank is never baselined) and a mapping for every active person keyed by display name: `channel_id` only where the board already held a verified one (MrBeast, copied from the `youtube` mapping), `match_terms` empty so a title must name the person in full, and the Phase 12+ disambiguation block inherited from the `publisher_rss` mapping, with Drake's list gaining the sitcom |
@@ -2356,6 +2358,7 @@ earned its keep on the first one.
 | `@KendrickLamar` | `UC3lBXcrKFnFAFkfVk5WuKcQ` | Kendrick Lamar | 20,300,000 | **pinned** |
 | `@KendrickLamarVEVO` | `UCoYfzC2zMlc9M-Odgaf6OSg` | KendrickLamarVEVO | 6,830,000 | **pinned** |
 | `@DrakeVEVO` | `UCQznUf1SjfDqx65hX3zRDiA` | DrakeVEVO | 8,970,000 | **pinned** |
+| `@DrakeOfficial` | `UCByOQJjav0CUDwxCk-jVNRQ` | Drake | 33,100,000 | **pinned** — seeded after `@Drake` was refused; resolved to the same id the chart sighting suggested, which is what made it verification rather than inference |
 | `@adinross` | `UCey-eDTR5J6xU6pZ2f4guoA` | **Adin Live** | 4,620,000 | **pinned** — see below |
 | `@Drake` | `UCNTQH0uJzryQB4rRLGlv-Ww` | drake | **491** | **REFUSED.** Not him — a namesake or squatter holds the handle. Arming it would have credited Aubrey Graham with that person's uploads the first time one charted |
 
@@ -2366,16 +2369,21 @@ confirmations: it holds the handle `@AdinRoss`, and it lists
 routinely name a channel differently from themselves. **Do not "correct" this
 pin.**
 
-**Drake's main channel.** `@Drake` being a 491-subscriber namesake left his
-active channel unmapped: the live fire caught "DRAKE - CLASSIC" at #1 from
+**Drake's main channel, closed.** `@Drake` being a 491-subscriber namesake left
+his active channel unmapped: the live fire caught "DRAKE - CLASSIC" at #1 from
 `UCByOQJjav0CUDwxCk-jVNRQ`, titled "Drake" — a third channel, neither the
-namesake nor DrakeVEVO — and that is where his music actually goes up. The
-handle is `@DrakeOfficial` (OVO owl, verified, 33.1M subscribers, links to
-ovosound.com and drakerelated.com). It is **seeded as a handle rather than
-pinned as an id**, because a channel title seen on the chart is evidence of a
-*name* and not proof of *ownership*: the id is pinned only once
-`channels.list?forHandle=@DrakeOfficial` returns that id, which is verification
-through a handle rather than inference from a sighting.
+namesake nor DrakeVEVO. That sighting was evidence of a *name*, not proof of
+*ownership*, so the id was **not** pinned from it. The handle
+`@DrakeOfficial` was seeded instead, and the 22:15 poll resolved it:
+
+```
+@DrakeOfficial  ->  UCByOQJjav0CUDwxCk-jVNRQ  "Drake"  33,100,000 subscribers
+```
+
+The same id, arrived at independently — so it is pinned, alongside DrakeVEVO.
+Drake holds both channels that matter: the active one where releases go up, and
+the label catalogue. Neither had to be given up, which is what the set was
+widened for.
 
 **No executive is mapped**, and that is the finding rather than an omission.
 NVIDIA's channel is not Jensen Huang's and Meta's is not Zuckerberg's; mapping
