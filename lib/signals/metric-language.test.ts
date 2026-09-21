@@ -281,7 +281,7 @@ describe("every metric says what it observed", () => {
       "news_volume_24h", "company_news_volume_24h", "viral_moment_rate",
       "subscriber_count", "view_count", "recent_video_views", "commentary_volume_24h", "upload_rate", "comment_volume",
       "follower_count", "stream_hours_7d", "stream_days_7d", "clips_per_stream_hour", "session_peak_viewers",
-      "game_passing_yards", "game_passer_rating", "game_interceptions",
+      "game_passing_yards", "game_rating", "game_interceptions",
     ];
     for (const metric of registered) expect(METRIC_VOICE[metric], metric).toBeDefined();
 

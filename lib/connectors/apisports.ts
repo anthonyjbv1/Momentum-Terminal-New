@@ -35,10 +35,15 @@ import { ConnectorError, type DataConnector, type MetricReading, type RawSignal 
  * 184-yard, 2-TD, 1-INT, 50.2-rating line in a 31-10 win reads as mediocre on
  * yards and as a triumph in the news. Three per-game metrics are registered:
  *   game_passing_yards   volume; polarity +1
- *   game_passer_rating   the performance metric; polarity +1. The league's own
- *                        composite of completion rate, yards per attempt, TD
- *                        rate and INT rate, bounded 0–158.3, so a bad line
- *                        reads negative on its own without a second metric.
+ *   game_rating          the performance metric; polarity +1. The host's own
+ *                        `rating` figure, observed inside 0–100. It is NOT the
+ *                        league's passer rating, which Phase 13+ assumed it
+ *                        was: the host rated a 15/27, 184-yard, 2-TD, 1-INT
+ *                        line 50.2 where the league formula gives 86.0, and a
+ *                        32/47, 382-yard, 3-TD, 0-INT line 78.6 where the
+ *                        formula gives 114.0. What it IS has not been
+ *                        established — see the Phase 24 migration — so the
+ *                        key claims only what the field is called.
  *   game_interceptions   polarity −1. The one axis the rating formula dampens
  *                        (its INT term saturates), discrete, and the failure a
  *                        bad game announces itself with.
@@ -808,7 +813,15 @@ export function readGameLine(entries: unknown[], config: ApiSportsConnectorConfi
       found = result;
       break;
     }
-    if (found?.status === "ok" && (key === "passing_yards" || key === "passing_touchdowns")) line[key] = found.value;
+    if (!(key in HEADLINE_PHRASE)) {
+      // Config can point a key at a statistic; it cannot invent a clause for
+      // one, because the words are written out per key in this file.
+      missing.push(`${key} (no phrasing for it in this build)`);
+      continue;
+    }
+    if (found?.status === "ok") line[key as keyof GameLine] = found.value;
+    // An unparseable value lands here too, and should: a composite is
+    // omitted, never quoted, and the poll says which statistic it was.
     else missing.push(`${key} (group "${lookup.group}", statistic "${lookup.name}")`);
   }
   return { line, missing, names: [...names] };
@@ -817,8 +830,10 @@ export function readGameLine(entries: unknown[], config: ApiSportsConnectorConfi
 /**
  * Every statistic name and value the host carries for one player in the
  * Passing group, for the diagnostics note. Names AND values, because the
- * question this answers — is "rating" the league's passer rating or ESPN's
- * QBR? — is settled by seeing the figure beside the name.
+ * question this answered — is "rating" the league's passer rating? — was
+ * settled by seeing the figure beside the name and the line that produced it.
+ * It is not; see the Phase 24 migration. Left in place, behind
+ * config.diagnostics (off), for the next statistic whose meaning is in doubt.
  */
 function describePassing(entries: unknown[], player: string): string {
   const out: string[] = [];

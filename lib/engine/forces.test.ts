@@ -237,7 +237,7 @@ describe("Signals — one moment, one reading (Phase 13+)", () => {
   const metric = (id: string, key: string, polarity: 1 | -1, overrides: Partial<EngineSignal> = {}) =>
     signal({ id, sourceName: "apisports", sourceTier: 2, occurredAt: GAME, rawPayload: { kind: "metric", metric: key, polarity, sigma: 2, scale: 1 }, ...overrides });
   /** Mahomes, Week 1: 184 yards (a little under form), 50.2 rating (well under), 1 interception (over). */
-  const line = [metric("yards", "game_passing_yards", 1), metric("rating", "game_passer_rating", 1), metric("picks", "game_interceptions", -1)];
+  const line = [metric("yards", "game_passing_yards", 1), metric("rating", "game_rating", 1), metric("picks", "game_interceptions", -1)];
   const lineSentiments = new Map<string, SentimentResult>([
     ["yards", { label: "positive", confidence: 0.6, direction: 1 }], // +0.9
     ["rating", { label: "negative", confidence: 0.9, direction: -1 }], // −1.35
@@ -272,7 +272,7 @@ describe("Signals — one moment, one reading (Phase 13+)", () => {
   });
 
   it("without the fold the same game took three cap slots and read as √3 of one reading — the busier week that was not", () => {
-    const three = [metric("a", "game_passing_yards", 1), metric("b", "game_passer_rating", 1), metric("c", "game_interceptions", -1)];
+    const three = [metric("a", "game_passing_yards", 1), metric("b", "game_rating", 1), metric("c", "game_interceptions", -1)];
     const same = new Map<string, SentimentResult>(three.map((s) => [s.id, { label: "positive", confidence: 0.8, direction: 1 }]));
     const scored = scoreSignals(three, same, CONFIG.signals, NOW);
     const old = signalsForce(scored, { ...CONFIG.signals, oneReadingPerMetricMoment: false });
@@ -302,9 +302,9 @@ describe("Signals — one moment, one reading (Phase 13+)", () => {
     const week2 = new Date("2026-09-21T20:00:00.000Z");
     const signals = [
       metric("y1", "game_passing_yards", 1),
-      metric("r1", "game_passer_rating", 1),
+      metric("r1", "game_rating", 1),
       metric("y2", "game_passing_yards", 1, { occurredAt: week2 }),
-      metric("r2", "game_passer_rating", 1, { occurredAt: week2 }),
+      metric("r2", "game_rating", 1, { occurredAt: week2 }),
       metric("subs", "subscriber_count", 1, { sourceName: "youtube" }),
     ];
     const positive = { label: "positive" as const, confidence: 0.8, direction: 1 as const };
@@ -335,7 +335,7 @@ describe("Signals — one moment, one reading (Phase 13+)", () => {
   it("happens before the source cap, so the fold and the cap compose: four moments of one source keep three", () => {
     const moments = [0, 1, 2, 3].map((week) => {
       const at = new Date(GAME.getTime() + week * 7 * 24 * 3_600_000);
-      return [metric(`y${week}`, "game_passing_yards", 1, { occurredAt: at }), metric(`r${week}`, "game_passer_rating", 1, { occurredAt: at })];
+      return [metric(`y${week}`, "game_passing_yards", 1, { occurredAt: at }), metric(`r${week}`, "game_rating", 1, { occurredAt: at })];
     });
     const signals = moments.flat();
     const sentiments = new Map<string, SentimentResult>(signals.map((s, i) => [s.id, { label: "positive", confidence: 0.2 + i * 0.1, direction: 1 }]));

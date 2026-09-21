@@ -222,7 +222,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260917150236_phase13_feed_curation.sql` | What the first production fetch found, applied to the rows: nine discovered feeds promoted, four duplicate finds and the outlets that refuse or declare no feed switched off with the finding in the note, four HTML-answering addresses and one stale feed re-pointed to discovery, two stale feeds switched off |
 | `20260917151045_phase13_run_budget.sql` | `record_feed_health(jsonb)`: a run's feed findings written in one statement, health columns only, service role only; the publisher connector's fetch budget and per-feed timeout to 15 s and 6 s so the catalogue fetch fits inside the run budget |
 | `20260917151844_phase13_feed_curation_2.sql` | The second fetch's findings on the re-pointed rows: Bleacher Report's discovered feed promoted; HipHopDX, Rap-Up, the Toronto Star and both USA Today pages switched off, nothing feed-like found on any of them |
-| `20260917184229_phase13_athlete_metrics.sql` | The API-Sports row's `config.game_stats` (yards, rating and interceptions, each with its group and statistic name in the per-game response) and the `game_passer_rating` (+1) and `game_interceptions` (−1) declarations beside `game_passing_yards`, all at `min_samples` 8; merged onto the existing config |
+| `20260917184229_phase13_athlete_metrics.sql` | The API-Sports row's `config.game_stats` (yards, rating and interceptions, each with its group and statistic name in the per-game response) and the `game_passer_rating` (+1) and `game_interceptions` (−1) declarations beside `game_passing_yards`, all at `min_samples` 8; merged onto the existing config. The rating declaration was renamed `game_rating` and re-floored in Phase 24, which disproved the passer-rating assumption |
 | `20260917211640_phase15_sixteen_subjects.sql` | The twelve unmapped people on `publisher_rss` (topics, safe aliases, disambiguation) and `rss` (a quoted-name Google News search with the same block); `person_data_sources.created_at` (the start of a person's volume regime); `person_signal_volume()` (event signals per complete day since the newest mapping, plus the trailing day; service role only) with an index on `signals (person_id, occurred_at)`; `poll_concurrency` 4 on the two news doors |
 | `20260917202622_phase14_target_drift.sql` | `people.target_attention` / `target_direction` / `target_offset` (the drifting target's state; `revert_target` documented as the seed) and `apply_engine_tick` writing them beside the score; `forbes` and `newsdata` from 60 to 55 minutes; execute on the two SECURITY DEFINER trigger functions (`positions_enforce_direction`, `trade_orders_snapshot_portfolio`) revoked from `anon` and `authenticated` |
 | `20260918015822_phase17_finnhub_non_price.sql` | The `finnhub` row activated at a 35-minute interval (off the multiple of 15 AND off the top of the hour) with `config.observe_only`, `config.insider_codes` and one metric, `company_news_volume_24h`; the nine executives mapped to their companies with the name their Form 4 files under; `observe_only_snapshots`, the view that shows a figure only while its source declares it observe-only, service role only |
@@ -242,6 +242,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260920192009_phase22_youtube_trending.sql` | The `youtube_trending` row (YouTube's own chart, tier 2, 25 minutes — off the multiple of fifteen and off the top of the hour, an effective half hour — and NO metrics, because a trending rank is never baselined) and a mapping for every active person keyed by display name: `channel_id` only where the board already held a verified one (MrBeast, copied from the `youtube` mapping), `match_terms` empty so a title must name the person in full, and the Phase 12+ disambiguation block inherited from the `publisher_rss` mapping, with Drake's list gaining the sitcom |
 | `20260920232615_phase23_search.sql` | `people.is_discoverable` (the Phase 23 consent flag: boolean, not null, **default false**, the forecast_paused shape at the opposite polarity) set true for the sixteen by slug, one name at a time; `search_terms()` and `search_key()`, the two immutable normalisations that make a query forgiving of case, punctuation and Latin diacritics; three partial expression indexes on `people` — its first — scoped to `is_active and is_discoverable`, so the index is the discoverable set; and `search_people(text, integer)`, security invoker, which tests the flag inside the function so a person who has not opted in is unreachable through it for any caller and at any limit |
 | `20260921143427_phase24_register_emission.sql` | `raw_metric_observations.register` (the band an observation left on the record, held with hysteresis) and `same_register` on the outcome CHECK. The rule it makes stateful: a metric emits when what a reading is CALLED changes, not when its number does. Replayed before shipping — Mahomes over the first live NFL game, 39 emissions to 7 and the Signals force 18.21 to 11.10; board-wide over seven days, 2,074 to 220 |
+| `20260921151807_phase24_game_rating_is_not_passer_rating.sql` | The host's `rating` is NOT the league's passer rating: it rated a 15/27, 184-yard, 2-TD, 1-INT line 50.2 where the formula gives 86.0, and a 32/47, 382-yard, 3-TD, 0-INT line 78.6 where it gives 114.0 — read off the connector's own diagnostics note. Renamed `game_passer_rating` → `game_rating` (the field's name and nothing more; QBR fits the 0–100 range but cannot be recomputed and is not adopted), `sd_floor` re-derived 12.0 → 8.0 for that range, and the two stored readings carried across so no game is lost. It needs eight games and has two, so nothing has ever emitted |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
 
@@ -1077,7 +1078,7 @@ A season is scheduled, periodic and outcome-bearing, which is a shape nothing el
 | metric | polarity | what it is |
 |---|---|---|
 | `game_passing_yards` | +1 | volume; unchanged (`sd_floor` 25, `scale` 0.8) |
-| `game_passer_rating` | +1 | the performance figure: the league's own composite of completion rate, yards per attempt, touchdown rate and interception rate, bounded 0–158.3, so a bad line reads negative on its own (`sd_floor` 12, `scale` 1.0) |
+| `game_rating` | +1 | the performance figure: the host's own `rating`, observed inside 0–100 (`sd_floor` 8, `scale` 1.0). **Not** the league's passer rating — Phase 13+ assumed it was and Phase 24 disproved it from the API's own numbers; what it IS has not been established, so the key claims only what the field is called |
 | `game_interceptions` | −1 | the one axis the rating formula dampens (its interception term saturates), discrete, and the failure a bad game announces itself with; an integer 0..4 with a mean near 0.7, so `sd_floor` 1.0 keeps a month of clean games from turning one interception into a catastrophe (`scale` 0.7) |
 
 Passing touchdowns are deliberately **not** registered: the rating already carries the touchdown rate and the game-result event already carries the scoring, so a fourth reading would be one more copy of the same performance. Nothing composite is registered — `"15/27"` (completions/attempts) and `"2-12"` (sacks/yards lost) are refused by the parser, so a `game_stats` entry pointing at one fails the poll out loud rather than recording 15 or 2.
@@ -2691,6 +2692,47 @@ defect found two more and cleared the others:
 A sweep over every ratio from 1.0 to 5.0 in thousandths asserts the result:
 the displayed magnitude is monotone and no two phrasings ever describe it.
 
+### "Rating" was never the passer rating
+
+`game_passer_rating` was registered in Phase 13+ as "the league's own
+composite ... bounded 0–158.3", with an sd floor of 12.0 chosen for that
+range. It is not. The connector's diagnostics note on the 15:00 poll of
+2026-09-21 returned the host's own words for the Week 2 game:
+
+```
+comp att="32/47", yards="382", average="8.1", passing touch downs="3",
+interceptions="0", sacks="2-11", rating="78.6"
+```
+
+| | the line | league formula | host's `rating` |
+| --- | --- | --- | --- |
+| Week 1 | 15/27, 184 yds, 2 TD, 1 INT | 86.0 | 50.2 |
+| Week 2 | 32/47, 382 yds, 3 TD, 0 INT | 114.0 | 78.6 |
+
+Two games, decisive. **What it IS has not been established, and the name now
+says so.** QBR was the standing hypothesis and both values sit inside its
+0–100 range, but QBR is proprietary and derived from play-by-play expected
+points, so it cannot be recomputed and checked, and API-Sports is not ESPN.
+There is also a counter-indication worth recording: the two readings sit 35.8
+and 35.4 below the passer rating of the same lines — a slope of essentially
+one with a constant offset, which is what a transform of the same box-score
+inputs looks like and is not what an independent play-by-play metric looks
+like. Two points cannot establish a formula; they are enough to refuse a name
+that claims one. So the key is `game_rating`: the field's name, and nothing
+more.
+
+The sd floor is re-derived for the observed range: 12.0 was the same fraction
+of 0–158.3 that **8.0** is of 0–100. The two stored readings are carried
+across to the new key so neither game is lost. The metric needs eight games
+and has two, so it has never emitted a signal and has never touched a score —
+which is exactly why this was worth doing today and would have been expensive
+in November.
+
+The same note settled two other things at no extra cost: the host publishes
+**no final time** (`endedAtReported=none`), which is what sends the timestamp
+to the first poll that saw the game finished; and the Week 2 status is
+`"AOT"`, which is how the result headline knows to say "in overtime".
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -2702,8 +2744,8 @@ the displayed magnitude is monotone and no two phrasings ever describe it.
 - **Phase 12**: freshness — an age weight on the Signals force (half-life 24 h, zero past 7 days; expired signals processed at zero impact without a model call; metrics never aged; the model not shown a signal's date) and the effective per-request model timeout pinned end to end. The purge of the stale backlog was scoped and declined: freshness handles it.
 - **Phase 12+**: newest-first selection with a least-recently-served rotation across people, and memory event expiry (30 days, dated folds written as history, today's date and event ages in the person block).
 - **Phase 13**: publisher-direct feeds — the `publisher_feeds` catalogue read as one shared fetch per run, whole-word name matching scoped by topic, undated items refused, per-feed health and discovery written back onto the rows, the two news doors deduplicated as one story family with Google News kept as the fallback — and the ingestion cron at every fifteen minutes with every source interval off the multiple.
-- **Phase 13+**: athlete metrics beyond passing yards — `config.game_stats` on the API-Sports row (every per-game figure read from one request per game, each with its own anchor), `game_passer_rating` (+1) and `game_interceptions` (−1) registered beside yards with touchdowns and every composite figure refused, and the Signals force folding one source's metric signals of one moment into one reading carrying their mean, so a game is its event and its stat line and never three copies of the line.
-- **Phase 24**: what the first live NFL game taught — a metric now emits when its REGISTER changes rather than when its number does (39 emissions to 7 on the Mahomes window, 2,074 to 220 board-wide, replayed against the stored ledger before shipping), held with 0.25σ of asymmetric hysteresis from the board's own step sizes; a game result dated at the first poll that observed it FINISHED rather than at kickoff, with a config hook for a reported final time and a fallback to kickoff when nothing was watching; the subject's plain-numeric line in the result headline, omitted rather than guessed when a statistic is not where config says; and every boundary in the language module decided on the DISPLAYED figure, which closed the 2x/100%, the 100x and the below-pace-fraction collisions in one rule.
+- **Phase 13+**: athlete metrics beyond passing yards — `config.game_stats` on the API-Sports row (every per-game figure read from one request per game, each with its own anchor), the rating figure (+1) and `game_interceptions` (−1) registered beside yards with touchdowns and every composite figure refused, and the Signals force folding one source's metric signals of one moment into one reading carrying their mean, so a game is its event and its stat line and never three copies of the line.
+- **Phase 24**: what the first live NFL game taught — a metric now emits when its REGISTER changes rather than when its number does (39 emissions to 7 on the Mahomes window, 2,074 to 220 board-wide, replayed against the stored ledger before shipping), held with 0.25σ of asymmetric hysteresis from the board's own step sizes; a game result dated at the first poll that observed it FINISHED rather than at kickoff, with a config hook for a reported final time and a fallback to kickoff when nothing was watching; the subject's plain-numeric line in the result headline, omitted rather than guessed when a statistic is not where config says; every boundary in the language module decided on the DISPLAYED figure, which closed the 2x/100%, the 100x and the below-pace-fraction collisions in one rule; and `game_passer_rating` renamed `game_rating` and re-floored after the API's own numbers disproved the passer-rating assumption two games running.
 - **Phase 23**: search — a per-person `is_discoverable` flag that ships **off** and is switched on for the sixteen by slug in the migration, enforced inside `search_people()` so a person who has not opted in is unreachable through it for any caller and at any limit; name, full name and slug matched partially and forgivingly of case, punctuation and Latin diacritics through two immutable normalisations; ranked and tie-broken in the database on the board's own total order, with the trailing-hour change on the same row so a result and the board cannot disagree; three partial expression indexes (the first `people` has ever had) covering the anchored half and an honest note on the contains half; and the placeholder replaced by two written states, one saying what search is for and one answering what somebody who searched their own name and found nothing is really asking.
 - **Phase 22**: YouTube Trending as a signal — the official `videos.list?chart=mostPopular` read once per run and shared by all sixteen (one unit a poll, 48 a day), an APPEARANCE emitted as an event and never the rank as a metric, because a baselined opaque rank cannot be explained to counsel; deduplicated per video per subject as Phase 16 keys a broadcast; two matching routes only (the subject's own channel, or the title naming them in full through the inherited Phase 12+ exclusions) with description-only, channel-name-only, bare-surname and guessed-channel matches refused; no second event on a rank change; sentences under the Phase 21+ rules; 25-minute interval off the multiple of fifteen.
 - **Phase 21+**: signal language — σ out of the consumer app entirely, replaced by the counts underneath it ("12 stories on Drake today — 3x their usual pace"), behind a per-metric `publish_observed` gate that is explicit and defaults off, set on six public counts and never on an audience level; register as a deterministic function of magnitude with the variant chosen by a hash of person and day, so a refresh never changes the sentence; multiples above 2x, percentages below, and never a decimal multiple for a reading below pace; a written-out voice per metric for all seventeen; the comparison to self kept by naming the person and "their usual" rather than by guessing pronouns the roster does not store; and the ~1,950 sigma headlines plus the 58 narratives quoting them re-rendered from the payload rather than rewritten in place.

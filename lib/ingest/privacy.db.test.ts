@@ -414,8 +414,8 @@ describe("the registry", () => {
     );
     expect(Object.keys(metrics).sort()).toEqual([
       "apisports.game_interceptions",
-      "apisports.game_passer_rating",
       "apisports.game_passing_yards",
+      "apisports.game_rating",
       "twitch.clips_per_stream_hour",
       "twitch.follower_count",
       "twitch.session_peak_viewers",
@@ -435,21 +435,21 @@ describe("the registry", () => {
     // season, so every per-game metric declares the same reachable minimum:
     // the sample count is the number of games whichever figure is asked, and
     // what differs between the figures is noise, which is the sd floor's job.
-    for (const key of ["game_passing_yards", "game_passer_rating", "game_interceptions"]) {
+    for (const key of ["game_passing_yards", "game_rating", "game_interceptions"]) {
       expect(metrics[`apisports.${key}`].min_samples, key).toBe(8);
       expect(Number(metrics[`apisports.${key}`].baseline_window_hours), key).toBeGreaterThanOrEqual(8 * 168);
     }
     // Interceptions count against him; the other two for him.
     expect(metrics["apisports.game_interceptions"].polarity).toBe(-1);
-    expect(metrics["apisports.game_passer_rating"].polarity).toBe(1);
+    expect(metrics["apisports.game_rating"].polarity).toBe(1);
     expect(metrics["apisports.game_passing_yards"].polarity).toBe(1);
     // Every declared per-game metric says where it lives in the per-game
     // response, and nothing points at a composite figure ("comp att", "sacks").
     const apisports = sources.find((source) => source.name === "apisports")!.config as { game_stats: Record<string, { group: string; name: string }> };
-    expect(Object.keys(apisports.game_stats).sort()).toEqual(["game_interceptions", "game_passer_rating", "game_passing_yards"]);
+    expect(Object.keys(apisports.game_stats).sort()).toEqual(["game_interceptions", "game_passing_yards", "game_rating"]);
     expect(apisports.game_stats).toEqual({
       game_passing_yards: { group: "Passing", name: "yards" },
-      game_passer_rating: { group: "Passing", name: "rating" },
+      game_rating: { group: "Passing", name: "rating" },
       game_interceptions: { group: "Passing", name: "interceptions" },
     });
     for (const lookup of Object.values(apisports.game_stats)) expect(lookup.name).not.toMatch(/comp att|sacks/);

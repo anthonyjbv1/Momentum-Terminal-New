@@ -396,7 +396,7 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
     elevated: ["{name} is throwing for more than usual", "Bigger passing game than usual for {name}"],
     quiet: ["{name} is throwing for less than usual", "Quieter passing game than usual for {name}"],
   },
-  game_passer_rating: {
+  game_rating: {
     spiking: ["{name} was near-perfect through the air", "{name} put up an elite passing line"],
     concrete: ["{name} is rating well above their usual", "{name} is playing above their usual standard"],
     elevated: ["{name} is rating above their usual", "Sharper game than usual for {name}"],

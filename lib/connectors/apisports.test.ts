@@ -136,7 +136,7 @@ const GAME_STATS: Record<string, unknown[]> = { "21528": gameStats() };
 const THREE_METRICS = {
   game_stats: {
     game_passing_yards: { group: "Passing", name: "yards" },
-    game_passer_rating: { group: "Passing", name: "rating" },
+    game_rating: { group: "Passing", name: "rating" },
     game_interceptions: { group: "Passing", name: "interceptions" },
   },
 };
@@ -341,8 +341,8 @@ describe("readApiSportsConfig", () => {
     expect(readApiSportsConfig({ game_passing_yards_stat: { group: "QB", name: "yards" } }).game_stats).toEqual({ [GAME_PASSING_YARDS_METRIC]: { group: "QB", name: "yards" } });
     expect(readApiSportsConfig(THREE_METRICS).game_stats).toEqual(THREE_METRICS.game_stats);
     // A malformed entry is dropped; a key that is not a metric key is dropped; nothing usable means the default.
-    expect(readApiSportsConfig({ game_stats: { game_passer_rating: { group: "Passing", name: " rating " }, broken: { group: "Passing" }, "Bad Key": { group: "Passing", name: "yards" } } }).game_stats).toEqual({
-      game_passer_rating: { group: "Passing", name: "rating" },
+    expect(readApiSportsConfig({ game_stats: { game_rating: { group: "Passing", name: " rating " }, broken: { group: "Passing" }, "Bad Key": { group: "Passing", name: "yards" } } }).game_stats).toEqual({
+      game_rating: { group: "Passing", name: "rating" },
     });
     expect(readApiSportsConfig({ game_stats: {} }).game_stats).toEqual({ [GAME_PASSING_YARDS_METRIC]: { group: "Passing", name: "yards" } });
     expect(readApiSportsConfig({ game_stats: "Passing" }).game_stats).toEqual({ [GAME_PASSING_YARDS_METRIC]: { group: "Passing", name: "yards" } });
@@ -541,7 +541,7 @@ describe("apisportsConnector", () => {
       const readings = await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx);
       expect(readings).toEqual([
         { metricKey: "game_passing_yards", value: 184, recordedAt: new Date(WEEK1_KICKOFF) },
-        { metricKey: "game_passer_rating", value: 50.2, recordedAt: new Date(WEEK1_KICKOFF) },
+        { metricKey: "game_rating", value: 50.2, recordedAt: new Date(WEEK1_KICKOFF) },
         { metricKey: "game_interceptions", value: 1, recordedAt: new Date(WEEK1_KICKOFF) },
       ]);
       // Three metrics, one request: the response is read three times, not fetched three times.
@@ -554,7 +554,7 @@ describe("apisportsConnector", () => {
       const ctx = context(fetch, { config: THREE_METRICS, latest: { game_passing_yards: { value: 184, recordedAt: new Date(WEEK1_KICKOFF) } } });
       const readings = await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx);
       expect(readings).toEqual([
-        { metricKey: "game_passer_rating", value: 50.2, recordedAt: new Date(WEEK1_KICKOFF) },
+        { metricKey: "game_rating", value: 50.2, recordedAt: new Date(WEEK1_KICKOFF) },
         { metricKey: "game_interceptions", value: 1, recordedAt: new Date(WEEK1_KICKOFF) },
       ]);
       expect(fetch.urls("/games/statistics/players")).toEqual([`https://${HOST}/games/statistics/players?id=21528`]);
@@ -565,7 +565,7 @@ describe("apisportsConnector", () => {
         config: THREE_METRICS,
         latest: {
           game_passing_yards: { value: 184, recordedAt: new Date(WEEK1_KICKOFF) },
-          game_passer_rating: { value: 50.2, recordedAt: new Date(WEEK1_KICKOFF) },
+          game_rating: { value: 50.2, recordedAt: new Date(WEEK1_KICKOFF) },
           game_interceptions: { value: 1, recordedAt: new Date(WEEK1_KICKOFF) },
         },
       });
@@ -584,12 +584,12 @@ describe("apisportsConnector", () => {
       const ctx = context(apisportsFetch({ games, gameStats: stats }), { config: THREE_METRICS, latest: { game_passing_yards: { value: 184, recordedAt: new Date(WEEK1_KICKOFF) } } });
       const readings = await apisportsConnector.fetchMetrics?.(person, PLAYER, ctx);
       expect(ctx.recorded.filter((r) => r.metricKey !== SEASON_PASSING_YARDS_SNAPSHOT)).toEqual([
-        { metricKey: "game_passer_rating", value: 50.2, recordedAt: new Date(WEEK1_KICKOFF) },
+        { metricKey: "game_rating", value: 50.2, recordedAt: new Date(WEEK1_KICKOFF) },
         { metricKey: "game_interceptions", value: 1, recordedAt: new Date(WEEK1_KICKOFF) },
       ]);
       expect(readings).toEqual([
         { metricKey: "game_passing_yards", value: 301, recordedAt: week2 },
-        { metricKey: "game_passer_rating", value: 118.4, recordedAt: week2 },
+        { metricKey: "game_rating", value: 118.4, recordedAt: week2 },
         { metricKey: "game_interceptions", value: 0, recordedAt: week2 },
       ]);
     });
@@ -602,9 +602,9 @@ describe("apisportsConnector", () => {
     });
 
     it("names the metric when one figure is not where config says, and records nothing for the game", async () => {
-      const ctx = context(apisportsFetch(), { config: { game_stats: { ...THREE_METRICS.game_stats, game_passer_rating: { group: "Passing", name: "qb rating" } } } });
+      const ctx = context(apisportsFetch(), { config: { game_stats: { ...THREE_METRICS.game_stats, game_rating: { group: "Passing", name: "qb rating" } } } });
       await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, ctx)).rejects.toThrow(
-        /carries no statistic "qb rating" in group "Passing" for him \(metric game_passer_rating; groups present: Passing, Rushing; his statistics in that group: comp att, yards, .*rating, two pt\)\. Correct config\.game_stats\.game_passer_rating on the data_sources row\./,
+        /carries no statistic "qb rating" in group "Passing" for him \(metric game_rating; groups present: Passing, Rushing; his statistics in that group: comp att, yards, .*rating, two pt\)\. Correct config\.game_stats\.game_rating on the data_sources row\./,
       );
       expect(ctx.recorded.filter((r) => r.metricKey !== SEASON_PASSING_YARDS_SNAPSHOT)).toEqual([]);
     });
