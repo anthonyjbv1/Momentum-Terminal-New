@@ -25,9 +25,13 @@
  *    holds several variants the choice is a hash of the person and the day
  *    (`variantIndex`), so a refresh cannot change the sentence under someone.
  *
- * 3. MULTIPLES ABOVE 2x, PERCENTAGES BELOW, and never a decimal multiple for a
- *    reading below its own pace: "0.3x his baseline" is unreadable where "down
- *    70% from his usual pace" is not.
+ * 3. MULTIPLES AT 2x AND ABOVE, PERCENTAGES BELOW, and never a decimal
+ *    multiple for a reading below its own pace: "0.3x his baseline" is
+ *    unreadable where "down 70% from his usual pace" is not. Which side of a
+ *    boundary a reading falls is decided on the figure as DISPLAYED, never on
+ *    the raw value behind it (Phase 24): a rule that branches on the raw
+ *    number and then rounds for the reader will, sooner or later, print the
+ *    same fact two ways.
  *
  * 4. EVERY METRIC SAYS WHAT IT OBSERVED. `METRIC_VOICE` gives each registered
  *    metric its own nouns and verbs; a metric with no entry falls back to its
@@ -41,6 +45,8 @@
  * way "their" never does. If pronouns are added to the roster as data, the
  * possessive here is the one place that needs to change.
  */
+
+import { registerFor, type MetricRegister } from "./register";
 
 /** The digits a count may carry in a headline before the privacy trigger refuses it (no run of four). */
 const MAX_PLAIN_COUNT = 999;
@@ -77,45 +83,13 @@ export interface MetricSentenceInput extends MetricReadingText {
 // ---------------------------------------------------------------------------
 
 /**
- * THE REGISTER BANDS, in standard deviations. TUNABLE.
- *
- * Kept at the proposed boundaries because the board's own readings divide
- * evenly across them. Over the seven days to 2026-09-19, of the 458 readings
- * that clear the 2.0σ deadband: 34.5% sit below the person's own pace, 27.5%
- * land in 2.0–2.5, 21.6% in 2.5–3.5 and 16.4% above 3.5. No band is starved
- * and none swallows the others, which is what a register scheme needs — a
- * boundary that fired twice a week would teach a reader nothing.
+ * The bands live in ./register, not here. They were a display concern until
+ * Phase 24 made a band change the thing a metric emits on, which gave them a
+ * second caller in the ingestion path; this module keeps choosing words and
+ * nothing else. Re-exported so the many callers that ask this module for a
+ * register need not know where it moved to.
  */
-export const REGISTER_BANDS = {
-  /** At or above this, something is genuinely happening and the voice is momentum-native. */
-  spiking: 3.5,
-  /** At or above this the number carries itself, so the voice is concrete. */
-  concrete: 2.5,
-} as const;
-
-export type MetricRegister = "spiking" | "concrete" | "elevated" | "quiet";
-
-/**
- * The register of a reading. A function of the reading alone: same sigma, same
- * register, every time.
- *
- * Sign decides first. A reading BELOW the person's own pace is always the
- * terminal register, however far below, because a concrete count reads as an
- * accusation when it is low — "four stories today against a usual twelve" says
- * something about the person that "quiet week" does not.
- *
- * Note this bands on the SIGN OF THE READING, not on the direction of its
- * score impact. They coincide for every metric the board runs today (all
- * declare polarity +1), and they should not be conflated if one ever declares
- * −1: a low reading is described as low whatever it does to the score.
- */
-export function registerFor(sigma: number): MetricRegister {
-  if (!Number.isFinite(sigma)) return "elevated";
-  if (sigma < 0) return "quiet";
-  if (sigma >= REGISTER_BANDS.spiking) return "spiking";
-  if (sigma >= REGISTER_BANDS.concrete) return "concrete";
-  return "elevated";
-}
+export { REGISTER_BANDS, registerFor, type MetricRegister } from "./register";
 
 /**
  * Which variant a band uses, from the person and the day. A stable hash
@@ -147,12 +121,18 @@ export function variantIndex(name: string, day: string, metric: string, count: n
  * "3x their usual pace", "30% above their usual pace". One phrase cannot do
  * both jobs — "is running up 30%" is not a sentence.
  *
- * ABOVE: 2x and over becomes a multiple, rounded to the nearest half so "3x"
- * stays punchy and "2.5x" stays honest; under 2x becomes a percentage, because
- * "1.3x their baseline" reads worse than "up 30%".
+ * ABOVE: a reading that would PRINT as 2x or more becomes a multiple, rounded
+ * to the nearest half so "3x" stays punchy and "2.5x" stays honest; anything
+ * below that becomes a percentage, because "1.3x their baseline" reads worse
+ * than "up 30%". The test is the displayed percentage and not the raw ratio —
+ * see the note in the body, which is a real defect this fixed.
  *
  * BELOW: never a decimal multiple. A simple fraction when the pace divides
- * close to one ("a third of their usual pace"), a percentage otherwise.
+ * close to one ("a third of their usual pace"), a percentage otherwise. The
+ * fraction windows are narrow enough that each one swallows the percentage
+ * that would name it — nothing below pace ever prints "down 50%", because
+ * "half" owns that reading — which is the same rule as above, enforced by
+ * arithmetic rather than by a branch.
  */
 export interface Comparison {
   standalone: string;
@@ -170,20 +150,41 @@ export function comparisonPhrase(observed: number | null | undefined, baseline: 
   const ratio = observed / baseline;
   if (!Number.isFinite(ratio)) return null;
 
-  if (ratio >= 2) {
+  // EVERY BOUNDARY IS DECIDED ON THE DISPLAYED FIGURE, NEVER THE RAW ONE
+  // (Phase 24). The first live game put these two lines fifteen minutes
+  // apart, about the same metric, on the same afternoon:
+  //
+  //   "People are sharing Patrick Mahomes' moments 100% above their usual pace"
+  //   "People are sharing Patrick Mahomes' moments at 2x their usual pace"
+  //
+  // Both were right. A ratio of 1.9975 took the percentage branch (raw ratio
+  // below 2) and then ROUNDED to 100%, which is 2x said differently, while
+  // 2.0007 took the multiple branch. The raw ratio decided the branch and the
+  // rounded figure decided the words, so the two disagreed in the gap between
+  // them.
+  //
+  // The fix is to let the DISPLAYED percentage choose: the multiple form owns
+  // everything that would print as 2x or more, so the percentage form can
+  // never print 100% and the two can never describe the same magnitude. The
+  // crossover is exactly where "up 99%" ends.
+  const percent = Math.round((ratio - 1) * 100);
+
+  if (percent >= 100) {
     // A multiple is itself a number, and past a point it becomes a raw level
     // wearing an x: 45,000 stories against a usual 4 is "11250x", which is
     // four digits and would trip the privacy trigger as surely as the count
     // would. Anything this far out is "over 100x" — the exact figure tells a
-    // reader nothing the words do not.
-    if (ratio >= 100) return { standalone: "over 100x their usual pace", running: "at over 100x their usual pace", ratio };
-    const multiple = `${formatMultiple(Math.round(ratio * 2) / 2)}x their usual pace`;
+    // reader nothing the words do not. Tested on the ROUNDED multiple for the
+    // same reason as above: 99.8x rounds to "100x", so it belongs with the
+    // hundreds and not with the exact figures.
+    const rounded = Math.round(ratio * 2) / 2;
+    if (rounded >= 100) return { standalone: "over 100x their usual pace", running: "at over 100x their usual pace", ratio };
+    const multiple = `${formatMultiple(rounded)}x their usual pace`;
     // "at" so the phrase survives any progressive verb — "is running at 3x
     // their usual pace", "has been live at 2x their usual pace".
     return { standalone: multiple, running: `at ${multiple}`, ratio };
   }
   if (ratio > 1) {
-    const percent = Math.round((ratio - 1) * 100);
     if (percent < 1) return { standalone: "barely above their usual pace", running: "barely above their usual pace", ratio };
     return { standalone: `up ${percent}% on their usual pace`, running: `${percent}% above their usual pace`, ratio };
   }
@@ -195,18 +196,28 @@ export function comparisonPhrase(observed: number | null | undefined, baseline: 
   // against a usual pace of 5.3. About 1.5% of emitted readings are zero.
   if (ratio === 0) return { standalone: "nothing at all against their usual pace", running: "nowhere near their usual pace", ratio };
 
-  // Below pace. A fraction when it lands near one, a percentage otherwise.
-  const denominator = Math.round(1 / ratio);
-  if (denominator >= 2 && denominator <= 5 && Math.abs(1 / ratio - denominator) <= 0.12) {
-    const fraction = `${FRACTION_WORDS[denominator]} of their usual pace`;
-    return { standalone: fraction, running: `at ${fraction}`, ratio };
-  }
+  // Below pace, and the same rule again: the fraction owns exactly the
+  // shortfalls that would PRINT as its own percentage, so the two forms can
+  // never name the same reading. Keying the window off the displayed figure
+  // rather than off the denominator is what closed the last hole in this —
+  // a ratio of 0.195 printed "down 80%" while 0.1953 printed "a fifth".
   const down = Math.round((1 - ratio) * 100);
   if (down < 1) return { standalone: "just below their usual pace", running: "just below their usual pace", ratio };
+  // A shortfall that rounds to the whole thing is not the whole thing: a
+  // reading of 0.004 against a pace of 1 is not "down 100%", which claims the
+  // absence that the ratio === 0 branch above is for.
+  if (down >= 100) return { standalone: "next to nothing against their usual pace", running: "nowhere near their usual pace", ratio };
+  const fraction = FRACTION_WORDS[down];
+  if (fraction) return { standalone: `${fraction} of their usual pace`, running: `at ${fraction} of their usual pace`, ratio };
   return { standalone: `down ${down}% on their usual pace`, running: `${down}% below their usual pace`, ratio };
 }
 
-const FRACTION_WORDS: Record<number, string> = { 2: "half", 3: "a third", 4: "a quarter", 5: "a fifth" };
+/**
+ * The shortfalls a plain fraction says better than a percentage, keyed by the
+ * percentage each one IS as displayed: "half" is exactly the reading that
+ * would print "down 50%", "a third" the one that would print "down 67%".
+ */
+const FRACTION_WORDS: Record<number, string> = { 50: "half", 67: "a third", 75: "a quarter", 80: "a fifth" };
 
 /** 3 → "3", 2.5 → "2.5". A multiple never shows a trailing zero. */
 function formatMultiple(value: number): string {

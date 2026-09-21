@@ -3,6 +3,8 @@ import type { DataSource, Person, TypedSupabaseClient } from "@/types";
 import type { Json } from "@/types/database";
 
 import { outcomeReported } from "./metrics";
+import { METRIC_REGISTERS, type MetricRegister } from "@/lib/signals/register";
+
 import type { MetricDeltaKind, MetricOutcome, PreviousObservation } from "./metrics";
 import type { PublisherDomainRow } from "./publishers";
 
@@ -134,6 +136,8 @@ export interface ObservationRow {
   minSamples: number | null;
   windowHours: number | null;
   outcome: MetricOutcome;
+  /** The register this observation leaves on the record (Phase 24); null when it leaves none. */
+  register: MetricRegister | null;
   signalId: string | null;
 }
 
@@ -197,14 +201,20 @@ export interface IngestStore {
  * database: the first row seen for a key is that metric's last observation.
  */
 export function readLastObservations(
-  rows: Array<{ metric_key: string; observed: number | string | null; outcome: string | null }>,
+  rows: Array<{ metric_key: string; observed: number | string | null; outcome: string | null; register?: string | null }>,
 ): Map<string, PreviousObservation> {
   const latest = new Map<string, PreviousObservation>();
   for (const row of rows) {
     if (latest.has(row.metric_key)) continue;
     const observed = row.observed === null ? null : Number(row.observed);
+    // A row written before Phase 24 carries no register, and an unrecognised
+    // one is never guessed at. Either way the record holds no band, so the
+    // next reading is judged by the identity rule alone and emits on its own
+    // register — which is the right behaviour on the deploy that adds this.
+    const register = METRIC_REGISTERS.find((candidate) => candidate === row.register) ?? null;
     latest.set(row.metric_key, {
       observed: observed !== null && Number.isFinite(observed) ? observed : null,
+      register,
       reported: outcomeReported((row.outcome ?? "") as MetricOutcome),
     });
   }
@@ -276,7 +286,7 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
       // rows reaches back past all of them several times over.
       const { data, error } = await client
         .from("raw_metric_observations")
-        .select("metric_key, observed, outcome, recorded_at")
+        .select("metric_key, observed, outcome, register, recorded_at")
         .eq("person_id", personId)
         .eq("data_source_id", dataSourceId)
         .order("recorded_at", { ascending: false })
@@ -501,6 +511,7 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
             min_samples: row.minSamples,
             window_hours: row.windowHours,
             outcome: row.outcome,
+            register: row.register,
             signal_id: row.signalId,
           })),
         )
@@ -619,7 +630,7 @@ export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): Memor
         .map((row, index) => ({ row, index }))
         .filter(({ row }) => row.personId === personId && row.dataSourceId === dataSourceId)
         .sort((a, b) => b.row.recordedAt.getTime() - a.row.recordedAt.getTime() || b.index - a.index)
-        .map(({ row }) => ({ metric_key: row.metricKey, observed: row.observed, outcome: row.outcome }));
+        .map(({ row }) => ({ metric_key: row.metricKey, observed: row.observed, outcome: row.outcome, register: row.register }));
       return readLastObservations(rows);
     },
 

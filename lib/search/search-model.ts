@@ -99,8 +99,21 @@ export function readSearchResults(rows: readonly SearchRow[]): SearchResult[] {
 // with a score is a real moment; not finding yourself is also a real moment,
 // and "0 results" answers neither. So the copy answers the question actually
 // being asked — why am I not here? — plainly, and without pretending the
-// absence is a malfunction. Nobody is on this list by accident, which is true:
-// the roster is set one slug at a time and is_discoverable defaults to off.
+// absence is a malfunction.
+//
+// TWO THINGS IT MUST NOT SAY, both learned by writing it badly first.
+//
+// "Nobody is on this list by accident" shipped in Phase 23. It is true, and
+// it lands as "you were deliberately left off" to the one reader this state
+// exists for. The reassurance has to point at the MECHANISM and not at the
+// decision: being findable is a switch that defaults to off, which is a fact
+// about the platform rather than a judgement about the reader.
+//
+// "People join only when they choose to" is the natural next draft, and it is
+// FALSE. The sixteen on the board are public figures who were added without
+// being asked; is_discoverable governs who can be FOUND, not who can be
+// listed, and there is no join flow to promise. The copy says what the flag
+// actually guarantees and stops there.
 //
 // House rules (Phase 21+): plain words, no jargon, no gendered pronouns, no
 // statistics vocabulary. No count is quoted, so nothing here goes stale the
@@ -113,7 +126,7 @@ export const SEARCH_COPY = {
   },
   noResults: {
     title: "No one here by that name.",
-    body: "The list is short, and it grows one name at a time. If you were looking for yourself and came up empty, that is not an oversight — nobody is on this list by accident.",
+    body: "The list is short and grows one name at a time. Nobody appears here by default: being findable is switched on, never assumed. If you were looking for yourself, that is why.",
   },
   failed: {
     title: "Search is not answering.",

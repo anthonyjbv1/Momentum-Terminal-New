@@ -38,6 +38,10 @@ interface Options {
   /** An errors payload for the named path fragment, in either shape API-Sports uses. */
   errorsOn?: { path: string; errors: unknown };
   status?: number;
+  /** An HTTP status for the per-game statistics path only, so a headline read can fail while the rest works. */
+  gameStatsStatus?: number;
+  /** A unix-seconds final time on game 21528, under game.date.end_timestamp. The host does not send one; this is for the config hook. */
+  gameEnd?: number;
 }
 
 /**
@@ -159,16 +163,27 @@ function apisportsFetch(options: Options = {}) {
     }
     if (url.includes("/players/statistics")) return envelope(options.statistics ?? STATISTICS, "players/statistics");
     if (url.includes("/games/statistics/players")) {
+      if (options.gameStatsStatus && options.gameStatsStatus !== 200) return Response.json({}, { status: options.gameStatsStatus });
       const id = new URL(url).searchParams.get("id") ?? "";
       return envelope((options.gameStats ?? GAME_STATS)[id] ?? [], "games/statistics/players");
     }
-    if (url.includes("/games")) return envelope(options.games ?? GAMES, "games");
+    if (url.includes("/games")) {
+      const games = options.games ?? GAMES;
+      return envelope(options.gameEnd === undefined ? games : games.map((entry) => withEnd(entry, options.gameEnd!)), "games");
+    }
     throw new Error(`unexpected url ${url}`);
   };
   return Object.assign(impl, { calls, urls: (fragment: string) => calls.filter((call) => call.url.includes(fragment)).map((call) => call.url) });
 }
 
-const context = (fetch: typeof globalThis.fetch, options: { config?: Record<string, unknown>; latest?: Record<string, { value: number; recordedAt: Date }> } = {}) => {
+/** Puts a final time on game 21528, for the config hook that would read one. */
+function withEnd(entry: unknown, endTimestamp: number): unknown {
+  const raw = entry as { game?: { id?: number; date?: Record<string, unknown> } };
+  if (raw.game?.id !== 21528) return entry;
+  return { ...raw, game: { ...raw.game, date: { ...raw.game.date, end_timestamp: endTimestamp } } };
+}
+
+const context = (fetch: typeof globalThis.fetch, options: { config?: Record<string, unknown>; latest?: Record<string, { value: number; recordedAt: Date }>; now?: Date } = {}) => {
   const recorded: Array<{ metricKey: string; value: number; recordedAt?: Date }> = [];
   const notes: string[] = [];
   return {
@@ -181,7 +196,7 @@ const context = (fetch: typeof globalThis.fetch, options: { config?: Record<stri
       },
       record: (metricKey: string, value: number, recordedAt?: Date) => void recorded.push(recordedAt ? { metricKey, value, recordedAt } : { metricKey, value }),
     },
-    now: NOW,
+    now: options.now ?? NOW,
     fetch,
     note: (message: string) => void notes.push(message),
     recorded,
@@ -500,6 +515,11 @@ describe("apisportsConnector", () => {
     it("skips a game the player did not appear in, without error, and fails loudly when he appears but the statistic is not where config says", async () => {
       const dnp = context(apisportsFetch({ gameStats: { "21528": gameStats("184", { withMahomes: false }) } }));
       expect(await apisportsConnector.fetchMetrics?.(person, PLAYER, dnp)).toEqual([]);
+      // The per-game response is cached per poll and shared by the event and
+      // metric reads (one request a week instead of two), so a second world
+      // at the same instant needs the cache cleared — which no real poll
+      // does, because one game at one instant has one answer.
+      resetApiSportsStatusCache();
       const renamed = context(apisportsFetch(), { config: { game_passing_yards_stat: { group: "Passing", name: "air yards" } } });
       await expect(apisportsConnector.fetchMetrics?.(person, PLAYER, renamed)).rejects.toThrow(
         /game 21528 \(Week 1, 2026-09-15\) lists player 1197 \(patrick-mahomes\) but carries no statistic "air yards" in group "Passing" for him \(metric game_passing_yards; groups present: Passing, Rushing; his statistics in that group: comp att, yards, average, passing touch downs, interceptions, sacks, rating, two pt\)\. Correct config\.game_stats\.game_passing_yards/,
@@ -633,9 +653,65 @@ describe("apisportsConnector", () => {
       const signals = await apisportsConnector.fetchForPerson(person, PLAYER, context(apisportsFetch()));
       expect(signals).toHaveLength(1);
       expect(signals[0].dedupeKey).toBe("apisports:game:21528");
-      expect(signals[0].headline).toBe("Week 1: Kansas City Chiefs beat Denver Broncos 31-10.");
-      expect(signals[0].occurredAt.toISOString()).toBe(WEEK1_KICKOFF);
       expect(signals[0].rawPayload).toMatchObject({ kind: "game_result", game_id: "21528", stage: "Regular Season", week: "Week 1", home_score: 31, away_score: 10 });
+      // Kickoff is still recorded; it is no longer what the signal is dated by.
+      expect(signals[0].rawPayload.played_at).toBe(WEEK1_KICKOFF);
+    });
+
+    it("SAYS WHAT THE SUBJECT DID (Phase 24), in plain numbers, after the result", async () => {
+      const signals = await apisportsConnector.fetchForPerson(person, PLAYER, context(apisportsFetch()));
+      expect(signals[0].headline).toBe("Week 1: Kansas City Chiefs beat Denver Broncos 31-10; Patrick Mahomes threw for 184 yards and 2 touchdowns.");
+      expect(signals[0].rawPayload.line).toEqual({ passing_yards: 184, passing_touchdowns: 2 });
+      // Phase 21+ rules: no statistic a reader cannot check, no guessed pronoun.
+      expect(signals[0].headline).not.toMatch(/σ|sigma|rating|baseline/i);
+      expect(signals[0].headline).not.toMatch(/\b(he|she|his|her|him)\b/i);
+      // Phase 10: composite figures are never quoted. "15/27" is in the
+      // response and the parser refuses it, so it cannot reach a headline.
+      expect(signals[0].headline).not.toMatch(/\d+\/\d+/);
+    });
+
+    it("omits a headline statistic it cannot find rather than guessing, and says so on the poll", async () => {
+      const ctx = context(apisportsFetch(), { config: { headline_stats: { passing_yards: { group: "Passing", name: "yards" }, passing_touchdowns: { group: "Passing", name: "scores" } } } });
+      const signals = await apisportsConnector.fetchForPerson(person, PLAYER, ctx);
+      expect(signals[0].headline).toBe("Week 1: Kansas City Chiefs beat Denver Broncos 31-10; Patrick Mahomes threw for 184 yards.");
+      expect(ctx.notes.join(" ")).toMatch(/no headline statistic for passing_touchdowns \(group "Passing", statistic "scores"\)/);
+    });
+
+    it("still reports the result when the statistics read fails outright", async () => {
+      const ctx = context(apisportsFetch({ gameStatsStatus: 500 }));
+      const signals = await apisportsConnector.fetchForPerson(person, PLAYER, ctx);
+      expect(signals[0].headline).toBe("Week 1: Kansas City Chiefs beat Denver Broncos 31-10.");
+      expect(ctx.notes.join(" ")).toMatch(/headline statistics for game 21528 failed/);
+    });
+
+    it("DATES THE RESULT AT THE END, NOT THE KICKOFF (Phase 24)", async () => {
+      // A game seen finished four hours after kickoff was observed ending;
+      // the first poll that saw it is the timestamp, bounded by the poll
+      // interval rather than by a convention.
+      const observed = new Date(Date.parse(WEEK1_KICKOFF) + 4 * 3_600_000);
+      const signals = await apisportsConnector.fetchForPerson(person, PLAYER, context(apisportsFetch(), { now: observed }));
+      expect(signals[0].occurredAt.toISOString()).toBe(observed.toISOString());
+      expect(signals[0].rawPayload).toMatchObject({ ended_at_basis: "observed_final", played_at: WEEK1_KICKOFF, observed_final_at: observed.toISOString() });
+    });
+
+    it("falls back to kickoff when the game plainly finished while nothing was watching", async () => {
+      // The Week 1 result was first seen two days after kickoff, on first
+      // contact. Stamping that "now" would have claimed a two-day-old game
+      // had just happened.
+      const late = new Date(Date.parse(WEEK1_KICKOFF) + 49 * 3_600_000);
+      const signals = await apisportsConnector.fetchForPerson(person, PLAYER, context(apisportsFetch(), { now: late }));
+      expect(signals[0].occurredAt.toISOString()).toBe(WEEK1_KICKOFF);
+      expect(signals[0].rawPayload.ended_at_basis).toBe("kickoff");
+    });
+
+    it("prefers a final time the host reports, when config says where one lives", async () => {
+      // The American Football host is not known to publish one. This is the
+      // hook that makes naming it a row update rather than a deploy.
+      const ended = new Date(Date.parse(WEEK1_KICKOFF) + 3.5 * 3_600_000);
+      const ctx = context(apisportsFetch({ gameEnd: Math.floor(ended.getTime() / 1000) }), { config: { game_end_keys: ["game.date.end_timestamp"] } });
+      const signals = await apisportsConnector.fetchForPerson(person, PLAYER, ctx);
+      expect(signals[0].occurredAt.toISOString()).toBe(ended.toISOString());
+      expect(signals[0].rawPayload.ended_at_basis).toBe("reported_end");
     });
 
     it("fetches the games list once per poll, shared by the event and metric reads", async () => {

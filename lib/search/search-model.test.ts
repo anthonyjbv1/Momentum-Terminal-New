@@ -83,9 +83,20 @@ describe("the words", () => {
 
   it("answers the question a no-result state is actually being asked — why am I not here — without calling the absence a fault", () => {
     expect(SEARCH_COPY.noResults.title).toBe("No one here by that name.");
-    // The sentence the whole state exists for.
-    expect(SEARCH_COPY.noResults.body).toContain("nobody is on this list by accident");
-    expect(SEARCH_COPY.noResults.body).toContain("that is not an oversight");
+    // The sentence the whole state exists for: the reassurance points at the
+    // mechanism, not at a decision about the reader.
+    expect(SEARCH_COPY.noResults.body).toContain("being findable is switched on, never assumed");
     expect(SEARCH_COPY.noResults.body).not.toMatch(/error|invalid|failed|sorry/i);
+  });
+
+  it("never reads as a rejection, and never promises a join flow that does not exist", () => {
+    const body = SEARCH_COPY.noResults.body;
+    // "Nobody is on this list by accident" is true and lands as "you were
+    // deliberately left off"; it shipped in Phase 23 and was replaced.
+    expect(body).not.toMatch(/by accident|oversight|deliberate|left off|not eligible/i);
+    // is_discoverable governs who can be FOUND. The sixteen were added
+    // without being asked, so no copy here may claim they chose to be, and
+    // there is nothing to "join" yet.
+    expect(body).not.toMatch(/\bjoin(ed|s|ing)?\b|sign up|choose to|chose to|apply/i);
   });
 });

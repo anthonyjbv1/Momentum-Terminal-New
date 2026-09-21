@@ -173,6 +173,108 @@ describe("multiples above 2x, percentages below", () => {
   });
 });
 
+describe("one side of a boundary owns it (Phase 24)", () => {
+  /** The magnitude a phrase actually PRINTS: "up 30%..." is 1.3, "2.5x..." is 2.5. */
+  const displayed = (phrase: string | undefined): number | null => {
+    if (!phrase) return null;
+    const percent = /^up (\d+)% on their usual pace$/.exec(phrase);
+    if (percent) return 1 + Number(percent[1]) / 100;
+    const multiple = /^(\d+(?:\.\d+)?)x their usual pace$/.exec(phrase);
+    if (multiple) return Number(multiple[1]);
+    return null;
+  };
+
+  it("reproduces the defect, and fixes it: 100% above and 2x are the same fact", () => {
+    // Fifteen minutes apart on 2026-09-21, about the same metric:
+    //   "...moments 100% above their usual pace"  (09:45)
+    //   "...moments at 2x their usual pace"       (10:00)
+    // A ratio a hair under 2 took the percentage branch and then rounded to
+    // 100%. It now takes the multiple branch, because what it PRINTS is 2x.
+    expect(comparisonPhrase(1.9975, 1)?.standalone).toBe("2x their usual pace");
+    expect(comparisonPhrase(1.9975, 1)?.running).toBe("at 2x their usual pace");
+    expect(comparisonPhrase(2, 1)?.standalone).toBe("2x their usual pace");
+    // The last reading the percentage form owns, and the first the multiple does.
+    expect(comparisonPhrase(1.9949, 1)?.standalone).toBe("up 99% on their usual pace");
+    expect(comparisonPhrase(1.995, 1)?.standalone).toBe("2x their usual pace");
+  });
+
+  it("never prints the same magnitude two ways, swept across the whole crossing", () => {
+    for (let ratio = 1.0; ratio <= 3.0005; ratio += 0.0001) {
+      const phrase = comparisonPhrase(ratio, 1)!.standalone;
+      // The parity phrases print no figure at all; they are covered below.
+      if (!/\d/.test(phrase)) continue;
+      const magnitude = displayed(phrase);
+      expect(magnitude, `${ratio.toFixed(4)} -> ${phrase}`).not.toBeNull();
+      if (phrase.includes("%")) {
+        // A percentage may never reach 100, which is where 2x begins.
+        expect(magnitude!, `${ratio.toFixed(4)} -> ${phrase}`).toBeLessThan(2);
+      } else {
+        expect(magnitude!, `${ratio.toFixed(4)} -> ${phrase}`).toBeGreaterThanOrEqual(2);
+      }
+    }
+  });
+
+  it("is monotone: a bigger reading never prints as a smaller one", () => {
+    let previous = 0;
+    for (let ratio = 1.01; ratio <= 5; ratio += 0.001) {
+      const phrase = comparisonPhrase(ratio, 1)!.standalone;
+      if (!/\d/.test(phrase)) continue;
+      const magnitude = displayed(phrase)!;
+      expect(magnitude, `${ratio.toFixed(3)} -> ${phrase}`).toBeGreaterThanOrEqual(previous);
+      previous = magnitude;
+    }
+  });
+
+  it("hands the hundreds over on the printed multiple too, not the raw ratio", () => {
+    // 99.8x rounds to "100x", so it belongs with "over 100x" and not among
+    // the exact figures — the same defect one boundary further out.
+    expect(comparisonPhrase(99.7, 1)?.standalone).toBe("99.5x their usual pace");
+    expect(comparisonPhrase(99.75, 1)?.standalone).toBe("over 100x their usual pace");
+    expect(comparisonPhrase(100, 1)?.standalone).toBe("over 100x their usual pace");
+    // Nothing ever prints a bare "100x": it is either 99.5x or over 100x.
+    for (let ratio = 99; ratio <= 101; ratio += 0.01) {
+      expect(comparisonPhrase(ratio, 1)?.standalone, ratio.toFixed(2)).not.toBe("100x their usual pace");
+    }
+  });
+
+  it("below pace, each fraction swallows the percentage that would name it", () => {
+    // "half" owns everything that would read "down 50%", "a third" everything
+    // that would read "down 67%", and so on — so the two forms can never
+    // describe the same shortfall. Swept rather than asserted by eye.
+    const forbidden = new Set(["down 50% on their usual pace", "down 67% on their usual pace", "down 75% on their usual pace", "down 80% on their usual pace"]);
+    for (let ratio = 0.01; ratio < 1; ratio += 0.0005) {
+      const phrase = comparisonPhrase(ratio, 1)!.standalone;
+      expect(forbidden.has(phrase), `${ratio.toFixed(4)} -> ${phrase}`).toBe(false);
+    }
+    expect(comparisonPhrase(0.5, 1)?.standalone).toBe("half of their usual pace");
+    expect(comparisonPhrase(1 / 3, 1)?.standalone).toBe("a third of their usual pace");
+    expect(comparisonPhrase(0.25, 1)?.standalone).toBe("a quarter of their usual pace");
+    expect(comparisonPhrase(0.2, 1)?.standalone).toBe("a fifth of their usual pace");
+  });
+
+  it("the three phrases around parity print no figure at all, so none can contradict another", () => {
+    // "barely above", "level with" and "just below" are the one place three
+    // renderings meet. They are not a defect of the same kind: none states a
+    // magnitude, so there is no displayed figure for two of them to share —
+    // they carry only the sign, which is a fact the reader can use.
+    for (const phrase of [comparisonPhrase(1.004, 1), comparisonPhrase(1, 1), comparisonPhrase(0.996, 1)]) {
+      expect(phrase!.standalone).not.toMatch(/\d/);
+      expect(phrase!.running).not.toMatch(/\d/);
+    }
+    expect(comparisonPhrase(1.004, 1)?.standalone).toBe("barely above their usual pace");
+    expect(comparisonPhrase(1, 1)?.standalone).toBe("level with their usual pace");
+    expect(comparisonPhrase(0.996, 1)?.standalone).toBe("just below their usual pace");
+  });
+
+  it("a count crosses into words on the ROUNDED figure, which was already the rule", () => {
+    const unit = { one: "story", many: "stories" };
+    expect(countWords(999.4, unit)).toBe("999 stories");
+    expect(countWords(999.5, unit)).toBe("over a thousand stories");
+    expect(countWords(1, unit)).toBe("1 story");
+    expect(countWords(1.4, unit)).toBe("1 story");
+  });
+});
+
 describe("every metric says what it observed", () => {
   it("gives each registered metric its own voice, distinct from the others", () => {
     const registered = [

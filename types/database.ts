@@ -1146,6 +1146,7 @@ export type Database = {
           person_id: string
           previous: number | null
           recorded_at: string
+          register: string | null
           run_id: string
           samples: number | null
           sd: number | null
@@ -1169,6 +1170,7 @@ export type Database = {
           person_id: string
           previous?: number | null
           recorded_at: string
+          register?: string | null
           run_id: string
           samples?: number | null
           sd?: number | null
@@ -1192,6 +1194,7 @@ export type Database = {
           person_id?: string
           previous?: number | null
           recorded_at?: string
+          register?: string | null
           run_id?: string
           samples?: number | null
           sd?: number | null

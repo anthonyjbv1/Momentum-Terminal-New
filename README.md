@@ -2,7 +2,7 @@
 
 A social data terminal where users take **HIGH** or **LOW** positions on individual people. Each person has a continuously updating Momentum Score driven by their observable real-world data. Users profit when a score moves in their predicted direction; the platform is the sole counterparty. The scoring system is called **the Engine**; its five forces are **Gravity**, **Signals**, **Market Mood**, **Conviction** and **Trading Activity**.
 
-> **Status: Phase 7 (metric connectors + auth gate) complete.** The whole app now sits behind a signed-in session while the test is closed (`lib/auth-gate.ts`, one file, removable in one step; robots disallowed, every response `noindex`). Four data sources are registered as data, not code — `youtube` (channel metrics and commentary volume), `youtube_comments`, `rss`, `spotify` — with MrBeast and Drake mapped; every metric a connector reads is snapshotted into a service-role-only raw table, differenced, normalised against the person's own trailing baseline (the same `lib/engine/baseline.ts` Trading Activity uses) and turned into a signal that carries **direction and sigma only**, never a level; a trigger on `signals` refuses anything more, and the metric scorer feeds the Signals force in the same units as a headline with an explicit per-metric polarity. Every poll and observation is logged; `/api/admin/health` reads per-source health and LLM cost per tick. On top of the scaffold, schema, auth, ingestion, the Engine, the LLM reasoning layer, the behavioral logging foundation, the editorial-monochrome shell, the live Home board, the person profile page and the Feed, **trading is live, on paper**: Buy opens a HIGH position at the server-read Buy quote, Sell closes it FIFO at the Sell quote, every amount is integer cents, and every order is one atomic RPC (`place_order()`) behind a tolerance band, the long-only gate and four inert risk levers. **`/portfolio` closes the loop**: total value, cash, unrealized and realized P&L, every open position marked at the Sell quote with its weighted-average entry, a value line recorded at every tick and every trade, and the full trade history with a keyset cursor — all computed by the database in integer cents, never by the browser; a close on the portfolio routes into the same 6e trade sheet. The paper balance starts at $10,000 and the close cooldown is 60 s (one full tick and more; policy pending). `/design` is the living reference. The 30-second heartbeat is wired (Vercel Cron → `/api/engine/cron`) but **switched off** by `ENGINE_CRON_ENABLED=false`, so until it runs every score sits at its seeded 50.0, every chart is honestly empty, every STATE reads Stable, every force reads idle, the Feed is quiet and the value line has only the points that orders record, and each surface says so. The profile screen and the recommendation layer are later phases.
+> **Status: Phase 24 complete, and the platform is RUNNING.** Both schedules are on: the Engine's heartbeat every 30 s (`ENGINE_CRON_ENABLED`) and ingestion every fifteen minutes (`INGEST_CRON_ENABLED`). As of 2026-09-21 that is **13,740 ticks**, **3,347 signals**, 162 Engine narratives and 219,840 recorded score points across the sixteen subjects, whose scores now sit between **52.2 and 69.9** rather than at the seeded 50.0. Eight sources are active — `rss` and `publisher_rss` (the two news doors), `youtube`, `youtube_comments`, `youtube_trending`, `twitch`, `finnhub` and `apisports` — every one of them registered as data on a row rather than as code. `ENGINE_TARGET_DRIFT_ENABLED` stays unset and shorting stays off. The whole app sits behind a signed-in session while the test is closed (`lib/auth-gate.ts`, one file, removable in one step; robots disallowed, every response `noindex`). Every metric a connector reads is snapshotted into a service-role-only raw table, differenced, normalised against the person's own trailing baseline and turned into a signal that carries **direction and magnitude only**, never a level; a trigger on `signals` refuses anything more. Trading is live, on paper: Buy opens a HIGH position at the server-read Buy quote, Sell closes it FIFO, every amount is integer cents, every order is one atomic RPC behind a tolerance band and the long-only gate, and `/portfolio` reconciles the lot to the cent. Home, the person profile, the Feed, Forecast and search are all live; `/design` is the living reference; `/admin` is the operator console, and the only surface where σ appears. **The first live NFL game ran through it on 2026-09-21** — Mahomes 60.9 → 66.0, the largest single-subject move recorded — and Phase 24 is what that game taught. The recommendation layer (For You) is the next phase.
 
 ## Stack
 
@@ -241,6 +241,7 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 | `20260920213950_phase22_trending_channel_handles.sql` | Channel ids for the trending chart: MrBeast's verified id into `channel_ids` (a **set**, so a personal and a VEVO channel never have to be chosen between) with his handle riding along once so the next poll re-resolves it rather than assuming; and `handles` for `kai-cenat` (the priority — his titles do not name him), `drake`, `kendrick-lamar` and `adin-ross`, resolved by the connector through `channels.list?forHandle=` where the API key lives. No executive mapped: a corporate channel is the company's upload schedule, not the person's |
 | `20260920192009_phase22_youtube_trending.sql` | The `youtube_trending` row (YouTube's own chart, tier 2, 25 minutes — off the multiple of fifteen and off the top of the hour, an effective half hour — and NO metrics, because a trending rank is never baselined) and a mapping for every active person keyed by display name: `channel_id` only where the board already held a verified one (MrBeast, copied from the `youtube` mapping), `match_terms` empty so a title must name the person in full, and the Phase 12+ disambiguation block inherited from the `publisher_rss` mapping, with Drake's list gaining the sitcom |
 | `20260920232615_phase23_search.sql` | `people.is_discoverable` (the Phase 23 consent flag: boolean, not null, **default false**, the forecast_paused shape at the opposite polarity) set true for the sixteen by slug, one name at a time; `search_terms()` and `search_key()`, the two immutable normalisations that make a query forgiving of case, punctuation and Latin diacritics; three partial expression indexes on `people` — its first — scoped to `is_active and is_discoverable`, so the index is the discoverable set; and `search_people(text, integer)`, security invoker, which tests the flag inside the function so a person who has not opted in is unreachable through it for any caller and at any limit |
+| `20260921143427_phase24_register_emission.sql` | `raw_metric_observations.register` (the band an observation left on the record, held with hysteresis) and `same_register` on the outcome CHECK. The rule it makes stateful: a metric emits when what a reading is CALLED changes, not when its number does. Replayed before shipping — Mahomes over the first live NFL game, 39 emissions to 7 and the Signals force 18.21 to 11.10; board-wide over seven days, 2,074 to 220 |
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
 
@@ -2552,6 +2553,144 @@ state quotes a count, so nothing goes stale the day the seventeenth person is
 added, and both follow the Phase 21+ rules: plain words, no jargon, no guessed
 pronouns, no σ.
 
+## What the first live game taught (Phase 24)
+
+Sunday Night Football, 2026-09-21: Chiefs 33-30 over the Colts in overtime,
+Mahomes 382 yards, 3 touchdowns, no interceptions. He moved 60.9 → 66.0, the
+largest single-subject move the board has recorded. Much of the platform did
+what it was built to do — in-game news reached the Feed inside fifteen minutes,
+the scorer's confidence tracked substance (0.3 for a routine completion, 0.72
+for the clutch overtime win), a 44-day-old article expired at zero cost and a
+Spanish-language headline scored correctly. Four things did not.
+
+### The metric flood returns on a busy day
+
+Between 07:00 and 11:15 UTC, "Coverage of Patrick Mahomes is running hot" and
+"People are sharing Patrick Mahomes' moments" emitted roughly every fifteen
+minutes. Emit-on-change (Phase 21) did not stop it, because a trailing-24h
+count genuinely ticks 56, 57, 58 through a big afternoon: the rule collapses a
+flat number and is defeated by a rising one, so it works on quiet days and
+fails on exactly the days that matter.
+
+**Measured first.** Over 2026-09-21 00:00–14:01 UTC the Signals force moved
+Mahomes **+18.21**, of which **9.30 (51.1%)** came from metric signals and
+**10.11** from events. There were **39** metric emissions in those fourteen
+hours. Of those, **28 (72%) restated a band that was already on the record** —
+only eleven landed in a different register than the one before, and six of
+those eleven were the same 2.5σ boundary being crossed back and forth.
+
+**The rule: a metric emits when its REGISTER changes.** A reader cannot tell
+2.6σ from 2.7σ and should not be asked to; what they can tell is coverage
+going from "running hot" to "56 stories today — 2x their usual pace" and back,
+and that transition is the event. So an observation records the band it left
+on the record (`raw_metric_observations.register`) and a reading in the same
+band is the same fact told again, logged as `same_register` rather than
+dropped silently. The band is held with **0.25σ of hysteresis**, asymmetric:
+an escalation is reported at the boundary itself, because the sentence is
+chosen from the reading alone and a signal that emitted late would be worded
+for a band it never announced; a de-escalation needs the margin, because "it
+cooled a little" is not a second story. 0.25 comes from the board's own step
+sizes — across 1,035 consecutive readings in the 1.5–4.0σ range over seven
+days the median step is 0.034σ, the 75th percentile 0.104σ and the 90th
+0.379σ, so the margin absorbs about five steps in six.
+
+**Replayed against that window before shipping** (`lib/signals/register.test.ts`
+runs the shipped `emissionDecision` over the ledger as it was written):
+
+| | before | after |
+| --- | --- | --- |
+| news_volume_24h emissions | 21 | 3 |
+| viral_moment_rate emissions | 18 | 4 |
+| Signals force over the window | 18.21 | 11.10 |
+| board-wide emissions, 7 days | 2,074 | 220 |
+
+The three that survive for news volume are the first sighting, the moment it
+turned concrete as the game story broke, and the moment it cooled back.
+
+**What it costs, stated rather than buried.** A reading that intensifies
+WITHIN a band no longer re-emits: a count that doubles from 2.6σ to 3.4σ says
+nothing until it reaches "spiking". That is the intended trade and the same
+principle Phase 21 shipped on — a metric describes a STATE and the event is
+the state CHANGING — applied at the resolution a reader can actually read.
+Option (d), collapsing in the Feed only, was refused for the reason the brief
+named: it would leave the scoring half of the problem exactly where it was.
+
+### A game result is dated when the game ENDED
+
+The Week 2 result carried `occurred_at` 00:20 UTC — kickoff. The game ended
+around 04:00, so the Engine scored it at freshness 0.886, as if it were 4.2
+hours old the moment it arrived, and about 11% of its impact went to a
+convention. The poll that actually stored it ran at **04:30:31**, about half
+an hour after the final whistle.
+
+API-Sports' American Football host publishes a kickoff (`game.date.timestamp`)
+and a status (`FT`, `AOT`), and no final time. So the timestamp is the first
+poll that observed the game finished — a real observation bounded by the
+40-minute poll interval, thirty minutes late against four hours and ten
+minutes early — with two guards and no estimate of how long a game takes:
+
+- `config.game_end_keys` names where a reported final time lives, if the host
+  ever publishes one. It takes precedence, and adding it is a row update.
+- A first sighting more than `live_sighting_hours` (24) after kickoff means
+  nothing was watching when it ended — a first-contact backfill — and the
+  kickoff is used instead. The Week 1 result was first seen two days after
+  kickoff, which is exactly this case.
+
+The payload records `played_at`, `observed_final_at`, `ended_at` and
+`ended_at_basis`, so a stored row can always be read back and judged. **Two
+historic rows are affected and neither has been rewritten**: Week 1 (which
+the new rule would date at kickoff anyway) and Week 2 (which it would date
+04:30 instead of 00:20). Both are already processed; rewriting them would
+change nothing the Engine will read again.
+
+### The result says what the subject did
+
+"Week 2: Kansas City Chiefs beat Indianapolis Colts 33-30." was true and said
+nothing about the 382 yards. The metric path cannot fix that — a per-game
+figure is judged against the player's own trailing games and knows nothing of
+the score — so a mediocre line in a win and a great line in a loss can only be
+reconciled where a model reads both together, which is the sentiment scorer
+reading this headline. The result now reads:
+
+> Week 2: Kansas City Chiefs beat Indianapolis Colts 33-30 in overtime; Patrick Mahomes threw for 382 yards and 3 touchdowns.
+
+Only PLAIN-NUMERIC statistics are quoted (Phase 10): the value parser refuses
+composites like "15/27" by construction, and a statistic that is not where
+`config.headline_stats` says is OMITTED and noted rather than guessed at. The
+result leads and the line follows, joined by a semicolon rather than by "as",
+because "as THE Kansas City Chiefs beat THE Indianapolis Colts" is a grammar
+guess about a team name this connector reads as data.
+
+### The same ratio rendered two ways at 2x
+
+Fifteen minutes apart, about the same metric: "...moments 100% above their
+usual pace" at 09:45 and "...moments at 2x their usual pace" at 10:00. A ratio
+a hair under 2 took the percentage branch on the RAW value and then ROUNDED to
+100%, which is 2x said differently.
+
+The rule now: **every boundary is decided on the figure as displayed, never on
+the raw value behind it.** The multiple form owns everything that would print
+as 2x or more, so the percentage form can never print 100%; the crossover is
+exactly where "up 99%" ends. Auditing the rest of the module for the same
+defect found two more and cleared the others:
+
+- **100x.** 99.8x rounded to "100x" while 100.0 read "over 100x". Now decided
+  on the rounded multiple, so nothing ever prints a bare "100x".
+- **The below-pace fractions.** "a fifth" was keyed off the denominator within
+  ±0.12, and a ratio of 0.195 fell just outside it and printed "down 80%" —
+  the same fact as "a fifth". Each fraction now owns exactly the shortfall
+  that would print as its own percentage, so nothing below pace ever prints
+  "down 50%", "down 67%", "down 75%" or "down 80%".
+- **"down 100%" for a non-zero reading.** A ratio of 0.004 rounded to a
+  complete absence it is not; it now reads "next to nothing against their
+  usual pace", distinct from the exact-zero "nothing at all".
+- **Cleared:** the count's 999/1000 crossing already tested the rounded
+  figure, and "barely above" / "level with" / "just below" print no figure at
+  all, so no two of them can claim the same one.
+
+A sweep over every ratio from 1.0 to 5.0 in thousandths asserts the result:
+the displayed magnitude is monotone and no two phrasings ever describe it.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -2564,6 +2703,7 @@ pronouns, no σ.
 - **Phase 12+**: newest-first selection with a least-recently-served rotation across people, and memory event expiry (30 days, dated folds written as history, today's date and event ages in the person block).
 - **Phase 13**: publisher-direct feeds — the `publisher_feeds` catalogue read as one shared fetch per run, whole-word name matching scoped by topic, undated items refused, per-feed health and discovery written back onto the rows, the two news doors deduplicated as one story family with Google News kept as the fallback — and the ingestion cron at every fifteen minutes with every source interval off the multiple.
 - **Phase 13+**: athlete metrics beyond passing yards — `config.game_stats` on the API-Sports row (every per-game figure read from one request per game, each with its own anchor), `game_passer_rating` (+1) and `game_interceptions` (−1) registered beside yards with touchdowns and every composite figure refused, and the Signals force folding one source's metric signals of one moment into one reading carrying their mean, so a game is its event and its stat line and never three copies of the line.
+- **Phase 24**: what the first live NFL game taught — a metric now emits when its REGISTER changes rather than when its number does (39 emissions to 7 on the Mahomes window, 2,074 to 220 board-wide, replayed against the stored ledger before shipping), held with 0.25σ of asymmetric hysteresis from the board's own step sizes; a game result dated at the first poll that observed it FINISHED rather than at kickoff, with a config hook for a reported final time and a fallback to kickoff when nothing was watching; the subject's plain-numeric line in the result headline, omitted rather than guessed when a statistic is not where config says; and every boundary in the language module decided on the DISPLAYED figure, which closed the 2x/100%, the 100x and the below-pace-fraction collisions in one rule.
 - **Phase 23**: search — a per-person `is_discoverable` flag that ships **off** and is switched on for the sixteen by slug in the migration, enforced inside `search_people()` so a person who has not opted in is unreachable through it for any caller and at any limit; name, full name and slug matched partially and forgivingly of case, punctuation and Latin diacritics through two immutable normalisations; ranked and tie-broken in the database on the board's own total order, with the trailing-hour change on the same row so a result and the board cannot disagree; three partial expression indexes (the first `people` has ever had) covering the anchored half and an honest note on the contains half; and the placeholder replaced by two written states, one saying what search is for and one answering what somebody who searched their own name and found nothing is really asking.
 - **Phase 22**: YouTube Trending as a signal — the official `videos.list?chart=mostPopular` read once per run and shared by all sixteen (one unit a poll, 48 a day), an APPEARANCE emitted as an event and never the rank as a metric, because a baselined opaque rank cannot be explained to counsel; deduplicated per video per subject as Phase 16 keys a broadcast; two matching routes only (the subject's own channel, or the title naming them in full through the inherited Phase 12+ exclusions) with description-only, channel-name-only, bare-surname and guessed-channel matches refused; no second event on a rank change; sentences under the Phase 21+ rules; 25-minute interval off the multiple of fifteen.
 - **Phase 21+**: signal language — σ out of the consumer app entirely, replaced by the counts underneath it ("12 stories on Drake today — 3x their usual pace"), behind a per-metric `publish_observed` gate that is explicit and defaults off, set on six public counts and never on an audience level; register as a deterministic function of magnitude with the variant chosen by a hash of person and day, so a refresh never changes the sentence; multiples above 2x, percentages below, and never a decimal multiple for a reading below pace; a written-out voice per metric for all seventeen; the comparison to self kept by naming the person and "their usual" rather than by guessing pronouns the roster does not store; and the ~1,950 sigma headlines plus the 58 narratives quoting them re-rendered from the payload rather than rewritten in place.

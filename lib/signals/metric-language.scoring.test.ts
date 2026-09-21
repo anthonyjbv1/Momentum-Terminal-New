@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 
 import { metricScorer } from "@/lib/engine/sentiment/metric";
 import type { Json } from "@/types/database";
-import { DEFAULT_THRESHOLD_STD_DEVS, metricSignal, observeMetric, type MetricConfig } from "@/lib/ingest/metrics";
+import { DEFAULT_THRESHOLD_STD_DEVS, METRIC_PAYLOAD_KEYS, metricSignal, observeMetric, type MetricConfig } from "@/lib/ingest/metrics";
+import { REGISTER_BANDS } from "@/lib/signals/register";
 import { metricSentence } from "@/lib/signals/metric-language";
 
 /**
@@ -87,6 +88,58 @@ describe("the language layer cannot move a score", () => {
     expect(counted.confidence).toBe(plain.confidence);
     expect(counted.anomaly).toBe(plain.anomaly);
     expect(counted.label).toBe(plain.label);
+  });
+});
+
+describe("Phase 24 changed WHEN a metric speaks, and nothing about what a spoken one is worth", () => {
+  it("leaves the deadband and the register bands exactly where they were", () => {
+    expect(DEFAULT_THRESHOLD_STD_DEVS).toBe(2.0);
+    expect(REGISTER_BANDS).toEqual({ spiking: 3.5, concrete: 2.5 });
+  });
+
+  it("never lets the register reach a signal payload, so the Engine cannot read one", () => {
+    expect(METRIC_PAYLOAD_KEYS as readonly string[]).not.toContain("register");
+    const observation = observeMetric({ metricKey: BASE.metricKey, config: BASE, history: steady, current: { value: 12, recordedAt: hour(40) } });
+    expect(observation.register).toBe("spiking");
+    const signal = metricSignal({ person: { display_name: "Drake" }, sourceName: "rss", externalIdentifier: "x", observation });
+    expect(Object.keys(signal.rawPayload)).not.toContain("register");
+  });
+
+  it("scores an emitted signal identically whatever the record behind it held", async () => {
+    // The rule decides whether a reading is SAID. Once said, the signal and
+    // its score are the ones Phase 7 defined and Phase 21+ left alone.
+    const current = { value: 12, recordedAt: hour(40) };
+    const fresh = observeMetric({ metricKey: BASE.metricKey, config: BASE, history: steady, current });
+    const afterQuiet = observeMetric({
+      metricKey: BASE.metricKey,
+      config: BASE,
+      history: steady,
+      current,
+      previousObservation: { observed: 5, register: "elevated", reported: true },
+    });
+    expect(fresh.outcome).toBe("emitted");
+    expect(afterQuiet.outcome).toBe("emitted");
+
+    const build = (observation: typeof fresh) => metricSignal({ person: { display_name: "Drake" }, sourceName: "rss", externalIdentifier: "x", observation });
+    expect(build(fresh).rawPayload).toEqual(build(afterQuiet).rawPayload);
+    expect(build(fresh).headline).toBe(build(afterQuiet).headline);
+
+    const scoreOf = (signal: { headline: string; rawPayload: Record<string, unknown> }) =>
+      metricScorer.scoreSignal({ id: "s1", personId: "p1", sourceName: "rss", sourceTier: 3, headline: signal.headline, rawPayload: signal.rawPayload as Json });
+    const [a, b] = await Promise.all([scoreOf(build(fresh)), scoreOf(build(afterQuiet))]);
+    expect(a).toEqual(b);
+  });
+
+  it("keeps the words out of the rule: the sentence a reading gets does not decide whether it is said", () => {
+    // Two readings in the same band, worded differently because one publishes
+    // a count and the other does not. Both are suppressed all the same.
+    const current = { value: 12, recordedAt: hour(40) };
+    const record = { observed: 11, register: "spiking" as const, reported: true };
+    const shown = observeMetric({ metricKey: BASE.metricKey, config: BASE, history: steady, current, previousObservation: record });
+    const hidden = observeMetric({ metricKey: BASE.metricKey, config: { ...BASE, publishObserved: false }, history: steady, current, previousObservation: record });
+    expect(shown.outcome).toBe("same_register");
+    expect(hidden.outcome).toBe(shown.outcome);
+    expect(hidden.register).toBe(shown.register);
   });
 });
 

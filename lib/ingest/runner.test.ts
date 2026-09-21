@@ -278,10 +278,11 @@ describe("runIngestion", () => {
       expect(store.signals).toHaveLength(1);
     });
 
-    it("EMIT ON CHANGE: a level that holds says it once, and says it again when it moves", async () => {
-      // Phase 21, end to end through the store: the runner reads what each
-      // metric last put on the record and compares this reading against it.
-      // Sixty calm hours, then an unusual level that persists.
+    it("EMIT ON A CHANGE OF REGISTER: a level that holds says it once, and again only when what it is CALLED changes", async () => {
+      // Phase 21 and Phase 24, end to end through the store: the runner reads
+      // what each metric last put on the record — the number AND the band —
+      // and compares this reading against it. Sixty calm hours, then an
+      // unusual level that persists.
       const steps = makeSource({
         id: "src-x",
         name: "x",
@@ -305,16 +306,24 @@ describe("runIngestion", () => {
         await runSteps(hour(i));
       }
 
-      // Said once, then held; a move to 41 is news, and so is the move back.
-      expect(store.observations.map((o) => o.outcome)).toEqual(["emitted", "unchanged", "unchanged", "unchanged", "emitted", "emitted"]);
-      expect(store.signals).toHaveLength(3);
+      // Said once, then held — and the move to 41 is NOT news, because 41 is
+      // called what 40 was called. What is news, at the end, is that the level
+      // stopped being remarkable: as the baseline absorbs the new readings the
+      // sigma decays 7.7 → 3.1 and the reading drops out of "spiking".
+      expect(store.observations.map((o) => o.outcome)).toEqual(["emitted", "unchanged", "unchanged", "unchanged", "same_register", "emitted"]);
+      expect(store.observations.map((o) => o.register)).toEqual(["spiking", "spiking", "spiking", "spiking", "spiking", "concrete"]);
+      expect(store.observations.map((o) => Number(Number(o.sigma).toFixed(2)))).toEqual([7.68, 5.45, 4.46, 3.86, 3.56, 3.14]);
+      // The last one holds "spiking" at 3.56 and lets go at 3.14, a quarter of
+      // a sigma below the 3.5 boundary: the hysteresis, end to end.
+      expect(store.signals).toHaveLength(2);
 
       // Every reading is on the ledger with its statistics, signal or not: a
       // suppressed repeat is recorded, not lost.
       expect(store.observations).toHaveLength(6);
       expect(store.snapshots.filter((s) => s.recordedAt >= NOW)).toHaveLength(6);
       const suppressed = store.observations[1];
-      expect(suppressed).toMatchObject({ outcome: "unchanged", value: 40, observed: 40, signalId: null });
+      expect(suppressed).toMatchObject({ outcome: "unchanged", value: 40, observed: 40, signalId: null, register: "spiking" });
+      expect(store.observations[4]).toMatchObject({ outcome: "same_register", value: 41, observed: 41, signalId: null });
       expect(Math.abs(Number(suppressed.sigma))).toBeGreaterThan(2);
       expect(lines.filter((l) => l.event === "observation").map((l) => l.outcome)).toEqual(store.observations.map((o) => o.outcome));
     });

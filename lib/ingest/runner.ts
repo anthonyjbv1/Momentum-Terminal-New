@@ -226,6 +226,7 @@ export function observationRow(runId: string, personId: string, source: DataSour
     minSamples: reading?.minSamples ?? null,
     windowHours: observation.windowHours,
     outcome: observation.outcome,
+    register: observation.register,
     signalId,
   };
 }

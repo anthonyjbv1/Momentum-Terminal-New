@@ -1,6 +1,7 @@
 import { baselineDeviation, type BaselineDeviation } from "@/lib/engine/baseline";
 import type { RawSignal } from "@/lib/connectors/types";
 import { metricSentence } from "@/lib/signals/metric-language";
+import { heldRegister, type MetricRegister } from "@/lib/signals/register";
 import type { Json } from "@/types/database";
 
 /**
@@ -364,36 +365,84 @@ export function observationSeries(points: SnapshotPoint[], kind: MetricDeltaKind
 // ---------------------------------------------------------------------------
 
 /**
- * What became of one reading. `unchanged` (Phase 21) is the emit-on-change
- * rule: the reading is outside the deadband and WOULD emit, but it is the
- * same reading the previous observation already put on the record, so it is
- * not news a second time. It is a distinct outcome rather than a silent drop
- * so the ledger still says why nothing was emitted.
+ * What became of one reading.
+ *
+ * `unchanged` (Phase 21) is the identity rule: the reading is outside the
+ * deadband and WOULD emit, but the observed quantity is the very number the
+ * previous observation already put on the record.
+ *
+ * `same_register` (Phase 24) is the rule that does the work. The quantity
+ * moved, but not far enough to change what the reading is CALLED, so it is
+ * the same fact told again. See the note on the register rule below.
+ *
+ * Both are distinct outcomes rather than silent drops, so the ledger still
+ * says why nothing was emitted — and so an operator can tell a connector that
+ * returned the same number from one that returned a different number saying
+ * the same thing.
  */
-export type MetricOutcome = "no_config" | "first_contact" | "insufficient_baseline" | "inside_band" | "unchanged" | "emitted";
+export type MetricOutcome = "no_config" | "first_contact" | "insufficient_baseline" | "inside_band" | "unchanged" | "same_register" | "emitted";
+
+/**
+ * THE REGISTER RULE (Phase 24): a metric emits when its BAND changes, not
+ * when its number does.
+ *
+ * Phase 21 compared observed quantities, which is right on a quiet day and
+ * wrong on the days that matter. A trailing-24h news count genuinely ticks 56,
+ * 57, 58 through a big afternoon, so every poll was a new number and none was
+ * new information: the first live NFL game produced 39 metric emissions for
+ * one person in fourteen hours, "Coverage of Patrick Mahomes is running hot"
+ * roughly every fifteen minutes. Because each emission is a metric signal
+ * feeding the Signals force, that was not a Feed problem — it was the Phase 20
+ * re-reporting problem (71% of the force being unchanged state) coming back in
+ * a new shape.
+ *
+ * A reader cannot tell 2.6σ from 2.7σ. What they can tell is coverage going
+ * from "running hot" to "56 stories today — 2x their usual pace" and back
+ * again, and that transition is the event. So the record carries the REGISTER
+ * a metric was last reported in, and a reading that lands in the same band
+ * says nothing new. Held with hysteresis so a sigma wobbling across a boundary
+ * does not chatter: see lib/signals/register.ts.
+ *
+ * MEASURED on the window that produced it. Mahomes, 2026-09-21 00:00–14:01
+ * UTC: 39 emissions become 7, and the Signals force over that window falls
+ * from 18.21 to 11.10 — the metric half from 9.30 to about 2.2, with the
+ * events unchanged. Board-wide over the seven days to 2026-09-21: 2,074
+ * emissions become 220, a cut of 89%.
+ *
+ * WHAT IT COSTS, stated rather than buried. A reading that intensifies WITHIN
+ * a band no longer re-emits: a count that doubles from 2.6σ to 3.4σ says
+ * nothing until it reaches "spiking". That is the intended trade and the same
+ * principle Phase 21 shipped on — a metric describes a STATE and the event is
+ * the state CHANGING — applied at the resolution a reader can actually read.
+ */
 
 /**
  * The observation immediately before this one, for the same person, source
  * and metric.
  *
  * `reported` means that observation put its state on the record: it emitted a
- * signal, or it was itself suppressed as an unchanged repeat of one. Carrying
- * both is what makes a RUN of identical readings collapse to its first: the
- * second is suppressed against the first's `emitted`, the third against the
- * second's `unchanged`, and so on. It is also what keeps the rule from
- * swallowing a metric's first real emission — an observation that was
- * `insufficient_baseline` or `inside_band` reported nothing, so the reading
- * after it is news even if the number is identical.
+ * signal, or it was itself suppressed against one. Carrying it is what makes a
+ * RUN collapse to its first: the second is suppressed against the first's
+ * `emitted`, the third against the second's `same_register`, and so on. It is
+ * also what keeps the rule from swallowing a metric's first real emission — an
+ * observation that was `insufficient_baseline` or `inside_band` reported
+ * nothing, so the reading after it is news even if the number is identical.
+ *
+ * `register` is the band the record currently holds, which is what a new
+ * reading is judged against. Null on a record written before Phase 24, and
+ * then the identity rule alone applies until the next emission writes one.
  */
 export interface PreviousObservation {
   /** The observed quantity (not the raw level): what the sigma and the headline are computed from. */
   observed: number | null;
+  /** The register that observation left on the record, or null if it left none. */
+  register: MetricRegister | null;
   reported: boolean;
 }
 
 /** Whether an outcome put the reading on the record, for the next observation to compare against. */
 export function outcomeReported(outcome: MetricOutcome): boolean {
-  return outcome === "emitted" || outcome === "unchanged";
+  return outcome === "emitted" || outcome === "unchanged" || outcome === "same_register";
 }
 
 export interface MetricObservation {
@@ -408,6 +457,12 @@ export interface MetricObservation {
   windowHours: number | null;
   reading: BaselineDeviation | null;
   outcome: MetricOutcome;
+  /**
+   * The register this observation leaves on the record for the next one to be
+   * judged against, or null when it leaves none (no config, no baseline, or
+   * inside the deadband). Persisted; see the register rule above.
+   */
+  register: MetricRegister | null;
 }
 
 export interface ObserveMetricInput {
@@ -427,7 +482,7 @@ export function observeMetric(input: ObserveMetricInput): MetricObservation {
   const base = { metricKey, config, value: current.value, recordedAt: current.recordedAt, previous: last?.value ?? null };
 
   if (!config) {
-    return { ...base, delta: last ? current.value - last.value : null, deltaKind: null, observed: null, windowHours: null, reading: null, outcome: "no_config" };
+    return { ...base, delta: last ? current.value - last.value : null, deltaKind: null, observed: null, windowHours: null, reading: null, outcome: "no_config", register: null };
   }
 
   const windowStart = current.recordedAt.getTime() - config.baselineWindowHours * HOUR_MS;
@@ -437,29 +492,53 @@ export function observeMetric(input: ObserveMetricInput): MetricObservation {
   const shared = { delta: last ? current.value - last.value : null, deltaKind: config.delta, windowHours: config.baselineWindowHours };
 
   if (history.length === 0 || !latest) {
-    return { ...base, ...shared, observed: latest?.observed ?? null, reading: null, outcome: "first_contact" };
+    return { ...base, ...shared, observed: latest?.observed ?? null, reading: null, outcome: "first_contact", register: null };
   }
 
   const reading = baselineDeviation(
     { current: latest.observed, baseline: series.map((point) => point.observed) },
     { minSamples: config.minSamples, sdFloor: config.sdFloor, thresholdStdDevs: config.thresholdStdDevs },
   );
-  // A metric describes a STATE; the event is the state CHANGING. A reading
-  // outside the deadband that repeats the reading already on the record is
-  // the same fact told again, not a second fact.
-  const repeatsTheRecord =
-    previousObservation !== null &&
-    previousObservation.reported &&
-    previousObservation.observed !== null &&
-    isUnchangedObservation(latest.observed, previousObservation.observed);
-  const outcome: MetricOutcome = !reading.sufficient
-    ? "insufficient_baseline"
-    : reading.atBaseline || reading.band === "inside"
-      ? "inside_band"
-      : repeatsTheRecord
-        ? "unchanged"
-        : "emitted";
-  return { ...base, ...shared, observed: latest.observed, reading, outcome };
+  if (!reading.sufficient) return { ...base, ...shared, observed: latest.observed, reading, outcome: "insufficient_baseline", register: null };
+  if (reading.atBaseline || reading.band === "inside") return { ...base, ...shared, observed: latest.observed, reading, outcome: "inside_band", register: null };
+
+  const decision = emissionDecision(reading.sigma, latest.observed, previousObservation);
+  return { ...base, ...shared, observed: latest.observed, reading, outcome: decision.outcome, register: decision.register };
+}
+
+/** What a reading outside the deadband does, and the band it leaves behind. */
+export interface EmissionDecision {
+  outcome: Extract<MetricOutcome, "unchanged" | "same_register" | "emitted">;
+  register: MetricRegister;
+}
+
+/**
+ * Whether a reading that cleared the deadband is NEWS, given the one on the
+ * record.
+ *
+ * Its own function so the rule is readable in one place, and so the replay in
+ * lib/signals/register.test.ts exercises the code that ships rather than a
+ * copy of it. A metric describes a STATE; the event is the state CHANGING,
+ * and there are two ways a reading fails to be a second fact, checked in this
+ * order:
+ *
+ *   1. IDENTITY — the same number as the one on the record (Phase 21).
+ *   2. THE SAME REGISTER — a different number that is called the same thing
+ *      (Phase 24). This is the one that does the work on a busy day.
+ *
+ * Both need a record to compare against, and only an observation that
+ * REPORTED left one: after an inside-band or insufficient-baseline reading
+ * the next one is news whatever its number.
+ */
+export function emissionDecision(sigma: number, observed: number, previous: PreviousObservation | null): EmissionDecision {
+  const onRecord = previous !== null && previous.reported ? previous : null;
+  // The band this reading leaves, holding the one already there through
+  // ordinary jitter. With nothing on the record this is the reading's own.
+  const register = heldRegister(sigma, onRecord?.register ?? null);
+
+  if (onRecord !== null && onRecord.observed !== null && isUnchangedObservation(observed, onRecord.observed)) return { outcome: "unchanged", register };
+  if (onRecord !== null && onRecord.register !== null && register === onRecord.register) return { outcome: "same_register", register };
+  return { outcome: "emitted", register };
 }
 
 // ---------------------------------------------------------------------------

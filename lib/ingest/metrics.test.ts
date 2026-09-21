@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { REGISTER_HYSTERESIS_SIGMA, registerFor } from "@/lib/signals/register";
+
 import { DEFAULT_THRESHOLD_STD_DEVS, METRIC_PAYLOAD_KEYS, UNCHANGED_RELATIVE_EPSILON, deriveMetric, describeWindow, formatSigma, isUnchangedObservation, metricSignal, observationSeries, observeMetric, outcomeReported, readMetricConfigs, type MetricConfig, type PreviousObservation, type SnapshotPoint } from "./metrics";
 
 /**
@@ -199,42 +201,20 @@ describe("the deadband", () => {
   });
 });
 
-describe("emit on change", () => {
+describe("emit on change: the identity rule (Phase 21)", () => {
   const LEVEL: MetricConfig = { ...SUBSCRIBERS, metricKey: "popularity", label: "Spotify popularity", delta: "level", baselineWindowHours: 720, minSamples: 48, sdFloor: 0.5, thresholdStdDevs: DEFAULT_THRESHOLD_STD_DEVS };
   const steady = Array.from({ length: 60 }, (_, i) => ({ value: 90 + (i % 2), recordedAt: hour(i) }));
   const observe = (value: number, previousObservation: PreviousObservation | null) =>
     observeMetric({ metricKey: "popularity", config: LEVEL, history: steady, current: { value, recordedAt: hour(60) }, previousObservation });
 
+  // A record with no register is a row written before Phase 24, and it is
+  // also the shape that isolates the identity rule from the register rule.
+  const record = (observed: number | null, reported = true): PreviousObservation => ({ observed, register: null, reported });
+
   it("suppresses a reading identical to the one already on the record", () => {
     expect(observe(95, null).outcome).toBe("emitted");
-    expect(observe(95, { observed: 95, reported: true }).outcome).toBe("unchanged");
-    expect(observe(94, { observed: 95, reported: true }).outcome).toBe("emitted");
-  });
-
-  it("a RUN collapses to its first, because a suppressed repeat is itself on the record", () => {
-    // What the runner does: each poll compares against the last observation
-    // that reported, and 'unchanged' reports as surely as 'emitted' does.
-    let previous: PreviousObservation | null = null;
-    const outcomes: string[] = [];
-    for (const value of [95, 95, 95, 95]) {
-      const observation = observe(value, previous);
-      outcomes.push(observation.outcome);
-      previous = { observed: observation.observed, reported: outcomeReported(observation.outcome) };
-    }
-    expect(outcomes).toEqual(["emitted", "unchanged", "unchanged", "unchanged"]);
-  });
-
-  it("a value that changes and changes BACK is news both times", () => {
-    // The rule compares against the record, not against a set of values ever
-    // seen: 95 → 97 → 95 is three states and three events.
-    let previous: PreviousObservation | null = null;
-    const outcomes: string[] = [];
-    for (const value of [95, 95, 97, 95]) {
-      const observation = observe(value, previous);
-      outcomes.push(observation.outcome);
-      previous = { observed: observation.observed, reported: outcomeReported(observation.outcome) };
-    }
-    expect(outcomes).toEqual(["emitted", "unchanged", "emitted", "emitted"]);
+    expect(observe(95, record(95)).outcome).toBe("unchanged");
+    expect(observe(94, record(95)).outcome).toBe("emitted");
   });
 
   it("NEVER suppresses a metric's first emission after its baseline becomes sufficient", () => {
@@ -243,17 +223,18 @@ describe("emit on change", () => {
     // nothing on the record for this reading to repeat.
     for (const outcome of ["no_config", "first_contact", "insufficient_baseline", "inside_band"] as const) {
       expect(outcomeReported(outcome), outcome).toBe(false);
-      expect(observe(95, { observed: 95, reported: outcomeReported(outcome) }).outcome, outcome).toBe("emitted");
+      expect(observe(95, record(95, outcomeReported(outcome))).outcome, outcome).toBe("emitted");
     }
     expect(outcomeReported("emitted")).toBe(true);
     expect(outcomeReported("unchanged")).toBe(true);
+    expect(outcomeReported("same_register")).toBe(true);
   });
 
   it("is an IDENTITY check: the same quantity recomputed reads as unchanged, any real move emits", () => {
     // The epsilon exists for a float reassembled out of the ledger or a rate
     // divided by a slightly different elapsed time — NOT to filter small moves.
-    expect(observe(95, { observed: 95 * (1 + 1e-13), reported: true }).outcome).toBe("unchanged");
-    expect(observe(95, { observed: 94.9999, reported: true }).outcome).toBe("emitted");
+    expect(observe(95, record(95 * (1 + 1e-13))).outcome).toBe("unchanged");
+    expect(observe(95, record(94.9999)).outcome).toBe("emitted");
 
     expect(isUnchangedObservation(0, 0)).toBe(true);
     expect(isUnchangedObservation(0, UNCHANGED_RELATIVE_EPSILON / 2)).toBe(true);
@@ -265,7 +246,107 @@ describe("emit on change", () => {
   });
 
   it("an observation with no level on the record is compared against nothing", () => {
-    expect(observe(95, { observed: null, reported: true }).outcome).toBe("emitted");
+    expect(observe(95, record(null)).outcome).toBe("emitted");
+  });
+});
+
+describe("emit on a change of REGISTER (Phase 24)", () => {
+  // A baseline of mean 10, sd 1, so sigma reads directly off the value: a
+  // reading of 12.6 is +2.6σ. That makes every band boundary legible below.
+  const LEVEL: MetricConfig = { ...SUBSCRIBERS, metricKey: "news_volume_24h", label: "news volume", delta: "level", baselineWindowHours: 720, minSamples: 8, sdFloor: 0, scale: 1, thresholdStdDevs: DEFAULT_THRESHOLD_STD_DEVS };
+  // Twenty points either side of 10 at exactly one unit: mean 10, sd 1.
+  const steady = Array.from({ length: 40 }, (_, i) => ({ value: i % 2 === 0 ? 9 : 11, recordedAt: hour(i) }));
+  const observe = (value: number, previousObservation: PreviousObservation | null) =>
+    observeMetric({ metricKey: "news_volume_24h", config: LEVEL, history: steady, current: { value, recordedAt: hour(40) }, previousObservation });
+
+  const sigmaOf = (value: number) => observe(value, null).reading?.sigma ?? Number.NaN;
+
+  // The values below are pinned to the sigma they actually produce, because
+  // the fresh reading joins the series it is judged against — so a value is
+  // not simply its distance from ten. Band boundaries themselves are tested
+  // where they live, in lib/signals/register.test.ts; this file tests the
+  // wiring of the rule into the pipeline.
+  const ELEVATED = 12.2;
+  const HOLDS = 12.5;
+  const RELEASES = 12.4;
+  const CONCRETE = 13;
+  const SPIKING = 15;
+
+  it("sits where the test says it sits", () => {
+    expect(sigmaOf(ELEVATED)).toBeCloseTo(2.055, 3);
+    expect(sigmaOf(HOLDS)).toBeCloseTo(2.3, 3);
+    expect(sigmaOf(RELEASES)).toBeCloseTo(2.22, 3);
+    expect(sigmaOf(CONCRETE)).toBeCloseTo(2.683, 3);
+    expect(sigmaOf(SPIKING)).toBeCloseTo(3.8925, 3);
+    expect(registerFor(sigmaOf(ELEVATED))).toBe("elevated");
+    expect(registerFor(sigmaOf(CONCRETE))).toBe("concrete");
+    expect(registerFor(sigmaOf(SPIKING))).toBe("spiking");
+    // The hysteresis margin, stated where the values that exercise it are.
+    expect(REGISTER_HYSTERESIS_SIGMA).toBe(0.25);
+    expect(sigmaOf(HOLDS)).toBeGreaterThanOrEqual(2.5 - REGISTER_HYSTERESIS_SIGMA);
+    expect(sigmaOf(RELEASES)).toBeLessThan(2.5 - REGISTER_HYSTERESIS_SIGMA);
+  });
+
+  it("suppresses a number that moved but is still called the same thing", () => {
+    // 47 stories then 48: two different numbers, one register.
+    const first = observe(ELEVATED, null);
+    expect(first.outcome).toBe("emitted");
+    expect(first.register).toBe("elevated");
+    const second = observe(ELEVATED + 0.1, { observed: ELEVATED, register: "elevated", reported: true });
+    expect(second.outcome).toBe("same_register");
+    expect(second.register).toBe("elevated");
+  });
+
+  it("emits the moment the band changes, upward with no margin at all", () => {
+    // Escalation is the news, so it is reported the instant it qualifies —
+    // otherwise the sentence, which is chosen from the reading alone, would
+    // be worded for a band the signal never announced.
+    const up = observe(CONCRETE, { observed: ELEVATED, register: "elevated", reported: true });
+    expect(up.outcome).toBe("emitted");
+    expect(up.register).toBe("concrete");
+    const further = observe(SPIKING, { observed: CONCRETE, register: "concrete", reported: true });
+    expect(further.outcome).toBe("emitted");
+    expect(further.register).toBe("spiking");
+  });
+
+  it("HOLDS a band through a wobble back across the boundary, and lets go a margin below it", () => {
+    // The defect this exists for: on the Mahomes window news_volume_24h
+    // crossed 2.5σ in both directions six times in four hours.
+    const wobble = observe(HOLDS, { observed: CONCRETE, register: "concrete", reported: true });
+    expect(wobble.outcome).toBe("same_register");
+    expect(wobble.register).toBe("concrete");
+    const released = observe(RELEASES, { observed: CONCRETE, register: "concrete", reported: true });
+    expect(released.outcome).toBe("emitted");
+    expect(released.register).toBe("elevated");
+  });
+
+  it("a RUN collapses to its first, because a suppressed reading is itself on the record", () => {
+    let previous: PreviousObservation | null = null;
+    const outcomes: string[] = [];
+    for (const value of [ELEVATED, ELEVATED + 0.1, ELEVATED + 0.2, HOLDS, ELEVATED + 0.15]) {
+      const observation = observe(value, previous);
+      outcomes.push(observation.outcome);
+      previous = { observed: observation.observed, register: observation.register, reported: outcomeReported(observation.outcome) };
+    }
+    expect(outcomes).toEqual(["emitted", "same_register", "same_register", "same_register", "same_register"]);
+  });
+
+  it("clears the record when a reading falls back inside the deadband, so the next rise is news again", () => {
+    const quietened = observe(11.0, { observed: CONCRETE, register: "concrete", reported: true });
+    expect(quietened.outcome).toBe("inside_band");
+    expect(quietened.register).toBeNull();
+    const back = observe(CONCRETE, { observed: 11.0, register: null, reported: outcomeReported(quietened.outcome) });
+    expect(back.outcome).toBe("emitted");
+  });
+
+  it("treats a record with no register as carrying no band, which is every row written before Phase 24", () => {
+    const observation = observe(ELEVATED + 0.1, { observed: ELEVATED, register: null, reported: true });
+    expect(observation.outcome).toBe("emitted");
+    expect(observation.register).toBe("elevated");
+  });
+
+  it("checks identity FIRST, so an unmoved number is still reported as unmoved rather than as a held band", () => {
+    expect(observe(ELEVATED, { observed: ELEVATED, register: "elevated", reported: true }).outcome).toBe("unchanged");
   });
 });
 

@@ -148,6 +148,31 @@ export interface ApiSportsConnectorConfig {
   recent_games: number;
   /** Game stages that count for nothing: no event, no metric. Matched ignoring case, spaces and punctuation. */
   excluded_stages: string[];
+  /**
+   * Dotted paths on the raw game where the host reports a FINAL time, tried
+   * in order. Empty by default because the American Football host is not
+   * known to report one; if it ever does, naming it here is a row update and
+   * the timestamp stops being an observation and becomes a fact.
+   */
+  game_end_keys: string[];
+  /** Status codes that mean the game ran past regulation. Used for the headline and nothing else. */
+  overtime_statuses: string[];
+  /**
+   * Plain-numeric statistics the result headline may quote, by a key this
+   * file knows how to phrase. A lookup that finds nothing is OMITTED from the
+   * headline and noted — never guessed at — so a name that turns out wrong
+   * costs a clause, not a wrong number.
+   */
+  headline_stats: Record<string, GroupedStatLookup>;
+  /**
+   * How long after kickoff a FIRST sighting of a finished game may still be
+   * treated as having watched it end. Beyond it the game plainly finished
+   * while nothing was watching (a backfill, a resumed schedule), and the
+   * kickoff is used instead. See gameSignal.
+   */
+  live_sighting_hours: number;
+  /** One poll reports the per-game statistic names and the raw game's keys through the note channel. Off by default. */
+  diagnostics: boolean;
 }
 
 const DEFAULT_CONFIG: ApiSportsConnectorConfig = {
@@ -165,6 +190,17 @@ const DEFAULT_CONFIG: ApiSportsConnectorConfig = {
   passing_yards_keys: ["passing.yards", "passing_yards", "yards"],
   recent_games: 5,
   excluded_stages: ["Pre Season"],
+  game_end_keys: [],
+  overtime_statuses: ["AOT", "OT", "POST-OT", "After Over Time"],
+  // Passing yards is the lookup the per-game metric already proves works.
+  // The touchdown name is NOT verified — it is here so the headline can use
+  // it the moment it is right, and it simply does not appear until then.
+  headline_stats: {
+    passing_yards: { group: "Passing", name: "yards" },
+    passing_touchdowns: { group: "Passing", name: "passing touch downs" },
+  },
+  live_sighting_hours: 24,
+  diagnostics: false,
 };
 
 /** The raw snapshot key of the season cumulative figure. Not a metric: no baseline, no signal, never registered. */
@@ -207,6 +243,7 @@ function gameStatsOr(value: unknown, fallback: Record<string, GroupedStatLookup>
 export function readApiSportsConfig(config: Record<string, unknown>): ApiSportsConnectorConfig {
   const paths = (config.paths ?? {}) as Record<string, unknown>;
   const recent = numberOrNull(config.recent_games);
+  const sighting = numberOrNull(config.live_sighting_hours);
   const seasonStat = lookupOr(config.passing_yards_stat, DEFAULT_CONFIG.passing_yards_stat);
   const gameYards = lookupOr(config.game_passing_yards_stat, seasonStat);
   return {
@@ -224,6 +261,11 @@ export function readApiSportsConfig(config: Record<string, unknown>): ApiSportsC
     passing_yards_keys: stringList(config.passing_yards_keys, []).length > 0 ? stringList(config.passing_yards_keys, []) : DEFAULT_CONFIG.passing_yards_keys,
     recent_games: recent !== null && recent > 0 ? Math.floor(recent) : DEFAULT_CONFIG.recent_games,
     excluded_stages: stringList(config.excluded_stages, DEFAULT_CONFIG.excluded_stages),
+    game_end_keys: stringList(config.game_end_keys, DEFAULT_CONFIG.game_end_keys),
+    overtime_statuses: stringList(config.overtime_statuses, DEFAULT_CONFIG.overtime_statuses),
+    headline_stats: gameStatsOr(config.headline_stats, DEFAULT_CONFIG.headline_stats),
+    live_sighting_hours: sighting !== null && sighting > 0 ? sighting : DEFAULT_CONFIG.live_sighting_hours,
+    diagnostics: config.diagnostics === true,
   };
 }
 
@@ -301,11 +343,19 @@ export interface ApiSportsStatus {
 let cachedStatus: { at: number; host: string; status: ApiSportsStatus } | null = null;
 /** The games list, fetched once per poll and shared by the event and metric reads. */
 const gamesCache = new Map<string, Promise<ApiSportsGame[]>>();
+/**
+ * One game's player statistics, fetched once per poll and shared by the event
+ * read (which quotes the subject's line in the headline) and the metric read
+ * (which records the figures). Without it the two would each spend a request
+ * on the same game the week a game lands.
+ */
+const gameStatsCache = new Map<string, Promise<unknown[]>>();
 
 /** For tests. */
 export function resetApiSportsStatusCache(): void {
   cachedStatus = null;
   gamesCache.clear();
+  gameStatsCache.clear();
 }
 
 /**
@@ -444,8 +494,13 @@ export function readGroupedStatistic(entry: unknown, lookup: GroupedStatLookup, 
 
 export interface ApiSportsGame {
   id: string;
+  /** Kickoff. */
   date: Date;
   finished: boolean;
+  /** The status code the host reported, verbatim: "FT", "AOT", ... Empty when absent. */
+  status: string;
+  /** A FINAL time the host reported, if config names where one lives. Null otherwise, which is the case today. */
+  endedAt: Date | null;
   /** "Pre Season", "Regular Season", "Post Season" — as the host names them; null when absent. */
   stage: string | null;
   /** "Week 1", "Wild Card", ... as the host names them; null when absent. */
@@ -473,13 +528,28 @@ interface RawGame {
 const FINISHED = new Set(["FT", "AOT", "POST-FT", "Finished", "Final"]);
 
 /**
+ * A FINAL time the host reported, from the paths config names. Unix seconds
+ * or an ISO-ish string; anything that does not parse, or that lands before
+ * kickoff, is refused rather than used. Empty config means the host reports
+ * none, which is what the American Football host does today.
+ */
+export function readReportedEnd(raw: RawGame, keys: string[]): Date | null {
+  for (const key of keys) {
+    const value = dig(raw, key);
+    const at = typeof value === "number" && Number.isFinite(value) ? new Date(value * 1000) : typeof value === "string" ? new Date(value) : null;
+    if (at && !Number.isNaN(at.getTime())) return at;
+  }
+  return null;
+}
+
+/**
  * Normalises one game. The American Football host nests identifiers under
  * `game` while other hosts hoist them; both spellings are accepted so that a
  * host or version change does not silently yield zero games. The kickoff
  * instant prefers the unix timestamp, then date + time (the host reports them
  * in UTC), then the bare date.
  */
-export function readGame(raw: RawGame): ApiSportsGame | null {
+export function readGame(raw: RawGame, config: ApiSportsConnectorConfig = DEFAULT_CONFIG): ApiSportsGame | null {
   const id = raw.game?.id ?? raw.id;
   if (id === undefined || id === null) return null;
   const dateBlock = raw.game?.date ?? (typeof raw.date === "object" ? raw.date : undefined);
@@ -496,6 +566,8 @@ export function readGame(raw: RawGame): ApiSportsGame | null {
     id: String(id),
     date,
     finished: FINISHED.has(short),
+    status: short,
+    endedAt: readReportedEnd(raw, config.game_end_keys),
     stage: typeof raw.game?.stage === "string" && raw.game.stage.trim() ? raw.game.stage.trim() : null,
     week: typeof raw.game?.week === "string" && raw.game.week.trim() ? raw.game.week.trim() : null,
     home: { name: raw.teams?.home?.name ?? "the home team", score: numberOrNull(raw.scores?.home?.total) },
@@ -506,22 +578,139 @@ export function readGame(raw: RawGame): ApiSportsGame | null {
 /** Signal kind for a completed game, so the Feed and the Engine can tell it from an article. */
 export const APISPORTS_GAME_KIND = "game_result";
 
-export function gameSignal(person: { display_name: string }, game: ApiSportsGame, source: string): RawSignal | null {
+/** One player's line from a finished game, as the headline may quote it. Every figure is a plain number; the parser refuses composites. */
+export interface GameLine {
+  passing_yards?: number;
+  passing_touchdowns?: number;
+}
+
+/**
+ * HOW EACH HEADLINE STATISTIC IS SAID. Written out per key rather than
+ * assembled, for the reason Phase 21+ gives: English does not survive being
+ * glued together. A key with no phrase here is not quoted, which is what
+ * keeps config from being able to invent a clause.
+ */
+const HEADLINE_PHRASE: Record<keyof GameLine, (value: number) => string | null> = {
+  // Yards are not pluralised at 1 in football usage ("threw for 1 yard" is
+  // right but never occurs); the singular is handled anyway.
+  passing_yards: (value) => (value > 0 ? `threw for ${round(value)} ${round(value) === 1 ? "yard" : "yards"}` : null),
+  // A zero-touchdown game is a real line, and saying "and 0 touchdowns" is
+  // worse than saying nothing: the clause is for what happened.
+  passing_touchdowns: (value) => (value > 0 ? `${round(value)} ${round(value) === 1 ? "touchdown" : "touchdowns"}` : null),
+};
+
+function round(value: number): number {
+  return Math.round(value);
+}
+
+/**
+ * WHEN A GAME RESULT HAPPENED (Phase 24).
+ *
+ * It was stamped at KICKOFF, which is the one time a result certainly did not
+ * happen. The Week 2 result was dated 00:20 UTC and the game ended about
+ * 04:00, so the Engine scored it at freshness 0.886 — as if it were 4.2 hours
+ * old the moment it arrived — and about 11% of its impact was lost to a
+ * convention. Longer games and overtime make it worse.
+ *
+ * Three sources, in order, and the payload records which one was used:
+ *
+ *   reported_end   a FINAL time the host published, if config.game_end_keys
+ *                  names where it lives. The American Football host is not
+ *                  known to publish one; this exists so that naming it later
+ *                  is a row update rather than a deploy.
+ *   observed_final the first poll that saw the game finished. A real
+ *                  observation, bounded by the 40-minute poll interval — the
+ *                  Week 2 result would have been stamped 04:30, about half an
+ *                  hour late, against four hours and ten minutes early.
+ *   kickoff        the fallback, and NOT a guess at a game length: it is used
+ *                  when the first sighting is so far after kickoff that
+ *                  nothing was plainly watching (a first-contact backfill —
+ *                  the Week 1 result was first seen two days after kickoff,
+ *                  which is exactly this case).
+ *
+ * A game's end lies between its kickoff and the first poll that saw it
+ * finished, and each of these is one end of that interval or a fact from the
+ * host. None of them estimates how long a game takes, which is not something
+ * this connector can know.
+ */
+export function gameEndedAt(game: ApiSportsGame, observedAt: Date, config: ApiSportsConnectorConfig): { at: Date; basis: "reported_end" | "observed_final" | "kickoff" } {
+  if (game.endedAt && game.endedAt.getTime() >= game.date.getTime()) return { at: game.endedAt, basis: "reported_end" };
+  const lagHours = (observedAt.getTime() - game.date.getTime()) / 3_600_000;
+  if (lagHours >= 0 && lagHours <= config.live_sighting_hours) return { at: observedAt, basis: "observed_final" };
+  return { at: game.date, basis: "kickoff" };
+}
+
+export interface GameSignalOptions {
+  /** Now, as the poll sees it: the instant this game was first observed finished. */
+  observedAt: Date;
+  config: ApiSportsConnectorConfig;
+  /** The subject's line, when the per-game statistics were read for this game. */
+  line?: GameLine | null;
+}
+
+/**
+ * THE RESULT, AND WHAT THE SUBJECT DID IN IT (Phase 24).
+ *
+ * "Week 2: Kansas City Chiefs beat Indianapolis Colts 33-30." was true and
+ * said nothing about the 382 yards and three touchdowns that made it the
+ * biggest single move the board has recorded. The metric path cannot fix
+ * that: a per-game figure is judged against the player's own trailing games
+ * and knows nothing of the score, so a mediocre line in a win and a great
+ * line in a loss can only be reconciled where a model reads both together —
+ * which is the sentiment scorer, reading this headline.
+ *
+ * Only PLAIN-NUMERIC statistics are quoted (Phase 10): the value parser
+ * refuses composites like "15/27" by construction, and a statistic that is
+ * not where config says is omitted rather than guessed at. Phase 21+ rules
+ * hold — plain words, the person named, no pronoun guessed, no statistic a
+ * reader cannot check.
+ */
+export function gameSignal(person: { display_name: string }, game: ApiSportsGame, source: string, options: GameSignalOptions): RawSignal | null {
   if (!game.finished || game.home.score === null || game.away.score === null) return null;
+  const { observedAt, config, line } = options;
+
   const drawn = game.home.score === game.away.score;
   const [winner, loser] = game.home.score > game.away.score ? [game.home, game.away] : [game.away, game.home];
-  const result = drawn
-    ? `${game.home.name} and ${game.away.name} finish ${game.home.score}-${game.away.score}.`
-    : `${winner.name} beat ${loser.name} ${winner.score}-${loser.score}.`;
+  const overtime = config.overtime_statuses.some((status) => status.trim().toLowerCase() === game.status.trim().toLowerCase());
+  const suffix = overtime ? " in overtime" : "";
+  const outcome = drawn
+    ? `${game.home.name} and ${game.away.name} finish ${game.home.score}-${game.away.score}${suffix}`
+    : `${winner.name} beat ${loser.name} ${winner.score}-${loser.score}${suffix}`;
+
+  // "threw for 382 yards and 3 touchdowns", in a fixed order so the sentence
+  // reads the same every week.
+  const clauses = (Object.keys(HEADLINE_PHRASE) as Array<keyof GameLine>)
+    .map((key) => {
+      const value = line?.[key];
+      return typeof value === "number" && Number.isFinite(value) ? HEADLINE_PHRASE[key](value) : null;
+    })
+    .filter((clause): clause is string => clause !== null);
+
+  // The result leads and the line follows, joined by a semicolon rather than
+  // by "as". Putting the player first would read better — "Patrick Mahomes
+  // threw for 382 yards as THE Kansas City Chiefs beat THE Indianapolis
+  // Colts" — and that article is a grammar guess about a team name this
+  // connector reads as data. NFL names happen to take one; a host that ever
+  // carries "Real Madrid" would not. Two clauses, no guess.
+  const sentence = clauses.length > 0 ? `${outcome}; ${person.display_name} ${clauses.join(" and ")}.` : `${outcome}.`;
+  const { at, basis } = gameEndedAt(game, observedAt, config);
+
   return {
-    headline: game.week ? `${game.week}: ${result}` : result,
-    occurredAt: game.date,
+    headline: game.week ? `${game.week}: ${sentence}` : sentence,
+    occurredAt: at,
     dedupeKey: `${source}:game:${game.id}`,
     rawPayload: {
       kind: APISPORTS_GAME_KIND,
       source,
       game_id: game.id,
       played_at: game.date.toISOString(),
+      // Both ends of the interval the true end sits in, and which one was
+      // taken, so a stored row can always be read back and judged.
+      ended_at: at.toISOString(),
+      ended_at_basis: basis,
+      observed_final_at: observedAt.toISOString(),
+      status: game.status,
+      overtime,
       stage: game.stage,
       week: game.week,
       home: game.home.name,
@@ -529,6 +718,7 @@ export function gameSignal(person: { display_name: string }, game: ApiSportsGame
       home_score: game.home.score,
       away_score: game.away.score,
       subject: person.display_name,
+      ...(clauses.length > 0 ? { line: { ...line } } : {}),
     },
   };
 }
@@ -577,11 +767,69 @@ function gamesFor(config: ApiSportsConnectorConfig, key: string, fetchImpl: type
   if (!pending) {
     gamesCache.clear();
     pending = call<RawGame>(fill(config.paths.games, { season, team }), config, key, fetchImpl).then((body) =>
-      (body.response ?? []).map(readGame).filter((game): game is ApiSportsGame => game !== null),
+      (body.response ?? []).map((raw) => readGame(raw, config)).filter((game): game is ApiSportsGame => game !== null),
     );
     gamesCache.set(cacheKey, pending);
   }
   return pending;
+}
+
+/** One game's player statistics, once per poll however many readers ask for them. */
+function gameStatisticsFor(config: ApiSportsConnectorConfig, key: string, fetchImpl: typeof fetch, gameId: string, now: Date): Promise<unknown[]> {
+  const cacheKey = `${config.host}|${gameId}|${now.getTime()}`;
+  let pending = gameStatsCache.get(cacheKey);
+  if (!pending) {
+    if (gameStatsCache.size > 8) gameStatsCache.clear();
+    pending = call<unknown>(fill(config.paths.game_statistics, { game: gameId }), config, key, fetchImpl).then((body) => body.response ?? []);
+    gameStatsCache.set(cacheKey, pending);
+  }
+  return pending;
+}
+
+/**
+ * The subject's line from a game's statistics, for the headline. A lookup
+ * that finds nothing, or a value that is not a plain number, is LEFT OUT:
+ * this is a clause in a sentence, not a measurement, and a wrong figure in a
+ * headline is worse than a shorter headline. Every omission is returned so
+ * the caller can say so on the poll.
+ */
+export function readGameLine(entries: unknown[], config: ApiSportsConnectorConfig, player: string): { line: GameLine; missing: string[]; names: string[] } {
+  const line: GameLine = {};
+  const missing: string[] = [];
+  const names = new Set<string>();
+  for (const [key, lookup] of Object.entries(config.headline_stats)) {
+    let found: GroupedStatResult | null = null;
+    for (const entry of entries) {
+      const result = readGroupedStatistic(entry, lookup, player);
+      if (result.status === "missing") {
+        for (const name of result.names) names.add(name);
+        continue;
+      }
+      found = result;
+      break;
+    }
+    if (found?.status === "ok" && (key === "passing_yards" || key === "passing_touchdowns")) line[key] = found.value;
+    else missing.push(`${key} (group "${lookup.group}", statistic "${lookup.name}")`);
+  }
+  return { line, missing, names: [...names] };
+}
+
+/**
+ * Every statistic name and value the host carries for one player in the
+ * Passing group, for the diagnostics note. Names AND values, because the
+ * question this answers — is "rating" the league's passer rating or ESPN's
+ * QBR? — is settled by seeing the figure beside the name.
+ */
+function describePassing(entries: unknown[], player: string): string {
+  const out: string[] = [];
+  for (const entry of entries) {
+    for (const group of groupsOf(entry)) {
+      if (!same(group.name, "Passing")) continue;
+      const players = Array.isArray(group.players) ? group.players.filter((row) => String(row.player?.id) === String(player)) : [];
+      for (const row of players) for (const stat of row.statistics ?? []) out.push(`${String(stat.name)}=${JSON.stringify(stat.value)}`);
+    }
+  }
+  return out.length > 0 ? out.join(", ") : "none";
 }
 
 /** Finished games that count: not in an excluded stage. */
@@ -620,10 +868,48 @@ export const apisportsConnector: DataConnector = {
     const season = seasonFor(context.now, config.season);
     const team = await resolveTeam(config, key, context.fetch, player, season, status);
     const games = await gamesFor(config, key, context.fetch, season, team, context.now);
-    return countedGames(games, config)
-      .sort((a, b) => b.date.getTime() - a.date.getTime())
+    const finished = countedGames(games, config).sort((a, b) => b.date.getTime() - a.date.getTime());
+
+    // THE NEWEST finished game is the one whose result is news, so it is the
+    // only one whose statistics are read for the headline: one request a
+    // poll at most, shared with the metric read through the cache, and zero
+    // once the games list stops moving. The older ones in the window were
+    // stored weeks ago under a headline that will never be rewritten (the
+    // dedupe key ignores duplicates), so reading their lines would buy
+    // nothing and spend quota.
+    let line: GameLine | null = null;
+    const newest = finished[0];
+    if (newest) {
+      try {
+        const entries = await gameStatisticsFor(config, key, context.fetch, newest.id, context.now);
+        const read = readGameLine(entries, config, player);
+        line = read.line;
+        if (read.missing.length > 0) {
+          context.note?.(
+            `API-Sports game ${newest.id} (${newest.week ?? "week ?"}): no headline statistic for ${read.missing.join("; ")}. ` +
+              `His statistics in that group: ${read.names.length > 0 ? read.names.join(", ") : "none"}. ` +
+              `The result is reported without the missing clause; correct config.headline_stats on the data_sources row rather than redeploying.`,
+          );
+        }
+        if (config.diagnostics) {
+          // THE NOTE CHANNEL AS A MICROSCOPE (the Phase 22 method). The
+          // sandbox this is written in cannot reach api-sports.io, so the one
+          // place the response can be read is the poll that fetched it.
+          context.note?.(
+            `[diagnostics] game ${newest.id} status=${JSON.stringify(newest.status)} kickoff=${newest.date.toISOString()} ` +
+              `endedAtReported=${newest.endedAt ? newest.endedAt.toISOString() : "none"}; ` +
+              `player ${player} statistics in group "Passing": ${describePassing(entries, player)}`,
+          );
+        }
+      } catch (error) {
+        // The result is the signal; its garnish is not worth losing it over.
+        context.note?.(`API-Sports headline statistics for game ${newest.id} failed: ${error instanceof Error ? error.message : String(error)}. The result is reported without them.`);
+      }
+    }
+
+    return finished
       .slice(0, config.recent_games)
-      .map((game) => gameSignal(person, game, APISPORTS_SOURCE_NAME))
+      .map((game) => gameSignal(person, game, APISPORTS_SOURCE_NAME, { observedAt: context.now, config, line: game === newest ? line : null }))
       .filter((signal): signal is RawSignal => signal !== null);
   },
 
@@ -727,7 +1013,7 @@ export const apisportsConnector: DataConnector = {
     const when = (game: ApiSportsGame) => `game ${game.id} (${game.week ?? "week ?"}, ${game.date.toISOString().slice(0, 10)})`;
     const readings = new Map<string, Array<{ game: ApiSportsGame; value: number }>>(stats.map(([metricKey]) => [metricKey, []]));
     for (const game of wanted) {
-      const entries = (await call<unknown>(fill(config.paths.game_statistics, { game: game.id }), config, key, context.fetch)).response ?? [];
+      const entries = await gameStatisticsFor(config, key, context.fetch, game.id, context.now);
       // Absent from every team's sheet: did not play. The check does not
       // depend on which statistic is asked for, only on whether his line is there.
       const playerSeen = entries.some((entry) => {
