@@ -2875,6 +2875,50 @@ fixed:
   | before | 23px of the 52px button visible; a tap at its centre hits the tab bar | **0px visible**; a tap at its centre hits the tab bar |
   | after | **52px visible**; the tap hits the button | 41px visible; the tap hits the button |
 
+### The pinned footer (Phase 26b)
+
+Phase 26 bought the sheet height. It did not change its shape, so the primary
+action still rode at the bottom of the scrolling content and whether you could
+reach it stayed a function of how tall that content happened to be — the Sell
+sheet was still 59px over on the smallest supported viewport, and every row a
+later phase adds takes another bite out of the one control the sheet exists to
+offer. So the sheet became three regions: the pinned title, a scrolling body,
+and a **pinned footer** carrying the step's primary action. Every step hands
+its bottom action row up — Review, Back/Confirm, Done, Close/Change order — and
+the copy, variants and order are exactly what each step rendered before. What
+stays in the body is what needs the body to make sense: the rejection's "Review
+at $57.14" beside the quote it names, "Buy 3 shares instead" beside the limit
+that produced it.
+
+Pinned by flex, not by `position: sticky` — the panel is a column with a fixed
+maximum height, so a `shrink-0` last child sits against the bottom edge and the
+middle child takes what is left. No stacking context to reason about, and
+"above the tab bar" is true by containment rather than by a second token. The
+hairline on top is shown only while body remains underneath it, and is always
+in the box (transparent when off) so toggling it cannot shift a pixel.
+
+Measured at 375×667, the primary action at rest, every step and both sides:
+
+| step | Buy | Sell |
+| --- | --- | --- |
+| compose | 52/52px, tap hits the button | 52/52px, tap hits the button |
+| compose, scrolled to the end | 52/52px | 52/52px |
+| compose + a 56px stand-in row above the stepper | 52/52px (body 516 → 580) | 52/52px (body 566 → 630) |
+| confirm | 52/52px | 52/52px |
+| filled | 52/52px | 52/52px |
+
+The extra row costs the BODY its scroll and never the action, which is the
+whole point: Phase 27's Shares/Dollars toggle can land above the stepper
+without a spacing negotiation.
+
+**The software keyboard.** `position: fixed` resolves against the layout
+viewport, which iOS does not shrink when the keyboard appears — so a
+bottom-anchored sheet, and its footer with it, ends up behind the keyboard.
+The overlay now tracks `visualViewport` and lifts its own bottom edge by the
+occluded height. Driven with a 260px inset on a 667px viewport, the panel and
+the footer both come to rest at 407px, which is exactly the top of the
+keyboard. Where the API is absent the inset stays 0 and nothing changes.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.

@@ -198,14 +198,83 @@ export function TradeSheet({
   const quoteMoved = step === "confirm" && armedPriceCents !== null && armedPriceCents !== livePrice;
   const title = `${verb(side)} ${person.displayName}`;
 
+  const reopenCompose = () => {
+    setResult(null);
+    setStep("compose");
+  };
+
+  /**
+   * THE PINNED ACTION (Phase 26b). Every step's bottom action row lives here
+   * rather than at the end of its own scrolling block, so how far the reader
+   * is through the sheet has nothing to do with whether they can act on it.
+   * The copy, the variants and the order are exactly what each step rendered
+   * before; only where they are drawn changed.
+   *
+   * What does NOT come up here is anything that needs the body to make sense
+   * — the rejection's "Review at $57.14" sits beside the new quote it names,
+   * and "Buy 3 shares instead" beside the limit that produced it. The footer
+   * is for the step's own way forward.
+   */
+  const footer = ((): React.ReactNode => {
+    if (step === "compose" && nothingToClose) {
+      return (
+        <Button variant="outline" size="lg" className="w-full" onClick={close}>
+          Close
+        </Button>
+      );
+    }
+    if (step === "compose") {
+      return (
+        <div className="flex flex-col gap-2">
+          <Button variant={side === "BUY" ? "buy" : "sell"} size="lg" className="w-full" onClick={review} disabled={Boolean(composeError) || units <= 0}>
+            Review {verb(side).toLowerCase()}
+          </Button>
+          <p className="text-center text-xs text-fg-faint">Nothing is placed until you confirm the exact price.</p>
+        </div>
+      );
+    }
+    if (step === "confirm") {
+      return (
+        <div className="flex gap-3">
+          <Button variant="outline" size="lg" onClick={() => setStep("compose")} disabled={submitting}>
+            Back
+          </Button>
+          <Button variant={side === "BUY" ? "buy" : "sell"} size="lg" className="flex-1" onClick={submit} loading={submitting}>
+            {quoteMoved ? `Confirm at ${formatCents(livePrice)}` : `Confirm ${verb(side).toLowerCase()}`} · {formatCents(preview.grossCents)}
+          </Button>
+        </div>
+      );
+    }
+    if (step === "result" && result?.ok) {
+      return (
+        <Button variant="primary" size="lg" className="w-full" onClick={close}>
+          Done
+        </Button>
+      );
+    }
+    if (step === "result" && result && !result.ok) {
+      return (
+        <div className="flex gap-3">
+          <Button variant="ghost" size="lg" className="flex-1" onClick={close}>
+            Close
+          </Button>
+          {result.code !== "unauthenticated" && result.code !== "unknown_person" ? (
+            <Button variant="outline" size="lg" className="flex-1" onClick={reopenCompose}>
+              Change order
+            </Button>
+          ) : null}
+        </div>
+      );
+    }
+    return null;
+  })();
+
   return (
-    <Sheet open={open} onClose={close} title={title} description="Paper trading. Not real money.">
+    <Sheet open={open} onClose={close} title={title} description="Paper trading. Not real money." footer={footer}>
       <div className="flex flex-col gap-6">
         {step !== "result" ? <QuoteBlock side={side} buyCents={buyCents} sellCents={sellCents} /> : null}
 
-        {step === "compose" && nothingToClose ? (
-          <NothingToClose personName={person.displayName} onClose={close} />
-        ) : null}
+        {step === "compose" && nothingToClose ? <NothingToClose personName={person.displayName} /> : null}
 
         {step === "compose" && !nothingToClose ? (
           <div className="flex flex-col gap-5">
@@ -213,6 +282,10 @@ export function TradeSheet({
               <label htmlFor="trade-units" className="text-sm font-medium text-fg-secondary">
                 Shares
               </label>
+              {/* PHASE 27's Shares | Dollars toggle belongs on its own row here,
+                  between the label and the stepper. Nothing is reserved for it:
+                  the point of the pinned footer is that a new row costs the body
+                  its scroll and never the primary action. */}
               <div className="flex items-center gap-2">
                 <Button
                   variant="outline"
@@ -258,13 +331,6 @@ export function TradeSheet({
             </div>
 
             <PreviewList side={side} units={units} priceCents={livePrice} grossCents={preview.grossCents} balanceAfterCents={preview.balanceAfterCents} position={position} />
-
-            <div className="flex flex-col gap-2">
-              <Button variant={side === "BUY" ? "buy" : "sell"} size="lg" className="w-full" onClick={review} disabled={Boolean(composeError) || units <= 0}>
-                Review {verb(side).toLowerCase()}
-              </Button>
-              <p className="text-center text-xs text-fg-faint">Nothing is placed until you confirm the exact price.</p>
-            </div>
           </div>
         ) : null}
 
@@ -296,30 +362,17 @@ export function TradeSheet({
             ) : null}
 
             <PreviewList side={side} units={units} priceCents={livePrice} grossCents={preview.grossCents} balanceAfterCents={preview.balanceAfterCents} position={position} compact />
-
-            <div className="flex gap-3">
-              <Button variant="outline" size="lg" onClick={() => setStep("compose")} disabled={submitting}>
-                Back
-              </Button>
-              <Button variant={side === "BUY" ? "buy" : "sell"} size="lg" className="flex-1" onClick={submit} loading={submitting}>
-                {quoteMoved ? `Confirm at ${formatCents(livePrice)}` : `Confirm ${verb(side).toLowerCase()}`} · {formatCents(preview.grossCents)}
-              </Button>
-            </div>
           </div>
         ) : null}
 
         {step === "result" && result ? (
           result.ok ? (
-            <FilledView result={result} side={side} personName={person.displayName} onDone={close} />
+            <FilledView result={result} side={side} personName={person.displayName} />
           ) : (
             <RejectedView
               result={result}
               side={side}
               units={units}
-              onBack={() => {
-                setResult(null);
-                setStep("compose");
-              }}
               onRequote={(priceCents) => {
                 setArmedPriceCents(priceCents);
                 setResult(null);
@@ -330,7 +383,6 @@ export function TradeSheet({
                 setResult(null);
                 setStep("compose");
               }}
-              onClose={close}
             />
           )
         ) : null}
@@ -427,23 +479,19 @@ function PreviewList({
   );
 }
 
-function NothingToClose({ personName, onClose }: { personName: string; onClose: () => void }) {
+/** The step's own Close button is in the sheet's footer (Phase 26b). */
+function NothingToClose({ personName }: { personName: string }) {
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-2 rounded-2xl bg-surface-raised/60 p-5">
-        <p className="text-lg font-semibold tracking-tight text-fg">Nothing to close.</p>
-        <p className="text-sm leading-relaxed text-fg-muted">
-          You hold no shares of {personName}. While the platform is long-only, Sell only closes or reduces a position you already have; Buy is how one opens.
-        </p>
-      </div>
-      <Button variant="outline" size="lg" className="w-full" onClick={onClose}>
-        Close
-      </Button>
+    <div className="flex flex-col gap-2 rounded-2xl bg-surface-raised/60 p-5">
+      <p className="text-lg font-semibold tracking-tight text-fg">Nothing to close.</p>
+      <p className="text-sm leading-relaxed text-fg-muted">
+        You hold no shares of {personName}. While the platform is long-only, Sell only closes or reduces a position you already have; Buy is how one opens.
+      </p>
     </div>
   );
 }
 
-function FilledView({ result, side, personName, onDone }: { result: Extract<OrderResult, { ok: true }>; side: OrderSide; personName: string; onDone: () => void }) {
+function FilledView({ result, side, personName }: { result: Extract<OrderResult, { ok: true }>; side: OrderSide; personName: string }) {
   const { order, position, balanceCents } = result;
   return (
     <div className="flex flex-col gap-5">
@@ -491,30 +539,27 @@ function FilledView({ result, side, personName, onDone }: { result: Extract<Orde
           )}
         </dd>
       </dl>
-
-      <Button variant="primary" size="lg" className="w-full" onClick={onDone}>
-        Done
-      </Button>
     </div>
   );
 }
 
+/**
+ * The rejection, and the two ways out that need its context: a re-quote at
+ * the price it names, and the smaller order the limit allows. Close and
+ * Change order are in the sheet's footer (Phase 26b).
+ */
 function RejectedView({
   result,
   side,
   units,
-  onBack,
   onRequote,
   onUnits,
-  onClose,
 }: {
   result: Extract<OrderResult, { ok: false }>;
   side: OrderSide;
   units: number;
-  onBack: () => void;
   onRequote: (priceCents: Cents) => void;
   onUnits: (units: number) => void;
-  onClose: () => void;
 }) {
   const newPrice = typeof result.extra.fill_price_cents === "number" ? (result.extra.fill_price_cents as Cents) : result.quote ? (side === "BUY" ? result.quote.buyCents : result.quote.sellCents) : null;
   const maxUnits = typeof result.extra.max_units === "number" ? result.extra.max_units : null;
@@ -544,17 +589,6 @@ function RejectedView({
           {verb(side)} {sharesLabel(maxUnits)} instead
         </Button>
       ) : null}
-
-      <div className="flex gap-3">
-        <Button variant="ghost" size="lg" className="flex-1" onClick={onClose}>
-          Close
-        </Button>
-        {result.code !== "unauthenticated" && result.code !== "unknown_person" ? (
-          <Button variant="outline" size="lg" className="flex-1" onClick={onBack}>
-            Change order
-          </Button>
-        ) : null}
-      </div>
     </div>
   );
 }
