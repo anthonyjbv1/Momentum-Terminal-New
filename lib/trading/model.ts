@@ -107,8 +107,52 @@ export const RISK_LEVER_DEFAULTS = {
   closeCooldownSeconds: 60,
 } as const;
 
-/** Most units one order may ask for from the interface (the server's own bound is the balance and the levers). */
-export const MAX_ORDER_UNITS = 100_000;
+/**
+ * Most SHARES one order may ask for from the interface (the server's own
+ * bound is the balance and the levers).
+ */
+export const MAX_ORDER_SHARES = 100_000;
+
+/** Deprecated spelling kept while callers move over; both are share counts. */
+export const MAX_ORDER_UNITS = MAX_ORDER_SHARES;
+
+/**
+ * THE SCALE, mirroring units_per_share(). A unit is a thousandth of a share,
+ * so 0.001 is the smallest quantity that exists and every quantity sent to
+ * the server is a whole number of units.
+ */
+export const UNITS_PER_SHARE = 1000;
+
+/** The smallest order the platform accepts, either mode: platform_settings.min_order_cents. */
+export const MIN_ORDER_CENTS = cents(100);
+
+/**
+ * THE ROUNDING RULE, mirroring units_cost_cents() and units_proceeds_cents().
+ * A buy's cost rounds UP to the cent and a sell's proceeds round DOWN, so a
+ * fraction of a cent is never resolved in the user's favour. Both live here,
+ * in one place each, exactly as they do in SQL — and the preview the sheet
+ * shows is the charge the server will make, not an approximation of it.
+ */
+export function unitsCostCents(units: number, priceCents: Cents | number): Cents {
+  return cents(Math.ceil((units * priceCents) / UNITS_PER_SHARE));
+}
+
+export function unitsProceedsCents(units: number, priceCents: Cents | number): Cents {
+  return cents(Math.floor((units * priceCents) / UNITS_PER_SHARE));
+}
+
+/**
+ * Shares as the user typed them → whole units for the wire. Rounded to the
+ * nearest unit because a third decimal is as fine as the scale goes: 0.0005
+ * is not a quantity, it is a typo, and the server would refuse it anyway.
+ */
+export function sharesToUnits(shares: number): number {
+  return Number.isFinite(shares) ? Math.round(shares * UNITS_PER_SHARE) : 0;
+}
+
+export function unitsToShares(units: number): number {
+  return units / UNITS_PER_SHARE;
+}
 
 // ---------------------------------------------------------------------------
 // Quotes
@@ -277,6 +321,9 @@ export const ORDER_REJECTION_CODES = [
   "open_interest",
   "unknown_person",
   "no_quote",
+  // The order is smaller than platform_settings.min_order_cents, in whichever
+  // mode it was entered: the amount in Dollars, the notional in Shares.
+  "below_minimum",
   // Raised by the route rather than the database.
   "unauthenticated",
   "invalid",
@@ -409,24 +456,88 @@ export function parseOrderResponse(value: unknown, personId: string): OrderResul
 
 export interface OrderPreview {
   side: OrderSide;
+  /** Shares, as the sheet will send them. May be fractional. */
+  shares: number;
+  /** The same quantity in whole units: what actually goes on the wire. */
   units: number;
   priceCents: Cents;
-  /** units × price: the cost of a Buy or the gross proceeds of a Sell. */
+  /** What the server will charge for a Buy, or return for a Sell — through the rounding rule, to the cent. */
   grossCents: Cents;
   /** The balance after, before any realized P&L on a Sell is known. */
   balanceAfterCents: Cents;
-  /** Units the balance can cover at this price (Buy). */
-  affordableUnits: number;
+  /** Shares the balance can cover at this price (Buy). */
+  affordableShares: number;
+  /** True when the order is worth less than the platform minimum and the server would refuse it. */
+  belowMinimum: boolean;
 }
 
-export function previewOrder(side: OrderSide, units: number, priceCents: Cents, balanceCents: Cents): OrderPreview {
-  const safeUnits = Number.isSafeInteger(units) && units > 0 ? units : 0;
-  const gross = cents(safeUnits * priceCents);
+/**
+ * What a Shares-mode order will do, priced the way the server prices it.
+ * previewOrder does not round a quantity: the sheet decides what the user
+ * asked for and this says what it costs.
+ */
+export function previewOrder(side: OrderSide, shares: number, priceCents: Cents, balanceCents: Cents): OrderPreview {
+  const units = shares > 0 ? sharesToUnits(shares) : 0;
+  const gross = side === "BUY" ? unitsCostCents(units, priceCents) : unitsProceedsCents(units, priceCents);
   const balanceAfter = cents(side === "BUY" ? balanceCents - gross : balanceCents + gross);
-  return { side, units: safeUnits, priceCents, grossCents: gross, balanceAfterCents: balanceAfter, affordableUnits: priceCents > 0 ? Math.floor(balanceCents / priceCents) : 0 };
+  return {
+    side,
+    shares: units / UNITS_PER_SHARE,
+    units,
+    priceCents,
+    grossCents: gross,
+    balanceAfterCents: balanceAfter,
+    affordableShares: priceCents > 0 ? affordableUnits(balanceCents, priceCents) / UNITS_PER_SHARE : 0,
+    belowMinimum: units > 0 && gross < MIN_ORDER_CENTS,
+  };
 }
 
-/** "shares" is the word people see; the count is units. */
-export function sharesLabel(units: number): string {
-  return units === 1 ? "1 share" : `${units.toLocaleString("en-US")} shares`;
+/**
+ * DOLLARS MODE, mirroring place_order()'s inversion. The largest quantity
+ * whose rounded-UP cost still fits inside the amount asked for. Because
+ * ceil(x) <= S is exactly x <= S for an integer S, that quantity is
+ * floor(S × 1000 / price) — no search, no float, and the charge that comes
+ * back is at most the amount entered, never more.
+ */
+export function affordableUnits(spendCents: Cents | number, priceCents: Cents | number): number {
+  if (priceCents <= 0) return 0;
+  return Math.floor((spendCents * UNITS_PER_SHARE) / priceCents);
 }
+
+/** What a Dollars-mode order will actually buy and actually cost. */
+export function previewSpend(side: OrderSide, spendCents: Cents, priceCents: Cents, balanceCents: Cents): OrderPreview {
+  const units = affordableUnits(spendCents, priceCents);
+  const gross = side === "BUY" ? unitsCostCents(units, priceCents) : unitsProceedsCents(units, priceCents);
+  const balanceAfter = cents(side === "BUY" ? balanceCents - gross : balanceCents + gross);
+  return {
+    side,
+    shares: units / UNITS_PER_SHARE,
+    units,
+    priceCents,
+    grossCents: gross,
+    balanceAfterCents: balanceAfter,
+    affordableShares: affordableUnits(balanceCents, priceCents) / UNITS_PER_SHARE,
+    // In Dollars mode the minimum is checked against what the user entered,
+    // so that typing exactly $1.00 is never perversely refused for landing a
+    // cent under it once the quantity is resolved.
+    belowMinimum: spendCents < MIN_ORDER_CENTS || units <= 0,
+  };
+}
+
+/**
+ * A quantity of shares as a number: up to three decimals, trailing zeros
+ * trimmed, so 3 is "3", 0.5 is "0.5" and 1.125 is "1.125". Mirrors
+ * shares_text() so a rejection sentence written in SQL and a line written
+ * here never describe the same order two ways.
+ */
+export function sharesText(shares: number): string {
+  const units = sharesToUnits(shares);
+  if (units % UNITS_PER_SHARE === 0) return (units / UNITS_PER_SHARE).toLocaleString("en-US");
+  return (units / UNITS_PER_SHARE).toFixed(3).replace(/0+$/, "");
+}
+
+/** "shares" is the word people see. Singular only at exactly one. */
+export function sharesLabel(shares: number): string {
+  return `${sharesText(shares)} ${sharesToUnits(shares) === UNITS_PER_SHARE ? "share" : "shares"}`;
+}
+

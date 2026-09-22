@@ -786,6 +786,7 @@ export type Database = {
           max_daily_close_cents: number
           max_open_interest_share: number
           max_units_per_person: number
+          min_order_cents: number
           price_tolerance_cents: number
           shorting_enabled: boolean
           updated_at: string
@@ -796,6 +797,7 @@ export type Database = {
           max_daily_close_cents?: number
           max_open_interest_share?: number
           max_units_per_person?: number
+          min_order_cents?: number
           price_tolerance_cents?: number
           shorting_enabled?: boolean
           updated_at?: string
@@ -806,6 +808,7 @@ export type Database = {
           max_daily_close_cents?: number
           max_open_interest_share?: number
           max_units_per_person?: number
+          min_order_cents?: number
           price_tolerance_cents?: number
           shorting_enabled?: boolean
           updated_at?: string
@@ -948,6 +951,7 @@ export type Database = {
           id: string
           is_open: boolean
           open_units: number
+          open_cost_cents: number
           opened_at: string
           order_id: string | null
           person_id: string
@@ -963,6 +967,7 @@ export type Database = {
           id?: string
           is_open?: boolean
           open_units: number
+          open_cost_cents: number
           opened_at?: string
           order_id?: string | null
           person_id: string
@@ -978,6 +983,7 @@ export type Database = {
           id?: string
           is_open?: boolean
           open_units?: number
+          open_cost_cents?: number
           opened_at?: string
           order_id?: string | null
           person_id?: string
@@ -1580,6 +1586,8 @@ export type Database = {
           opened_units: number
           person_id: string
           quoted_price_cents: number | null
+          quantity_scale: string
+          requested_spend_cents: number | null
           realized_pnl_cents: number
           side: string
           surface: string | null
@@ -1596,6 +1604,8 @@ export type Database = {
           opened_units?: number
           person_id: string
           quoted_price_cents?: number | null
+          quantity_scale?: string
+          requested_spend_cents?: number | null
           realized_pnl_cents?: number
           side: string
           surface?: string | null
@@ -1612,6 +1622,8 @@ export type Database = {
           opened_units?: number
           person_id?: string
           quoted_price_cents?: number | null
+          quantity_scale?: string
+          requested_spend_cents?: number | null
           realized_pnl_cents?: number
           side?: string
           surface?: string | null
@@ -1927,6 +1939,7 @@ export type Database = {
           side: string
           surface: string
           units: number
+          units_per_share: number
         }[]
       }
       net_position_cents: {
@@ -1964,11 +1977,13 @@ export type Database = {
       }
       place_order: {
         Args: {
+          p_max_spend_cents?: number
           p_person_id: string
+          p_quantity_scale?: string
           p_quoted_price_cents?: number
           p_side: string
           p_surface?: string
-          p_units: number
+          p_units?: number
         }
         Returns: Json
       }
@@ -2038,11 +2053,22 @@ export type Database = {
       search_key: { Args: { p_text: string }; Returns: string }
       search_terms: { Args: { p_text: string }; Returns: string }
       shorting_enabled: { Args: never; Returns: boolean }
+      shares_label: { Args: { p_units: number }; Returns: string }
+      shares_text: { Args: { p_units: number }; Returns: string }
       snapshot_portfolios: {
         Args: { p_at: string; p_tick_number?: number }
         Returns: number
       }
       starting_balance_cents: { Args: never; Returns: number }
+      units_cost_cents: {
+        Args: { p_price_cents: number; p_units: number }
+        Returns: number
+      }
+      units_per_share: { Args: Record<PropertyKey, never>; Returns: number }
+      units_proceeds_cents: {
+        Args: { p_price_cents: number; p_units: number }
+        Returns: number
+      }
       trade_history_for: {
         Args: {
           p_before?: string
@@ -2069,6 +2095,7 @@ export type Database = {
           side: string
           surface: string
           units: number
+          units_per_share: number
         }[]
       }
       trade_quote: { Args: { p_person_id: string }; Returns: Json }

@@ -74,12 +74,12 @@ export const BEHAVIORAL_EVENT_DEFINITIONS: Record<BehavioralEventType, Behaviora
   take_position: {
     description: "Opened a HIGH or LOW position on a person.",
     requiresPerson: true,
-    metadata: "{ direction: 'HIGH' | 'LOW', amount_cents: integer >= 0, position_id?: uuid }",
+    metadata: "{ direction: 'HIGH' | 'LOW', amount_cents: integer >= 0, units?: integer >= 0, units_per_share?: integer >= 1 (absent = whole shares), position_id?: uuid }",
   },
   close_position: {
     description: "Closed a position on a person.",
     requiresPerson: true,
-    metadata: "{ position_id?: uuid, direction?: 'HIGH' | 'LOW', amount_cents?: integer, pnl_cents?: integer }",
+    metadata: "{ position_id?: uuid, direction?: 'HIGH' | 'LOW', amount_cents?: integer, units?: integer >= 0, units_per_share?: integer >= 1 (absent = whole shares), pnl_cents?: integer }",
   },
   follow_person: {
     description: "Followed a person.",
@@ -139,12 +139,12 @@ export const BEHAVIORAL_EVENT_DEFINITIONS: Record<BehavioralEventType, Behaviora
   abandon_trade_sheet: {
     description: "Closed the Buy / Sell sheet without trading. High-signal: intent that did not convert.",
     requiresPerson: true,
-    metadata: "{ side: 'BUY' | 'SELL', step: 'compose' | 'confirm' | 'result', units?: integer >= 0, surface?: string }",
+    metadata: "{ side: 'BUY' | 'SELL', step: 'compose' | 'confirm' | 'result', units?: integer >= 0, units_per_share?: integer >= 1 (absent = whole shares), surface?: string }",
   },
   reject_trade: {
     description: "An order the server refused: the price moved, or a limit was hit.",
     requiresPerson: true,
-    metadata: "{ side: 'BUY' | 'SELL', code: string (non-empty, e.g. price_moved | daily_limit), units?: integer >= 0, surface?: string }",
+    metadata: "{ side: 'BUY' | 'SELL', code: string (non-empty, e.g. price_moved | daily_limit), units?: integer >= 0, units_per_share?: integer >= 1 (absent = whole shares), surface?: string }",
   },
   view_portfolio: {
     description: "Opened the portfolio.",
@@ -286,6 +286,27 @@ const isNonNegativeInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0;
 const isInteger = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value);
 
+/**
+ * THE SCALE A LOGGED QUANTITY IS COUNTED IN (Phase 27).
+ *
+ * metadata.units is still a whole number, but from Phase 27 one unit is a
+ * thousandth of a share rather than a share, so an event carries
+ * units_per_share alongside it and anything reading the table divides by what
+ * the row says. Rows written before Phase 27 have no such field and mean
+ * whole shares, which is the same absent-means-1 rule the interface reads
+ * payloads by. Without it the two eras of this table would look alike and
+ * differ by a factor of a thousand.
+ */
+function checkUnits(metadata: BehavioralMetadata | null): string | null {
+  if (metadata?.units !== undefined && !isNonNegativeInteger(metadata.units)) {
+    return "metadata.units must be an integer >= 0";
+  }
+  if (metadata?.units_per_share !== undefined && !(isNonNegativeInteger(metadata.units_per_share) && metadata.units_per_share >= 1)) {
+    return "metadata.units_per_share must be an integer >= 1";
+  }
+  return null;
+}
+
 function normalizeDirection(value: unknown): "HIGH" | "LOW" | null {
   if (typeof value !== "string") return null;
   const upper = value.toUpperCase();
@@ -312,6 +333,8 @@ const TYPE_CHECKS: Partial<Record<BehavioralEventType, TypeCheck>> = {
     if (metadata?.position_id !== undefined && !isUuid(metadata.position_id)) {
       return { ok: false, reason: "metadata.position_id must be a UUID" };
     }
+    const units = checkUnits(metadata);
+    if (units) return { ok: false, reason: units };
     return { ok: true, metadata: { ...metadata, direction } };
   },
   close_position: (metadata) => {
@@ -330,6 +353,8 @@ const TYPE_CHECKS: Partial<Record<BehavioralEventType, TypeCheck>> = {
     if (out.pnl_cents !== undefined && !isInteger(out.pnl_cents)) {
       return { ok: false, reason: "metadata.pnl_cents must be an integer" };
     }
+    const units = checkUnits(out);
+    if (units) return { ok: false, reason: units };
     return { ok: true, metadata: Object.keys(out).length > 0 ? out : null };
   },
   search: (metadata) => {
@@ -415,9 +440,8 @@ const TYPE_CHECKS: Partial<Record<BehavioralEventType, TypeCheck>> = {
     if (!(TRADE_SHEET_STEPS as readonly string[]).includes(step)) {
       return { ok: false, reason: `abandon_trade_sheet requires metadata.step (${TRADE_SHEET_STEPS.join(" | ")})` };
     }
-    if (metadata?.units !== undefined && !isNonNegativeInteger(metadata.units)) {
-      return { ok: false, reason: "metadata.units must be an integer >= 0" };
-    }
+    const units = checkUnits(metadata);
+    if (units) return { ok: false, reason: units };
     return { ok: true, metadata: { ...metadata, side, step } };
   },
   reject_trade: (metadata) => {
@@ -425,9 +449,8 @@ const TYPE_CHECKS: Partial<Record<BehavioralEventType, TypeCheck>> = {
     if (!side) return { ok: false, reason: "reject_trade requires metadata.side (BUY | SELL)" };
     const code = typeof metadata?.code === "string" ? metadata.code.trim().toLowerCase() : "";
     if (!code) return { ok: false, reason: "reject_trade requires metadata.code (non-empty string)" };
-    if (metadata?.units !== undefined && !isNonNegativeInteger(metadata.units)) {
-      return { ok: false, reason: "metadata.units must be an integer >= 0" };
-    }
+    const units = checkUnits(metadata);
+    if (units) return { ok: false, reason: units };
     return { ok: true, metadata: { ...metadata, side, code } };
   },
   view_portfolio: (metadata) => {

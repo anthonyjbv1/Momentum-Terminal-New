@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createTestDatabase, type TestDatabase } from "@/lib/__tests__/pglite";
+import { UNITS_PER_SHARE, cents, previewOrder, previewSpend, sharesLabel, sharesText } from "@/lib/trading/model";
 
 /**
  * FRACTIONAL SHARES, against a real Postgres with the migrations applied
@@ -394,3 +395,84 @@ describe("the transition: two scales, declared not guessed", () => {
     expect(rows.map((r) => r.quantity_scale)).toEqual(["milli", "share"]);
   });
 });
+
+describe("the interface and the database say a quantity the same way", () => {
+  /**
+   * shares_text() writes the rejection sentences; sharesText() writes the
+   * lines beside them. If the two ever drift, the same order reads two ways
+   * — "0.75 shares" in the sheet and "0.750 shares" in the refusal — and the
+   * user is left deciding which of them to believe. So they are compared
+   * directly, over every shape a quantity can take: whole, a half, a third
+   * decimal, a trailing zero, the smallest unit there is, and one.
+   */
+  it("shares_text and shares_label match their TypeScript mirrors", async () => {
+    const units = [1, 5, 10, 100, 250, 500, 750, 999, 1000, 1001, 1010, 1100, 1500, 2000, 3333, 10_000, 12_345, 100_000, 1_000_000, 100_000_000];
+    const rows = await database.rows<{ units: string; text: string; label: string }>(
+      "select u::text as units, public.shares_text(u) as text, public.shares_label(u) as label from unnest($1::bigint[]) as u",
+      [units],
+    );
+    expect(rows).toHaveLength(units.length);
+    for (const row of rows) {
+      const shares = Number(row.units) / UNITS_PER_SHARE;
+      // en-US grouping is a presentation choice this side makes and SQL does
+      // not, so the comparison is on the digits themselves.
+      expect(sharesText(shares).replace(/,/g, "")).toBe(row.text);
+      expect(sharesLabel(shares).replace(/,/g, "")).toBe(row.label);
+    }
+    // And the rule the label exists for: singular at exactly one, nowhere else.
+    expect(rows.find((r) => r.units === "1000")?.label).toBe("1 share");
+    expect(rows.find((r) => r.units === "1001")?.label).toBe("1.001 shares");
+    expect(rows.find((r) => r.units === "500")?.label).toBe("0.5 shares");
+  });
+
+  /**
+   * The same for the money: previewOrder and previewSpend exist so the sheet
+   * can show a cost before it sends anything, and they are only worth having
+   * if that cost is the one the server charges. Compared against the SQL
+   * helpers over the whole price range, in both directions.
+   */
+  it("previewOrder and previewSpend agree with units_cost_cents and units_proceeds_cents", async () => {
+    const cases: Array<{ units: number; price: number }> = [];
+    for (const units of [1, 7, 250, 999, 1000, 1001, 3333, 10_000]) {
+      for (const price of [1, 99, 100, 4950, 5050, 5673, 10_000]) cases.push({ units, price });
+    }
+    const rows = await database.rows<{ u: string; p: string; cost: string; proceeds: string }>(
+      `select (c->>'units')::bigint::text as u, (c->>'price')::bigint::text as p,
+              public.units_cost_cents((c->>'units')::bigint, (c->>'price')::bigint)::text     as cost,
+              public.units_proceeds_cents((c->>'units')::bigint, (c->>'price')::bigint)::text as proceeds
+         from jsonb_array_elements($1::jsonb) as c`,
+      [JSON.stringify(cases)],
+    );
+    expect(rows).toHaveLength(cases.length);
+    for (const row of rows) {
+      const shares = Number(row.u) / UNITS_PER_SHARE;
+      const price = cents(Number(row.p));
+      const balance = cents(100_000_000);
+      expect(previewOrder("BUY", shares, price, balance).grossCents).toBe(Number(row.cost));
+      expect(previewOrder("SELL", shares, price, balance).grossCents).toBe(Number(row.proceeds));
+    }
+  });
+
+  /**
+   * Dollars mode is an inversion, and an inversion is the easy place to be
+   * off by one unit. The quantity this side previews has to be the quantity
+   * the server resolves, or the sheet promises a holding the fill does not
+   * deliver.
+   */
+  it("previewSpend resolves the same quantity place_order does", async () => {
+    const amounts = [100, 101, 250, 999, 1000, 1234, 5000, 10_000];
+    const prices = [99, 4950, 5050, 5673, 10_000];
+    const rows = await database.rows<{ a: string; p: string; units: string }>(
+      `select (c->>'a')::bigint::text as a, (c->>'p')::bigint::text as p,
+              floor((c->>'a')::numeric * public.units_per_share() / (c->>'p')::numeric)::bigint::text as units
+         from jsonb_array_elements($1::jsonb) as c`,
+      [JSON.stringify(amounts.flatMap((a) => prices.map((p) => ({ a, p }))))],
+    );
+    for (const row of rows) {
+      const preview = previewSpend("BUY", cents(Number(row.a)), cents(Number(row.p)), cents(100_000_000));
+      expect(preview.units).toBe(Number(row.units));
+      // And the promise Dollars mode makes: never more than what was entered.
+      expect(preview.grossCents).toBeLessThanOrEqual(Number(row.a));
+    }
+  });
+}, 120_000);

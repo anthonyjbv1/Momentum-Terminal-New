@@ -8,10 +8,16 @@ import { cn } from "@/lib/cn";
 import { formatCents } from "@/lib/money";
 import type { OrderSide } from "@/lib/trading/direction";
 import {
-  MAX_ORDER_UNITS,
+  MAX_ORDER_SHARES,
+  MIN_ORDER_CENTS,
+  UNITS_PER_SHARE,
+  cents,
   parseOrderResponse,
   previewOrder,
+  previewSpend,
   sharesLabel,
+  sharesText,
+  sharesToUnits,
   type Cents,
   type OrderRejectionCode,
   type OrderResult,
@@ -85,7 +91,28 @@ export interface TradeSheetProps {
 
 type Step = "compose" | "confirm" | "result";
 
-const PRESETS = [1, 5, 10];
+/**
+ * TWO WAYS TO SAY THE SAME ORDER (Phase 27).
+ *
+ *   Shares   "0.75 of a share"  — a quantity; the cost follows from it
+ *   Dollars  "$10"              — an amount; the quantity follows from it
+ *
+ * Buy opens in Dollars and Sell in Shares, because that is what each side is
+ * actually about. Somebody buying has an amount in mind and does not care
+ * that it comes to 0.176 of a share; somebody selling is disposing of a
+ * holding they can see, and "all of it" is a quantity, not an amount. The
+ * choice is remembered for as long as the sheet is open and never guessed at
+ * again.
+ *
+ * Only ONE of the two is ever sent. In Dollars mode the request carries the
+ * amount and no quantity at all, so the server resolves it against the quote
+ * it reads — the arithmetic is never done here against a price that may have
+ * moved by the time it lands.
+ */
+type Mode = "shares" | "dollars";
+
+const SHARE_PRESETS = [1, 5, 10];
+const DOLLAR_PRESETS = [10, 25, 100];
 
 const REJECTION_TITLES: Record<OrderRejectionCode, string> = {
   price_moved: "The price moved",
@@ -97,10 +124,19 @@ const REJECTION_TITLES: Record<OrderRejectionCode, string> = {
   open_interest: "Concentration limit reached",
   unknown_person: "Not on the board",
   no_quote: "No quote right now",
+  below_minimum: "That order is too small",
   unauthenticated: "Sign in to trade",
   invalid: "That order is not valid",
   unavailable: "Trading is unavailable",
 };
+
+/** Keeps a typed number to one decimal point and at most `places` after it. */
+function limitDecimals(raw: string, places: number): string {
+  const cleaned = raw.replace(/[^0-9.]/g, "");
+  const [whole, ...rest] = cleaned.split(".");
+  if (rest.length === 0) return whole.slice(0, 7);
+  return `${whole.slice(0, 7)}.${rest.join("").slice(0, places)}`;
+}
 
 function verb(side: OrderSide, tense: "base" | "past" | "ing" = "base"): string {
   if (side === "BUY") return tense === "past" ? "Bought" : tense === "ing" ? "Buying" : "Buy";
@@ -123,7 +159,9 @@ export function TradeSheet({
   onFilled,
 }: TradeSheetProps) {
   const [step, setStep] = useState<Step>("compose");
-  const [unitsText, setUnitsText] = useState("1");
+  const [mode, setMode] = useState<Mode>(side === "BUY" ? "dollars" : "shares");
+  const [quantityText, setQuantityText] = useState("1");
+  const [amountText, setAmountText] = useState("10");
   const [armedPriceCents, setArmedPriceCents] = useState<Cents | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<OrderResult | null>(null);
@@ -131,14 +169,59 @@ export function TradeSheet({
   const inputRef = useRef<HTMLInputElement>(null);
 
   const livePrice = side === "BUY" ? buyCents : sellCents;
-  const units = useMemo(() => {
-    const parsed = Number.parseInt(unitsText, 10);
-    return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, MAX_ORDER_UNITS) : 0;
-  }, [unitsText]);
-  const preview = useMemo(() => previewOrder(side, units, livePrice, balanceCents), [side, units, livePrice, balanceCents]);
+  const typedShares = useMemo(() => {
+    const parsed = Number.parseFloat(quantityText);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+    return Math.min(sharesToUnits(parsed), MAX_ORDER_SHARES * UNITS_PER_SHARE) / UNITS_PER_SHARE;
+  }, [quantityText]);
+  const typedSpendCents = useMemo(() => {
+    const parsed = Number.parseFloat(amountText);
+    if (!Number.isFinite(parsed) || parsed <= 0) return cents(0);
+    return cents(Math.min(Math.round(parsed * 100), MAX_ORDER_SHARES * 100 * 100));
+  }, [amountText]);
+
+  // ONE PREVIEW, WHICHEVER MODE. Both go through the same rounding rule the
+  // server uses, so the cost shown here is the cost that will be charged.
+  const preview = useMemo(
+    () => (mode === "dollars" ? previewSpend(side, typedSpendCents, livePrice, balanceCents) : previewOrder(side, typedShares, livePrice, balanceCents)),
+    [mode, side, typedShares, typedSpendCents, livePrice, balanceCents],
+  );
+  const shares = preview.shares;
   const canSellOnly = side === "SELL" && !shortingEnabled;
   const nothingToClose = canSellOnly && position.openUnits <= 0;
-  const maxUnits = side === "BUY" ? preview.affordableUnits : canSellOnly ? position.openUnits : MAX_ORDER_UNITS;
+  const maxShares = side === "BUY" ? preview.affordableShares : canSellOnly ? position.openUnits : MAX_ORDER_SHARES;
+
+  /**
+   * THE CEILING CHIP, in the mode it is standing in. Buying in Dollars, the
+   * ceiling is an amount — the whole balance — because a share count beside
+   * $10 and $25 is a third unit in a row of two. Everywhere else it is a
+   * quantity.
+   *
+   * "All" is ALWAYS a quantity, even in Dollars mode, and the chip changes
+   * mode to say it: resolving a dollar figure back into a holding can only
+   * land within a unit of it, and a Sell that leaves 0.001 of a share behind
+   * has not closed the position. Naming the quantity closes it to exactly
+   * zero.
+   */
+  const maxChip =
+    mode === "dollars" && side === "BUY"
+      ? balanceCents >= MIN_ORDER_CENTS
+        ? {
+            label: `Max · ${formatCents(balanceCents)}`,
+            active: typedSpendCents === balanceCents,
+            onClick: () => setAmountText((balanceCents / 100).toFixed(2)),
+          }
+        : null
+      : maxShares > 0 && maxShares < MAX_ORDER_SHARES
+        ? {
+            label: `${side === "BUY" ? "Max" : "All"} · ${sharesText(maxShares)}`,
+            active: mode === "shares" && shares === maxShares,
+            onClick: () => {
+              setMode("shares");
+              setQuantityText(sharesText(maxShares));
+            },
+          }
+        : null;
 
   // The panel mounts this component fresh for every open (keyed by side), so
   // state starts clean without a reset; the open is logged once, on mount.
@@ -148,31 +231,50 @@ export function TradeSheet({
 
   const close = useCallback(() => {
     if (loggingEnabled && !filled.current) {
-      trackEvent({ eventType: "abandon_trade_sheet", personId: person.id, metadata: { side, step, units, surface } });
+      trackEvent({
+        eventType: "abandon_trade_sheet",
+        personId: person.id,
+        metadata: { side, step, units: preview.units, units_per_share: UNITS_PER_SHARE, mode, surface },
+      });
     }
     onClose();
-  }, [loggingEnabled, person.id, side, step, units, surface, onClose]);
+  }, [loggingEnabled, person.id, side, step, preview.units, mode, surface, onClose]);
 
   const composeError = useMemo((): string | null => {
     if (nothingToClose) return null;
-    if (units <= 0) return "Enter a whole number of shares.";
-    if (side === "BUY" && preview.grossCents > balanceCents) {
-      return preview.affordableUnits > 0
-        ? `Not enough paper balance for ${sharesLabel(units)}. You can afford ${preview.affordableUnits}.`
-        : "Not enough paper balance for a single share at this price.";
+    if (mode === "dollars") {
+      if (typedSpendCents <= 0) return "Enter an amount.";
+      if (typedSpendCents < MIN_ORDER_CENTS) return `The smallest order is ${formatCents(MIN_ORDER_CENTS)}.`;
+      if (side === "BUY" && typedSpendCents > balanceCents) {
+        return `Not enough paper balance. You have ${formatCents(balanceCents)} to spend.`;
+      }
+      if (side === "SELL" && canSellOnly && shares > position.openUnits) {
+        return `${formatCents(typedSpendCents)} is more than you hold. You hold ${sharesLabel(position.openUnits)}.`;
+      }
+      if (preview.units <= 0) return `${formatCents(typedSpendCents)} does not buy a tradeable quantity at this price.`;
+      return null;
     }
-    if (canSellOnly && units > position.openUnits) return `You hold ${sharesLabel(position.openUnits)}. A Sell can close at most that many.`;
+    if (preview.units <= 0) return `Enter a quantity, down to ${1 / UNITS_PER_SHARE} of a share.`;
+    if (preview.belowMinimum) {
+      return `${sharesLabel(shares)} is ${formatCents(preview.grossCents)}. The smallest order is ${formatCents(MIN_ORDER_CENTS)}.`;
+    }
+    if (side === "BUY" && preview.grossCents > balanceCents) {
+      return preview.affordableShares > 0
+        ? `Not enough paper balance for ${sharesLabel(shares)}. You can afford ${sharesText(preview.affordableShares)}.`
+        : "Not enough paper balance for the smallest tradeable quantity at this price.";
+    }
+    if (canSellOnly && shares > position.openUnits) return `You hold ${sharesLabel(position.openUnits)}. A Sell can close at most that many.`;
     return null;
-  }, [nothingToClose, units, side, preview, balanceCents, canSellOnly, position.openUnits]);
+  }, [nothingToClose, mode, typedSpendCents, shares, side, preview, balanceCents, canSellOnly, position.openUnits]);
 
   const review = () => {
-    if (composeError || units <= 0) return;
+    if (composeError || preview.units <= 0) return;
     setArmedPriceCents(livePrice);
     setStep("confirm");
   };
 
   const submit = async () => {
-    if (submitting || units <= 0) return;
+    if (submitting || preview.units <= 0) return;
     setSubmitting(true);
     let outcome: OrderResult;
     try {
@@ -180,7 +282,15 @@ export function TradeSheet({
         method: "POST",
         credentials: "same-origin",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ personId: person.id, side, units, quotedPriceCents: livePrice, surface }),
+        // EXACTLY ONE OF THE TWO. In Dollars mode the quantity is the
+        // server's to resolve, so it is not sent at all.
+        body: JSON.stringify({
+          personId: person.id,
+          side,
+          ...(mode === "dollars" ? { maxSpendCents: typedSpendCents } : { shares }),
+          quotedPriceCents: livePrice,
+          surface,
+        }),
       });
       outcome = parseOrderResponse(await response.json().catch(() => null), person.id);
     } catch {
@@ -226,7 +336,7 @@ export function TradeSheet({
     if (step === "compose") {
       return (
         <div className="flex flex-col gap-2">
-          <Button variant={side === "BUY" ? "buy" : "sell"} size="lg" className="w-full" onClick={review} disabled={Boolean(composeError) || units <= 0}>
+          <Button variant={side === "BUY" ? "buy" : "sell"} size="lg" className="w-full" onClick={review} disabled={Boolean(composeError) || preview.units <= 0}>
             Review {verb(side).toLowerCase()}
           </Button>
           <p className="text-center text-xs text-fg-faint">Nothing is placed until you confirm the exact price.</p>
@@ -279,47 +389,71 @@ export function TradeSheet({
         {step === "compose" && !nothingToClose ? (
           <div className="flex flex-col gap-5">
             <div className="flex flex-col gap-2">
-              <label htmlFor="trade-units" className="text-sm font-medium text-fg-secondary">
-                Shares
-              </label>
-              {/* PHASE 27's Shares | Dollars toggle belongs on its own row here,
-                  between the label and the stepper. Nothing is reserved for it:
-                  the point of the pinned footer is that a new row costs the body
-                  its scroll and never the primary action. */}
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  aria-label="One fewer share"
-                  onClick={() => setUnitsText(String(Math.max(1, units - 1)))}
-                  disabled={units <= 1}
-                >
-                  <Minus />
-                </Button>
-                <input
-                  ref={inputRef}
-                  id="trade-units"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  autoComplete="off"
-                  value={unitsText}
-                  onChange={(event) => setUnitsText(event.target.value.replace(/[^0-9]/g, "").slice(0, 6))}
-                  aria-invalid={composeError ? true : undefined}
-                  className={cn(inputClassName, "text-center text-xl tabular-nums")}
-                />
-                <Button variant="outline" size="icon" aria-label="One more share" onClick={() => setUnitsText(String(Math.min(MAX_ORDER_UNITS, units + 1)))}>
-                  <Plus />
-                </Button>
+              <div className="flex items-center justify-between gap-3">
+                <label htmlFor="trade-units" className="text-sm font-medium text-fg-secondary">
+                  {mode === "dollars" ? "Amount" : "Shares"}
+                </label>
+                <ModeToggle mode={mode} onChange={setMode} />
               </div>
+              {mode === "dollars" ? (
+                <div className="flex items-center gap-2">
+                  <span aria-hidden className="text-xl font-semibold tabular-nums text-fg-muted">
+                    $
+                  </span>
+                  <input
+                    ref={inputRef}
+                    id="trade-units"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    aria-label="Amount in dollars"
+                    value={amountText}
+                    onChange={(event) => setAmountText(limitDecimals(event.target.value, 2))}
+                    aria-invalid={composeError ? true : undefined}
+                    className={cn(inputClassName, "text-center text-xl tabular-nums")}
+                  />
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    aria-label="One fewer share"
+                    onClick={() => setQuantityText(sharesText(Math.max(1 / UNITS_PER_SHARE, shares - 1)))}
+                    disabled={preview.units <= UNITS_PER_SHARE}
+                  >
+                    <Minus />
+                  </Button>
+                  <input
+                    ref={inputRef}
+                    id="trade-units"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    aria-label="Number of shares"
+                    value={quantityText}
+                    onChange={(event) => setQuantityText(limitDecimals(event.target.value, 3))}
+                    aria-invalid={composeError ? true : undefined}
+                    className={cn(inputClassName, "text-center text-xl tabular-nums")}
+                  />
+                  <Button variant="outline" size="icon" aria-label="One more share" onClick={() => setQuantityText(sharesText(Math.min(MAX_ORDER_SHARES, shares + 1)))}>
+                    <Plus />
+                  </Button>
+                </div>
+              )}
               <div className="flex flex-wrap gap-2">
-                {PRESETS.map((preset) => (
-                  <Chip key={preset} active={units === preset} onClick={() => setUnitsText(String(preset))}>
-                    {preset}
-                  </Chip>
-                ))}
-                {maxUnits > 0 && maxUnits < MAX_ORDER_UNITS ? (
-                  <Chip active={units === maxUnits} onClick={() => setUnitsText(String(maxUnits))}>
-                    {side === "BUY" ? "Max" : "All"} · {maxUnits.toLocaleString("en-US")}
+                {mode === "dollars"
+                  ? DOLLAR_PRESETS.map((preset) => (
+                      <Chip key={preset} active={typedSpendCents === preset * 100} onClick={() => setAmountText(String(preset))}>
+                        ${preset}
+                      </Chip>
+                    ))
+                  : SHARE_PRESETS.map((preset) => (
+                      <Chip key={preset} active={shares === preset} onClick={() => setQuantityText(String(preset))}>
+                        {preset}
+                      </Chip>
+                    ))}
+                {maxChip ? (
+                  <Chip active={maxChip.active} onClick={maxChip.onClick}>
+                    {maxChip.label}
                   </Chip>
                 ) : null}
               </div>
@@ -328,9 +462,15 @@ export function TradeSheet({
                   {composeError}
                 </p>
               ) : null}
+              {mode === "dollars" && !composeError && preview.units > 0 ? (
+                <p className="text-sm tabular-nums text-fg-muted">
+                  {formatCents(typedSpendCents)} buys {sharesLabel(shares)} at {formatCents(livePrice)}
+                  {preview.grossCents < typedSpendCents ? <> · {formatCents(cents(typedSpendCents - preview.grossCents))} stays in your balance</> : null}
+                </p>
+              ) : null}
             </div>
 
-            <PreviewList side={side} units={units} priceCents={livePrice} grossCents={preview.grossCents} balanceAfterCents={preview.balanceAfterCents} position={position} />
+            <PreviewList side={side} shares={shares} priceCents={livePrice} grossCents={preview.grossCents} balanceAfterCents={preview.balanceAfterCents} position={position} />
           </div>
         ) : null}
 
@@ -339,15 +479,20 @@ export function TradeSheet({
             <div className="flex flex-col gap-3 rounded-2xl bg-surface-raised/60 p-5">
               <p className="text-label text-fg-muted">You are about to</p>
               <p className="text-xl font-semibold leading-snug tracking-tight text-fg">
-                {verb(side)} {sharesLabel(units)} of {person.displayName} at{" "}
+                {verb(side)} {sharesLabel(shares)} of {person.displayName} at{" "}
                 <span key={livePrice} className="tabular-nums animate-tick-flash">
                   {formatCents(livePrice)}
                 </span>{" "}
                 each.
               </p>
               <p className="text-base tabular-nums text-fg-secondary">
-                {units.toLocaleString("en-US")} × {formatCents(livePrice)} = {formatCents(preview.grossCents)}
+                {sharesText(shares)} × {formatCents(livePrice)} = {formatCents(preview.grossCents)}
               </p>
+              {mode === "dollars" ? (
+                <p className="text-sm tabular-nums text-fg-muted">
+                  You asked to spend {formatCents(typedSpendCents)}. The server resolves the quantity against the quote it reads, so the charge is never more than that.
+                </p>
+              ) : null}
               <p className="text-xs tabular-nums text-fg-faint">
                 The {side === "BUY" ? "Buy" : "Sell"} quote as of now. If it moves more than {formatCents(toleranceCents)} before the server reads it, you will be asked to confirm
                 again.
@@ -361,7 +506,7 @@ export function TradeSheet({
               </p>
             ) : null}
 
-            <PreviewList side={side} units={units} priceCents={livePrice} grossCents={preview.grossCents} balanceAfterCents={preview.balanceAfterCents} position={position} compact />
+            <PreviewList side={side} shares={shares} priceCents={livePrice} grossCents={preview.grossCents} balanceAfterCents={preview.balanceAfterCents} position={position} compact />
           </div>
         ) : null}
 
@@ -372,14 +517,15 @@ export function TradeSheet({
             <RejectedView
               result={result}
               side={side}
-              units={units}
+              shares={shares}
               onRequote={(priceCents) => {
                 setArmedPriceCents(priceCents);
                 setResult(null);
                 setStep("confirm");
               }}
-              onUnits={(next) => {
-                setUnitsText(String(next));
+              onShares={(next) => {
+                setMode("shares");
+                setQuantityText(sharesText(next));
                 setResult(null);
                 setStep("compose");
               }}
@@ -421,7 +567,7 @@ function QuoteCell({ label, cents, active }: { label: string; cents: Cents; acti
 
 function PreviewList({
   side,
-  units,
+  shares,
   priceCents,
   grossCents,
   balanceAfterCents,
@@ -429,7 +575,7 @@ function PreviewList({
   compact = false,
 }: {
   side: OrderSide;
-  units: number;
+  shares: number;
   priceCents: Cents;
   grossCents: Cents;
   balanceAfterCents: Cents;
@@ -437,9 +583,14 @@ function PreviewList({
   compact?: boolean;
 }) {
   const closing = side === "SELL" && position.direction === "HIGH";
-  const closedUnits = closing ? Math.min(units, position.openUnits) : 0;
-  const estimatedPnl = closing && position.avgEntryCents !== null ? (priceCents - position.avgEntryCents) * closedUnits : null;
-  const positionAfter = side === "BUY" ? position.openUnits + units : Math.max(0, position.openUnits - units);
+  const closedShares = closing ? Math.min(shares, position.openUnits) : 0;
+  // Through the same rule as the money beside it, so a fraction of a cent
+  // never shows up here as a P&L the ledger will not produce.
+  const estimatedPnl =
+    closing && position.avgEntryCents !== null
+      ? cents(Math.round(sharesToUnits(closedShares) * (priceCents - position.avgEntryCents) / UNITS_PER_SHARE))
+      : null;
+  const positionAfter = side === "BUY" ? position.openUnits + shares : Math.max(0, position.openUnits - shares);
 
   return (
     // The value column is right-aligned (Phase 26): the figures stack in one
@@ -551,18 +702,19 @@ function FilledView({ result, side, personName }: { result: Extract<OrderResult,
 function RejectedView({
   result,
   side,
-  units,
+  shares,
   onRequote,
-  onUnits,
+  onShares,
 }: {
   result: Extract<OrderResult, { ok: false }>;
   side: OrderSide;
-  units: number;
+  shares: number;
   onRequote: (priceCents: Cents) => void;
-  onUnits: (units: number) => void;
+  onShares: (shares: number) => void;
 }) {
   const newPrice = typeof result.extra.fill_price_cents === "number" ? (result.extra.fill_price_cents as Cents) : result.quote ? (side === "BUY" ? result.quote.buyCents : result.quote.sellCents) : null;
-  const maxUnits = typeof result.extra.max_units === "number" ? result.extra.max_units : null;
+  // max_units comes back in the server's scale; the sentence is in shares.
+  const maxShares = typeof result.extra.max_units === "number" ? result.extra.max_units / UNITS_PER_SHARE : null;
 
   return (
     <div className="flex flex-col gap-5">
@@ -579,16 +731,44 @@ function RejectedView({
             <span className="text-lg font-semibold tabular-nums text-fg">{formatCents(newPrice)}</span>
           </div>
           <Button variant={side === "BUY" ? "buy" : "sell"} size="lg" className="w-full" onClick={() => onRequote(newPrice)}>
-            Review at {formatCents(newPrice)} · {sharesLabel(units)}
+            Review at {formatCents(newPrice)} · {sharesLabel(shares)}
           </Button>
         </div>
       ) : null}
 
-      {(result.code === "insufficient_balance" || result.code === "exceeds_position") && maxUnits !== null && maxUnits > 0 ? (
-        <Button variant="outline" size="lg" className="w-full" onClick={() => onUnits(maxUnits)}>
-          {verb(side)} {sharesLabel(maxUnits)} instead
+      {(result.code === "insufficient_balance" || result.code === "exceeds_position") && maxShares !== null && maxShares > 0 ? (
+        <Button variant="outline" size="lg" className="w-full" onClick={() => onShares(maxShares)}>
+          {verb(side)} {sharesLabel(maxShares)} instead
         </Button>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * THE MODE TOGGLE. A two-option segmented control, the pair always visible so
+ * the other way of ordering is a fact about the sheet rather than something
+ * to be discovered. It is a radiogroup, not two buttons: the two are mutually
+ * exclusive and arrow keys should move between them.
+ */
+function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => void }) {
+  return (
+    <div role="radiogroup" aria-label="Order in" className="inline-flex items-center gap-1 rounded-full bg-surface-raised p-1">
+      {(["shares", "dollars"] as const).map((option) => (
+        <button
+          key={option}
+          type="button"
+          role="radio"
+          aria-checked={mode === option}
+          onClick={() => onChange(option)}
+          className={cn(
+            "inline-flex h-8 items-center rounded-full px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+            mode === option ? "bg-surface-inverse text-fg-inverse" : "text-fg-muted hover:text-fg",
+          )}
+        >
+          {option === "shares" ? "Shares" : "Dollars"}
+        </button>
+      ))}
     </div>
   );
 }

@@ -43,11 +43,20 @@ export async function getViewerTradingState(personId: string): Promise<ViewerTra
   return { signedIn: balanceCents !== null, balanceCents, position };
 }
 
+/**
+ * An order in exactly one of the two modes. Shares mode names a quantity in
+ * UNITS — thousandths of a share — and Dollars mode names an amount and lets
+ * the server resolve the quantity against its own quote. Giving both, or
+ * neither, is a programming error the database refuses.
+ */
 export interface PlaceOrderInput {
   personId: string;
   side: OrderSide;
-  units: number;
-  /** The price the user confirmed, in cents per unit, for the tolerance check. */
+  /** Shares mode: whole units (thousandths of a share). Null in Dollars mode. */
+  units: number | null;
+  /** Dollars mode: the most to spend, in cents. Null in Shares mode. */
+  maxSpendCents: number | null;
+  /** The price the user confirmed, in cents per share, for the tolerance check. */
   quotedPriceCents: number | null;
   surface: string | null;
 }
@@ -58,10 +67,15 @@ export async function placeOrderAsUser(input: PlaceOrderInput): Promise<OrderRes
   const { data, error } = await supabase.rpc("place_order", {
     p_person_id: input.personId,
     p_side: input.side,
-    p_units: input.units,
-    // Both default to null in SQL; an omitted argument is the same as null.
+    p_units: input.units ?? undefined,
+    // These default to null in SQL; an omitted argument is the same as null.
     p_quoted_price_cents: input.quotedPriceCents ?? undefined,
     p_surface: input.surface ?? undefined,
+    p_max_spend_cents: input.maxSpendCents ?? undefined,
+    // THE SCALE, DECLARED. This build counts in thousandths and says so; the
+    // server never infers it from the size of the number. Phase 27a removes
+    // the other branch once trade_orders.quantity_scale shows no 'share' rows.
+    p_quantity_scale: "milli",
   });
   if (error) throw new Error(error.message);
   return toOrderResult(data, input.personId);

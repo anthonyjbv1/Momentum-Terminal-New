@@ -41,9 +41,14 @@
 -- to the cent, for ever, and realized P&L is proceeds − basis by definition
 -- rather than by a formula that can round apart.
 --
--- REVERSIBILITY: supabase/rollback/20260922171500_phase27_fractional_units_down.sql
+-- REVERSIBILITY: supabase/rollback/20260922211703_phase27_fractional_units_down.sql
 -- restores whole-share units and the pre-Phase-27 functions. It is outside
 -- supabase/migrations/ so it is never applied automatically.
+--
+-- (The text Supabase recorded carries the provisional 20260922171500 name on
+-- the line above. It is the only place this file differs from what was
+-- applied: apply_migration assigns the version, so the file could only be
+-- named after it once it had already run. Nothing executable differs.)
 
 -- ---------------------------------------------------------------------------
 -- 0. Take the locks up front
