@@ -19,7 +19,7 @@ export function PortfolioEmpty({ roster, cashCents }: { roster: RosterPerson[]; 
           <p className="text-label text-fg-muted">Your portfolio</p>
           <h2 className="text-2xl font-semibold tracking-tight text-fg sm:text-3xl">Nothing held yet.</h2>
           <p className="text-base leading-relaxed text-fg-muted">
-            Your <span className="num text-fg-secondary">{formatCents(cashCents)}</span> of paper credit is ready. Pick a person on Home, or follow the Feed to see who is
+            Your <span className="tabular-nums text-fg-secondary">{formatCents(cashCents)}</span> of paper credit is ready. Pick a person on Home, or follow the Feed to see who is
             moving, and take a position with Buy. Everything you hold and every trade you make lands here, marked at the Sell quote, tick by tick.
           </p>
         </div>
@@ -36,7 +36,7 @@ export function PortfolioEmpty({ roster, cashCents }: { roster: RosterPerson[]; 
         {roster.length > 0 ? (
           <div className="flex flex-col items-center gap-3">
             <p className="text-xs text-fg-faint">
-              On the board <span className="text-fg-muted">·</span> <span className="num">{roster.length}</span> people
+              On the board <span className="text-fg-muted">·</span> {roster.length} people
             </p>
             <div className="flex max-w-xs flex-wrap justify-center gap-2">
               {roster.map((person) => (

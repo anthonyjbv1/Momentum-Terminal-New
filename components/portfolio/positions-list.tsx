@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/page-header";
 import { Money, pointsText } from "@/components/trade/money";
+import { TradeQuote } from "@/components/trade/trade-quote";
 
 /**
  * Open positions, one row per person, largest value first. Each row is the
@@ -20,6 +21,11 @@ import { Money, pointsText } from "@/components/trade/money";
  * Sell quote for a HIGH), and unrealized P&L. The Sell control routes into
  * the 6e trade sheet; there is no second trading path. Colour appears only
  * on the P&L, by direction.
+ *
+ * TYPOGRAPHY (Phase 25). Inter throughout, `tabular-nums` on every line that
+ * carries a figure. "3 shares · avg $51.65 · 2 lots" was a whole sentence in
+ * the monospace face; the value and the mark move on the Engine's cadence, so
+ * they stay fixed-width without it.
  */
 export interface PositionsListProps {
   positions: PortfolioPosition[];
@@ -92,7 +98,7 @@ function PositionRow({ position, onClose, onOpenPerson }: { position: PortfolioP
           {categoryLabel(person.category)}
           {!person.isActive ? <span className="text-fg-faint"> · off the board</span> : null}
         </p>
-        <p className="num text-sm text-fg-secondary">
+        <p className="text-sm tabular-nums text-fg-secondary">
           {sharesLabel(position.openUnits)} <span className="text-fg-faint">·</span> avg {formatCents(position.avgEntryCents)}
           {position.lots > 1 ? <span className="text-fg-faint"> · {position.lots} lots</span> : null}
         </p>
@@ -102,19 +108,19 @@ function PositionRow({ position, onClose, onOpenPerson }: { position: PortfolioP
         <p className="text-label text-fg-muted">
           Value <span className="normal-case tracking-normal text-fg-faint">at {markLabel} {pointsText(position.markPriceCents)}</span>
         </p>
-        <Money cents={position.valueCents} className="text-lg font-semibold tracking-tight text-fg" />
-        <p className="num text-xs text-fg-faint">{formatCents(position.markPriceCents)} per share</p>
+        <Money cents={position.valueCents} face="text" className="text-lg font-semibold tracking-tight text-fg" />
+        <p className="text-xs tabular-nums text-fg-faint">{formatCents(position.markPriceCents)} per share</p>
       </div>
 
       <div className="col-start-3 flex min-w-0 flex-col gap-0.5 sm:col-start-auto">
         <p className="text-label text-fg-muted">Unrealized</p>
-        <Money cents={position.unrealizedPnlCents} signed className="text-lg font-semibold tracking-tight" />
-        <p className={cn("num text-xs", tone)}>
+        <Money cents={position.unrealizedPnlCents} signed face="text" className="text-lg font-semibold tracking-tight" />
+        <p className={cn("text-xs tabular-nums", tone)}>
           {pct === null ? "—" : `${pct > 0 ? "+" : pct < 0 ? "−" : ""}${Math.abs(pct).toFixed(2)}%`}
           {position.realizedPnlCents !== 0 ? (
             <span className="text-fg-faint">
               {" "}
-              · realized <Money cents={position.realizedPnlCents} signed className="text-xs" />
+              · realized <Money cents={position.realizedPnlCents} signed face="text" className="text-xs" />
             </span>
           ) : null}
         </p>
@@ -123,10 +129,7 @@ function PositionRow({ position, onClose, onOpenPerson }: { position: PortfolioP
       <div className="col-span-2 col-start-2 flex sm:col-span-1 sm:col-start-auto sm:justify-end">
         {person.isActive ? (
           <Button variant="sell" size="sm" className="min-w-24" onClick={() => onClose(position)} aria-label={`Sell ${person.name}`}>
-            <span className="inline-flex items-baseline gap-2">
-              <span>Sell</span>
-              <span className="num text-xs font-medium">{pointsText(position.sellCents)}</span>
-            </span>
+            <TradeQuote label="Sell" cents={position.sellCents} />
           </Button>
         ) : (
           <Button variant="outline" size="sm" className="min-w-24 text-fg-muted" disabled title="This person is no longer on the board.">

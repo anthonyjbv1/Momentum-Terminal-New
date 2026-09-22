@@ -8,6 +8,7 @@ import type { ProfilePerson } from "@/lib/person/profile-model";
 import type { OrderSide } from "@/lib/trading/direction";
 import { sharesLabel, type Cents, type ViewerTradingState } from "@/lib/trading/model";
 import { Button, buttonClassName } from "@/components/ui/button";
+import { TradeQuote } from "@/components/trade/trade-quote";
 
 /**
  * Buy / Sell entry points. Buy is the light pill and Sell the dark one (see
@@ -32,16 +33,6 @@ export interface TradeControlProps {
   viewer: ViewerTradingState;
   onTrade: (side: OrderSide) => void;
   className?: string;
-}
-
-/** The quote beside the verb, in the label colour. */
-function Quote({ label, cents }: { label: string; cents: Cents }) {
-  return (
-    <span className="inline-flex items-baseline gap-2">
-      <span>{label}</span>
-      <span className="num text-xs font-medium">{(cents / 100).toFixed(1)}</span>
-    </span>
-  );
 }
 
 function sellState(viewer: ViewerTradingState, shortingEnabled: boolean): { enabled: boolean; note: string | null } {
@@ -121,13 +112,13 @@ function BuyControl({
   if (!viewer.signedIn) {
     return (
       <Link href={`/login?next=${encodeURIComponent(`/person/${person.slug}`)}`} className={buttonClassName("buy", size, className)} aria-label={`Sign in to buy ${person.displayName}`}>
-        <Quote label="Buy" cents={buyCents} />
+        <TradeQuote label="Buy" cents={buyCents} />
       </Link>
     );
   }
   return (
     <Button variant="buy" size={size} className={className} onClick={() => onTrade("BUY")} aria-label={`Buy ${person.displayName}`}>
-      <Quote label="Buy" cents={buyCents} />
+      <TradeQuote label="Buy" cents={buyCents} />
     </Button>
   );
 }
@@ -150,13 +141,13 @@ function SellControl({
   if (!enabled) {
     return (
       <Button variant="outline" size={size} className={cn("text-fg-muted", className)} disabled aria-label={`Sell ${person.displayName}: nothing to close`}>
-        <Quote label="Sell" cents={sellCents} />
+        <TradeQuote label="Sell" cents={sellCents} />
       </Button>
     );
   }
   return (
     <Button variant="sell" size={size} className={className} onClick={() => onTrade("SELL")} aria-label={`Sell ${person.displayName}`}>
-      <Quote label="Sell" cents={sellCents} />
+      <TradeQuote label="Sell" cents={sellCents} />
     </Button>
   );
 }

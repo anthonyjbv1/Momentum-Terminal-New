@@ -657,7 +657,7 @@ The visual foundation every screen inherits, plus the navigation frame. Full ref
 
 Every visual value lives in **`app/styles/tokens.css`** as a Tailwind 4 `@theme` block: semantic colours (`canvas`, `surface*`, `line*`, `fg*`, `positive`, `negative`, `neutral`, `accent`), the two typefaces, a type scale, the spacing base plus the shell's structural sizes (`banner`, `tabbar`, `rail`, `shell`, `touch`), radii, shadows (glows derive from the semantic colours) and motion. Tailwind's stock palette, fonts, radii and shadows are reset, so `bg-red-500` does not exist; components can only use tokens. Changing a token is a one-line edit that cascades platform-wide, and `lib/__tests__/design-tokens.test.ts` fails the build if a component ever hardcodes a colour, pixel size or arbitrary value.
 
-The look is editorial monochrome: a jet-black ground, neutral grey cards with no borders, white type with a strong hierarchy, generous space. Green and red are the only saturated colours and appear only on Buy / Sell and directional score movement; navigation, focus, status and the timer are white or grey. Inter carries the interface; JetBrains Mono appears only on numbers, through the `num` utility. Both fonts are self-hosted through `next/font`.
+The look is editorial monochrome: a jet-black ground, neutral grey cards with no borders, white type with a strong hierarchy, generous space. Green and red are the only saturated colours and appear only on Buy / Sell and directional score movement; navigation, focus, status and the timer are white or grey. Inter carries the interface; JetBrains Mono appears only on numbers, through the `num` utility, **with one documented exception — Portfolio (Phase 25), which sets its figures in Inter with `tabular-nums`**. Both fonts are self-hosted through `next/font`.
 
 Two signature utilities are defined once in `globals.css`: `num` (mono, tabular figures) for every number and `text-label` (small uppercase section caption) for section headers.
 
@@ -2733,6 +2733,54 @@ The same note settled two other things at no extra cost: the host publishes
 to the first poll that saw the game finished; and the Week 2 status is
 `"AOT"`, which is how the result headline knows to say "in overtime".
 
+## Portfolio's typography, and why it is an exception (Phase 25)
+
+`num` — JetBrains Mono, tabular — is the default for numerals everywhere on
+the platform, and Portfolio is the one surface that does not take it. This is
+the record of that decision, so it does not get quietly reverted as a
+"missing `num`".
+
+**Mono's only functional job is a figure that TICKS.** Its digits are
+fixed-width, so a value that updates cannot jitter and a column cannot shuffle.
+Inter's digits are fixed-width too under `tabular-nums` — measured in the
+browser on the rendered page, the strings `$10,063.62`, `$11,111.11`,
+`$18,888.88` and `$90,000.00` all render at **exactly 1112px** at the hero's
+56px, at 260px in the stat grid at 24px, and the pill quote at 31px at 14px;
+the same face with `font-variant-numeric: normal` swings from 98px to 139px
+over the same four strings. So the jitter argument never required the
+monospace face, only tabular figures.
+
+**What mono actually did on Portfolio was spread onto words.** It had reached
+units, dates and whole sentences, and in several places the typeface changed
+mid-line — "+$63.62 (+0.64%) against your $10,000.00 of paper credit" switched
+face three times; "Sold 1 share of Anthony Baptiste at $59.31" switched twice;
+"3 shares · avg $51.65 · 2 lots" was a sentence set entirely in mono. That is
+what made the page read like a log rather than like a statement.
+
+The rule now, per surface:
+
+| | face | why |
+| --- | --- | --- |
+| Portfolio figures | Inter + `tabular-nums` | one typeface per line; fixed-width digits without the log |
+| Portfolio prose and dates | Inter, plain | nothing in them moves once an order has filled |
+| Portfolio value chart | **untouched** | its own labels, its own conventions; out of scope by instruction |
+| Everywhere else | `num` | Home, the profile, the Feed, the trade sheet, the header, `/admin` |
+
+`Money` carries the choice as a `face` prop defaulting to `"mono"`, and
+Portfolio passes `face="text"` at every call site, so the exception is visible
+in the code rather than inherited from a wrapper a later reader would not
+think to check.
+
+**The Buy/Sell pill changed platform-wide, on purpose.** The quote inside it
+was mono at `text-xs` beside an Inter label at the button's own size: two
+typefaces and two sizes in a two-word control. It is now Inter at the label's
+size and weight with `tabular-nums`, and it lives in ONE component
+(`components/trade/trade-quote.tsx`) that the profile trade bar and Portfolio's
+Sell buttons both read, because two copies of one control is how they drift
+apart. Colour, shape, height, padding, gap and behaviour are untouched — the
+pill is simply wider, because Inter's digits at the label's size are wider than
+mono's at `text-xs`, and `Button` sizes to its content.
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -2745,6 +2793,7 @@ to the first poll that saw the game finished; and the Week 2 status is
 - **Phase 12+**: newest-first selection with a least-recently-served rotation across people, and memory event expiry (30 days, dated folds written as history, today's date and event ages in the person block).
 - **Phase 13**: publisher-direct feeds — the `publisher_feeds` catalogue read as one shared fetch per run, whole-word name matching scoped by topic, undated items refused, per-feed health and discovery written back onto the rows, the two news doors deduplicated as one story family with Google News kept as the fallback — and the ingestion cron at every fifteen minutes with every source interval off the multiple.
 - **Phase 13+**: athlete metrics beyond passing yards — `config.game_stats` on the API-Sports row (every per-game figure read from one request per game, each with its own anchor), the rating figure (+1) and `game_interceptions` (−1) registered beside yards with touchdowns and every composite figure refused, and the Signals force folding one source's metric signals of one moment into one reading carrying their mean, so a game is its event and its stat line and never three copies of the line.
+- **Phase 25**: Portfolio typography — the page set in one typeface, with `tabular-nums` carrying the fixed-width digits that mono was there for (measured: four different money strings render to the same pixel width at every size on the page); the mid-sentence face changes gone from the return line, the position sub-line and every trade-history row; and the Buy/Sell quote pill extracted into one shared component with its price matched to its label. The value chart, the header and every other page are untouched.
 - **Phase 24**: what the first live NFL game taught — a metric now emits when its REGISTER changes rather than when its number does (39 emissions to 7 on the Mahomes window, 2,074 to 220 board-wide, replayed against the stored ledger before shipping), held with 0.25σ of asymmetric hysteresis from the board's own step sizes; a game result dated at the first poll that observed it FINISHED rather than at kickoff, with a config hook for a reported final time and a fallback to kickoff when nothing was watching; the subject's plain-numeric line in the result headline, omitted rather than guessed when a statistic is not where config says; every boundary in the language module decided on the DISPLAYED figure, which closed the 2x/100%, the 100x and the below-pace-fraction collisions in one rule; and `game_passer_rating` renamed `game_rating` and re-floored after the API's own numbers disproved the passer-rating assumption two games running.
 - **Phase 23**: search — a per-person `is_discoverable` flag that ships **off** and is switched on for the sixteen by slug in the migration, enforced inside `search_people()` so a person who has not opted in is unreachable through it for any caller and at any limit; name, full name and slug matched partially and forgivingly of case, punctuation and Latin diacritics through two immutable normalisations; ranked and tie-broken in the database on the board's own total order, with the trailing-hour change on the same row so a result and the board cannot disagree; three partial expression indexes (the first `people` has ever had) covering the anchored half and an honest note on the contains half; and the placeholder replaced by two written states, one saying what search is for and one answering what somebody who searched their own name and found nothing is really asking.
 - **Phase 22**: YouTube Trending as a signal — the official `videos.list?chart=mostPopular` read once per run and shared by all sixteen (one unit a poll, 48 a day), an APPEARANCE emitted as an event and never the rank as a metric, because a baselined opaque rank cannot be explained to counsel; deduplicated per video per subject as Phase 16 keys a broadcast; two matching routes only (the subject's own channel, or the title naming them in full through the inherited Phase 12+ exclusions) with description-only, channel-name-only, bare-surname and guessed-channel matches refused; no second event on a rank change; sentences under the Phase 21+ rules; 25-minute interval off the multiple of fifteen.

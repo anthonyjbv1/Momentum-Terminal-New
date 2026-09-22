@@ -22,6 +22,13 @@ import { Money } from "@/components/trade/money";
  * figure. Older pages come through /api/portfolio/history on request; the
  * keyset cursor keeps orders placed at one instant from skipping or
  * repeating across a page.
+ *
+ * TYPOGRAPHY (Phase 25). Inter throughout. Each row was a sentence with
+ * monospaced figures dropped into the middle of it — "Sold 1 share of
+ * Anthony Baptiste at $59.31" changed typeface twice. The sentences and the
+ * dates are plain Inter, because nothing in them moves once an order has
+ * filled; the right-hand cost/proceeds column keeps `tabular-nums` and its
+ * right alignment, so decimals still line up down the column.
  */
 export interface TradeHistoryProps {
   initialPage: TradeHistoryPage;
@@ -110,7 +117,7 @@ export function TradeHistory({ initialPage, onOpenPerson, endpoint = "/api/portf
         <p className="py-1 text-center text-xs text-fg-faint">
           {capped ? (
             <>
-              Showing your latest <span className="num">{HISTORY_MAX_ENTRIES}</span> trades.
+              Showing your latest {HISTORY_MAX_ENTRIES} trades.
             </>
           ) : (
             "That is every trade you have made."
@@ -137,17 +144,17 @@ function HistoryRow({ entry, onOpenPerson }: { entry: TradeHistoryEntry; onOpenP
 
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <p className="text-sm text-fg">
-          <span className="font-medium">{historyVerb(entry.side)}</span> <span className="num">{sharesLabel(entry.units)}</span> of{" "}
+          <span className="font-medium">{historyVerb(entry.side)}</span> {sharesLabel(entry.units)} of{" "}
           <Link href={`/person/${person.slug}`} onClick={() => onOpenPerson(entry)} className="font-medium underline-offset-4 hover:underline">
             {person.name}
           </Link>{" "}
-          at <span className="num">{formatCents(entry.fillPriceCents)}</span>
+          at {formatCents(entry.fillPriceCents)}
         </p>
         <p className="text-xs text-fg-faint">
-          <LocalTime iso={entry.createdAt} className="num" />
+          <LocalTime iso={entry.createdAt} />
           {entry.closedUnits > 0 && entry.openedUnits > 0 ? (
             <>
-              <span aria-hidden> · </span>closed <span className="num">{entry.closedUnits}</span>, opened <span className="num">{entry.openedUnits}</span>
+              <span aria-hidden> · </span>closed {entry.closedUnits}, opened {entry.openedUnits}
             </>
           ) : null}
         </p>
@@ -155,10 +162,10 @@ function HistoryRow({ entry, onOpenPerson }: { entry: TradeHistoryEntry; onOpenP
 
       <div className="flex shrink-0 flex-col items-end gap-0.5 text-right">
         <p className="text-label text-fg-muted">{buy ? "Cost" : "Proceeds"}</p>
-        <Money cents={buy ? entry.costCents : entry.proceedsCents} className="text-sm font-medium text-fg" />
+        <Money cents={buy ? entry.costCents : entry.proceedsCents} face="text" className="text-sm font-medium text-fg" />
         {entry.closedUnits > 0 ? (
           <p className="text-xs text-fg-faint">
-            realized <Money cents={entry.realizedPnlCents} signed className="text-xs" />
+            realized <Money cents={entry.realizedPnlCents} signed face="text" className="text-xs" />
           </p>
         ) : null}
       </div>

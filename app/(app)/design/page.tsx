@@ -2,6 +2,7 @@ import { Search } from "lucide-react";
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
+import { cents } from "@/lib/trading/model";
 import { MomentumMark } from "@/components/brand/momentum-mark";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +14,7 @@ import { Field, Input } from "@/components/ui/input";
 import { PageHeader, SectionHeader } from "@/components/ui/page-header";
 import { ScoreDisplay } from "@/components/ui/score-display";
 import { Skeleton, SkeletonFeedItem, SkeletonPersonRow, SkeletonStat } from "@/components/ui/skeleton";
+import { TradeQuote } from "@/components/trade/trade-quote";
 
 import { SheetDemo } from "./sheet-demo";
 
@@ -54,6 +56,9 @@ function Section({ title, description, children }: { title: string; description?
     </section>
   );
 }
+
+/** Four money strings of equal length: under a tabular face all four are the same width. */
+const MONEY_SAMPLES = ["$10,063.62", "$11,111.11", "$18,888.88", "$90,000.00"];
 
 export default function DesignPage() {
   return (
@@ -124,6 +129,51 @@ export default function DesignPage() {
         </Card>
       </Section>
 
+      <Section
+        title="The one exception: Portfolio"
+        description="Portfolio sets its figures in Inter with tabular-nums instead of num. Deliberate, documented, and not a new global rule."
+      >
+        <Card>
+          <CardContent className="flex flex-col gap-8 p-8">
+            <div className="grid gap-8 sm:grid-cols-2">
+              <div className="flex flex-col gap-3">
+                <p className="text-label text-fg-muted">num — everywhere else</p>
+                {MONEY_SAMPLES.map((sample) => (
+                  <p key={sample} className="num text-2xl font-semibold tracking-tighter text-fg">
+                    {sample}
+                  </p>
+                ))}
+                <p className="mt-1 text-sm text-fg-muted">
+                  <span className="num">+$63.62</span> against your <span className="num">$10,000.00</span> of paper credit
+                </p>
+              </div>
+              <div className="flex flex-col gap-3">
+                <p className="text-label text-fg-muted">tabular-nums — Portfolio</p>
+                {MONEY_SAMPLES.map((sample) => (
+                  <p key={sample} className="text-2xl font-semibold tracking-tighter tabular-nums text-fg">
+                    {sample}
+                  </p>
+                ))}
+                <p className="mt-1 text-sm tabular-nums text-fg-muted">+$63.62 against your $10,000.00 of paper credit</p>
+              </div>
+            </div>
+            <p className="max-w-prose text-sm leading-relaxed text-fg-muted">
+              Mono&rsquo;s only functional job is a figure that TICKS: its digits are fixed-width, so a live value cannot jitter. Inter&rsquo;s
+              digits are fixed-width too under <span className="text-fg-secondary">tabular-nums</span> — the two columns above are the same
+              four money strings, and every one of them renders to the same width as the others within its column. So the jitter argument
+              never required the monospace face. What mono DID do on Portfolio was spread onto words, units and dates, switching typeface
+              mid-sentence, which is what made the page read like a log. The measurements are in the README.
+            </p>
+            <p className="max-w-prose text-sm leading-relaxed text-fg-muted">
+              The rule is per-surface, not global: <span className="text-fg-secondary">num</span> stays the default for numerals everywhere
+              else — Home, the profile, the Feed, the trade sheet, the header, the operator console. Portfolio passes{" "}
+              <span className="text-fg-secondary">face=&quot;text&quot;</span> to Money at every call site, so the exception is visible in the
+              code rather than inherited from a wrapper. The Portfolio value chart is untouched and keeps its own labels.
+            </p>
+          </CardContent>
+        </Card>
+      </Section>
+
       <Section title="Momentum Score" description="The signature number, in its four sizes, with the direction read beside it. The only place colour moves.">
         <Card>
           <CardContent className="flex flex-wrap items-end gap-x-14 gap-y-10 p-8">
@@ -160,13 +210,23 @@ export default function DesignPage() {
         </Card>
       </Section>
 
-      <Section title="Buttons" description="Pills. Buy is the light pill, Sell the dark one; everything else is white, grey or bare. No colour on any button.">
+      <Section
+        title="Buttons"
+        description="Pills. Buy is the light pill, Sell the dark one; everything else is white, grey or bare. No colour on any button. A quote pill comes from TradeQuote — one component behind every Buy/Sell on the platform, with the price in Inter at the label's own size and weight (tabular, so a moving quote cannot change the pill's width). Two versions of one control would look like a bug."
+      >
         <Card>
           <CardContent className="flex flex-col gap-6">
             <div className="flex flex-wrap items-center gap-3">
               <Button>Primary</Button>
               <Button variant="buy">Buy · HIGH</Button>
               <Button variant="sell">Sell · LOW</Button>
+              {/* The quote pill, from the one component every trading surface reads. */}
+              <Button variant="buy">
+                <TradeQuote label="Buy" cents={cents(6912)} />
+              </Button>
+              <Button variant="sell">
+                <TradeQuote label="Sell" cents={cents(6803)} />
+              </Button>
               <Button variant="outline">Outline</Button>
               <Button variant="ghost">Ghost</Button>
             </div>
