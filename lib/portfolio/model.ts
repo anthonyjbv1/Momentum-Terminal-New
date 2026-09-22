@@ -1,6 +1,6 @@
 import { RANGES, type SeriesByRange, type SeriesPoint } from "@/lib/person/profile-model";
 import type { OrderSide, PositionDirection } from "@/lib/trading/direction";
-import { EMPTY_POSITION, cents, type Cents, type PositionSummary } from "@/lib/trading/model";
+import { EMPTY_POSITION, cents, payloadUnitsPerShare, toShares, type Cents, type PositionSummary } from "@/lib/trading/model";
 
 /**
  * The portfolio's shape on both sides of the server boundary, and the pure
@@ -111,13 +111,18 @@ function toPerson(record: Record<string, unknown>, prefix = ""): PortfolioPerson
   };
 }
 
-export function toPortfolioPosition(value: unknown): PortfolioPosition | null {
+/**
+ * The scale is declared once, at the top of the summary, and covers every
+ * position in it; a position read on its own falls back to whole shares — the
+ * same rule as an absent field. See payloadUnitsPerShare in lib/trading/model.
+ */
+export function toPortfolioPosition(value: unknown, unitsPerShare = 1): PortfolioPosition | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
   const person = toPerson(record, "");
   const direction = record.direction === "HIGH" || record.direction === "LOW" ? record.direction : null;
   if (!person || !direction) return null;
-  const openUnits = toInt(record.open_units);
+  const openUnits = toShares(record.open_units, unitsPerShare);
   if (openUnits <= 0) return null;
   return {
     person,
@@ -146,7 +151,10 @@ export function toPortfolioSummary(value: unknown): PortfolioSummary | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
   if (!("total_value_cents" in record)) return null;
-  const positions = Array.isArray(record.positions) ? record.positions.map(toPortfolioPosition).filter((position): position is PortfolioPosition => position !== null) : [];
+  const unitsPerShare = payloadUnitsPerShare(record);
+  const positions = Array.isArray(record.positions)
+    ? record.positions.map((position) => toPortfolioPosition(position, unitsPerShare)).filter((position): position is PortfolioPosition => position !== null)
+    : [];
   return {
     asOf: toText(record.as_of),
     cashCents: cents(toInt(record.cash_cents)),
@@ -249,21 +257,24 @@ export interface TradeHistoryRow {
   person_name: string;
   person_category: string;
   person_avatar: string | null;
+  /** The scale this row's three quantities are counted in; absent means shares. */
+  units_per_share?: number | string;
 }
 
 export function toTradeHistoryEntry(row: TradeHistoryRow): TradeHistoryEntry | null {
   const person = toPerson(row as unknown as Record<string, unknown>, "person_");
   if (!person || !row.id || !row.created_at) return null;
   const balanceAfter = row.balance_after_cents === null || row.balance_after_cents === undefined ? null : toInt(row.balance_after_cents, -1);
+  const unitsPerShare = payloadUnitsPerShare(row);
   return {
     id: row.id,
     createdAt: row.created_at,
     side: row.side === "SELL" ? "SELL" : "BUY",
-    units: toInt(row.units),
+    units: toShares(row.units, unitsPerShare),
     fillPriceCents: cents(toInt(row.fill_price_cents)),
     grossCents: cents(toInt(row.gross_cents)),
-    openedUnits: toInt(row.opened_units),
-    closedUnits: toInt(row.closed_units),
+    openedUnits: toShares(row.opened_units, unitsPerShare),
+    closedUnits: toShares(row.closed_units, unitsPerShare),
     costCents: cents(toInt(row.cost_cents)),
     proceedsCents: cents(toInt(row.proceeds_cents)),
     realizedPnlCents: cents(toInt(row.realized_pnl_cents)),

@@ -17,6 +17,15 @@ import { STARTING_BALANCE_CENTS, pointsToCents } from "./model";
 let database: TestDatabase;
 const people = new Map<string, string>();
 
+/**
+ * Phase 27: a unit is a THOUSANDTH of a share. Every case below still speaks
+ * whole shares and still means what it meant — these helpers call place_order
+ * exactly as the live client does, with no scale declared, which is the
+ * compatibility path, so this suite exercises it on every single order. Only
+ * the assertions that read a stored unit column convert, with SHARE.
+ */
+const SHARE = 1000;
+
 interface Rejection {
   ok: false;
   code: string;
@@ -62,12 +71,12 @@ async function settings(patch: Record<string, unknown>): Promise<void> {
   await database.rows(`update public.platform_settings set ${sets}, updated_at = now() where id`, Object.values(patch));
 }
 
-async function order(userId: string, slug: string, side: "BUY" | "SELL", units: number, quoted: number | null = null, surface = "test"): Promise<OrderResult> {
+async function order(userId: string, slug: string, side: "BUY" | "SELL", shares: number, quoted: number | null = null, surface = "test"): Promise<OrderResult> {
   await database.actAs(userId);
   const [row] = await database.rows<{ r: OrderResult }>("select public.place_order($1::uuid, $2, $3::bigint, $4::bigint, $5) as r", [
     people.get(slug),
     side,
-    units,
+    shares,
     quoted,
     surface,
   ]);
@@ -165,13 +174,13 @@ describe("place_order: opening", () => {
 
   it("fills at the server-read Buy quote, snapshots it on the lot, and moves every ledger together", async () => {
     const result = fill(await order(alice, "drake", "BUY", 10, 5050, "profile"));
-    expect(result.order).toMatchObject({ side: "BUY", units: 10, fill_price_cents: 5050, gross_cents: 50500, opened_units: 10, opened_direction: "HIGH", cost_cents: 50500, closed_units: 0, realized_pnl_cents: 0 });
+    expect(result.order).toMatchObject({ side: "BUY", units: 10 * SHARE, fill_price_cents: 5050, gross_cents: 50500, opened_units: 10 * SHARE, opened_direction: "HIGH", cost_cents: 50500, closed_units: 0, realized_pnl_cents: 0 });
     expect(result.balance_cents).toBe(100000 - 50500);
     expect(await balance(alice)).toBe(49500);
 
     const lots = await openLots(alice, "drake");
     expect(lots).toHaveLength(1);
-    expect(lots[0]).toMatchObject({ direction: "HIGH", units: "10", open_units: "10", entry_price_cents: "5050" });
+    expect(lots[0]).toMatchObject({ direction: "HIGH", units: String(10 * SHARE), open_units: String(10 * SHARE), entry_price_cents: "5050" });
 
     const [ledger] = await database.rows<{ type: string; amount: string; order_id: string }>(
       "select type, amount_cents::text as amount, order_id from public.transactions where user_id = $1 and type = 'ALLOCATION'",
@@ -201,8 +210,10 @@ describe("place_order: opening", () => {
     // 44,450¢ left; 9 shares at 5050 = 45,450.
     const short = rejection(await order(alice, "drake", "BUY", 9));
     expect(short.code).toBe("insufficient_balance");
-    expect(short.max_units).toBe(8);
-    expect(short.message).toContain("enough for 8 shares");
+    // Phase 27: the wallet's reach is now measured in thousandths, so it
+    // stretches to 8.801 shares rather than being truncated to 8.
+    expect(short.max_units).toBe(8801);
+    expect(short.message).toContain("enough for 8.801 shares");
     expect(await balance(alice)).toBe(44450);
     await expect(database.rows("update public.users set wallet_balance_cents = -1 where id = $1", [alice])).rejects.toThrow(/users_wallet_balance_nonneg/);
   });
@@ -233,7 +244,7 @@ describe("place_order: closing, FIFO and P&L to the cent", () => {
   it("shows the weighted-average basis while the lots keep their own prices", async () => {
     const position = await summary(bob, "mrbeast");
     // Independent calculation: (10 × 4050 + 10 × 4250) / 20.
-    expect(position).toMatchObject({ direction: "HIGH", open_units: 20, cost_cents: 83000, avg_entry_cents: 4150, lots: 2 });
+    expect(position).toMatchObject({ direction: "HIGH", open_units: 20 * SHARE, cost_cents: 83000, avg_entry_cents: 4150, lots: 2 });
     // Marked at the Sell quote 41.50: value 20 × 4150 = 83,000, so unrealized is exactly zero here.
     expect(position).toMatchObject({ mark_price_cents: 4150, value_cents: 83000, unrealized_pnl_cents: 0, realized_pnl_cents: 0 });
     const lots = await openLots(bob, "mrbeast");
@@ -243,7 +254,7 @@ describe("place_order: closing, FIFO and P&L to the cent", () => {
   it("Sell exceeding the position is refused with the most it could close", async () => {
     const tooMany = rejection(await order(bob, "mrbeast", "SELL", 21));
     expect(tooMany.code).toBe("exceeds_position");
-    expect(tooMany.max_units).toBe(20);
+    expect(tooMany.max_units).toBe(20 * SHARE);
     expect(tooMany.message).toContain("You hold 20 shares of MrBeast");
     expect(await openLots(bob, "mrbeast")).toHaveLength(2);
   });
@@ -253,26 +264,26 @@ describe("place_order: closing, FIFO and P&L to the cent", () => {
     const before = await balance(bob);
     const result = fill(await order(bob, "mrbeast", "SELL", 15, 4450));
     // Lot A closes fully: 10 × (4450 − 4050) = 4,000. Lot B closes 5: 5 × (4450 − 4250) = 1,000.
-    expect(result.order).toMatchObject({ closed_units: 15, opened_units: 0, realized_pnl_cents: 5000, proceeds_cents: 15 * 4450, fill_price_cents: 4450 });
+    expect(result.order).toMatchObject({ closed_units: 15 * SHARE, opened_units: 0, realized_pnl_cents: 5000, proceeds_cents: 15 * 4450, fill_price_cents: 4450 });
     expect(result.order.fills.map((f) => [f.units, f.entry_price_cents, f.pnl_cents, f.proceeds_cents])).toEqual([
-      [10, 4050, 4000, 44500],
-      [5, 4250, 1000, 22250],
+      [10 * SHARE, 4050, 4000, 44500],
+      [5 * SHARE, 4250, 1000, 22250],
     ]);
     expect(await balance(bob)).toBe(before + 15 * 4450);
 
     const lots = await openLots(bob, "mrbeast");
     expect(lots).toHaveLength(1);
-    expect(lots[0]).toMatchObject({ entry_price_cents: "4250", units: "10", open_units: "5" });
+    expect(lots[0]).toMatchObject({ entry_price_cents: "4250", units: String(10 * SHARE), open_units: String(5 * SHARE) });
     const closes = await database.rows<{ units: string; pnl: string; proceeds: string }>(
       "select units::text, pnl_cents::text as pnl, proceeds_cents::text as proceeds from public.position_closes where user_id = $1 order by closed_at, entry_price_cents",
       [bob],
     );
     expect(closes).toEqual([
-      { units: "10", pnl: "4000", proceeds: "44500" },
-      { units: "5", pnl: "1000", proceeds: "22250" },
+      { units: String(10 * SHARE), pnl: "4000", proceeds: "44500" },
+      { units: String(5 * SHARE), pnl: "1000", proceeds: "22250" },
     ]);
     const position = await summary(bob, "mrbeast");
-    expect(position).toMatchObject({ open_units: 5, cost_cents: 21250, avg_entry_cents: 4250, realized_pnl_cents: 5000, mark_price_cents: 4450, value_cents: 22250, unrealized_pnl_cents: 1000 });
+    expect(position).toMatchObject({ open_units: 5 * SHARE, cost_cents: 21250, avg_entry_cents: 4250, realized_pnl_cents: 5000, mark_price_cents: 4450, value_cents: 22250, unrealized_pnl_cents: 1000 });
   });
 
   it("loses no cents across partial closes: the sum of the parts is the whole", async () => {
@@ -324,26 +335,26 @@ describe("the shorting gate, both states", () => {
   it("gate up: the same Sell closes the HIGH lot and opens LOW with the rest, no code change", async () => {
     await settings({ shorting_enabled: true });
     const flip = fill(await order(cara, "elon-musk", "SELL", 8));
-    expect(flip.order).toMatchObject({ closed_units: 5, opened_units: 3, opened_direction: "LOW", fill_price_cents: 5900 });
+    expect(flip.order).toMatchObject({ closed_units: 5 * SHARE, opened_units: 3 * SHARE, opened_direction: "LOW", fill_price_cents: 5900 });
     // Closing 5 HIGH bought at 6100 and sold at 5900: −1,000.
     expect(flip.order.realized_pnl_cents).toBe(-1000);
     const lots = await openLots(cara, "elon-musk");
     expect(lots).toHaveLength(1);
-    expect(lots[0]).toMatchObject({ direction: "LOW", open_units: "3", entry_price_cents: "5900" });
+    expect(lots[0]).toMatchObject({ direction: "LOW", open_units: String(3 * SHARE), entry_price_cents: "5900" });
     const position = await summary(cara, "elon-musk");
     // A LOW marks at the Buy quote: cost 3 × 5900 = 17,700, value 3 × 6100 = 18,300, unrealized −600.
-    expect(position).toMatchObject({ direction: "LOW", open_units: 3, cost_cents: 17700, mark_price_cents: 6100, unrealized_pnl_cents: -600 });
+    expect(position).toMatchObject({ direction: "LOW", open_units: 3 * SHARE, cost_cents: 17700, mark_price_cents: 6100, unrealized_pnl_cents: -600 });
     const [net] = await database.rows<{ n: string }>("select public.net_position_units($1::uuid, $2::uuid)::text as n", [cara, people.get("elon-musk")]);
-    expect(net.n).toBe("-3");
+    expect(net.n).toBe(String(-3 * SHARE));
   });
 
   it("a Buy closes LOW first (at the Buy quote) and then opens HIGH", async () => {
     await setQuote("elon-musk", 58, 1.0); // Buy 59.00 → 5900¢: the LOW closes flat
     const back = fill(await order(cara, "elon-musk", "BUY", 5));
-    expect(back.order).toMatchObject({ closed_units: 3, opened_units: 2, opened_direction: "HIGH", realized_pnl_cents: 0 });
+    expect(back.order).toMatchObject({ closed_units: 3 * SHARE, opened_units: 2 * SHARE, opened_direction: "HIGH", realized_pnl_cents: 0 });
     const lots = await openLots(cara, "elon-musk");
     expect(lots).toHaveLength(1);
-    expect(lots[0]).toMatchObject({ direction: "HIGH", open_units: "2", entry_price_cents: "5900" });
+    expect(lots[0]).toMatchObject({ direction: "HIGH", open_units: String(2 * SHARE), entry_price_cents: "5900" });
     expect(await balance(cara)).toBe(await ledgerNet(cara));
   });
 
@@ -351,12 +362,12 @@ describe("the shorting gate, both states", () => {
     await settings({ shorting_enabled: false });
     const over = rejection(await order(cara, "elon-musk", "SELL", 3));
     expect(over.code).toBe("exceeds_position");
-    expect(over.max_units).toBe(2);
+    expect(over.max_units).toBe(2 * SHARE);
     // Whatever writes the table: a LOW lot larger than the 2 HIGH units held is a net short, and refused.
     await expect(
       database.rows(
-        `insert into public.positions (user_id, person_id, direction, amount_cents, entry_score, units, open_units, entry_price_cents)
-         values ($1, $2, 'LOW', 17700, 59, 3, 3, 5900)`,
+        `insert into public.positions (user_id, person_id, direction, amount_cents, open_cost_cents, entry_score, units, open_units, entry_price_cents)
+         values ($1, $2, 'LOW', 17700, 17700, 59, 3000, 3000, 5900)`,
         [cara, people.get("elon-musk")],
       ),
     ).rejects.toThrow(/shorting is disabled/);
@@ -376,23 +387,23 @@ describe("risk levers reject at their boundaries", () => {
   });
 
   afterAll(async () => {
-    await settings({ max_units_per_person: 100000, max_open_interest_share: 1.0, max_daily_close_cents: 100000000, close_cooldown_seconds: 0 });
+    await settings({ max_units_per_person: 100000 * SHARE, max_open_interest_share: 1.0, max_daily_close_cents: 100000000, close_cooldown_seconds: 0 });
   });
 
   it("ships permissive: none of the four binds a normal order", async () => {
     const [levers] = await database.rows<Record<string, string>>(
       "select price_tolerance_cents::text as t, max_units_per_person::text as u, max_open_interest_share::text as s, max_daily_close_cents::text as d from public.platform_settings where id",
     );
-    expect(levers).toEqual({ t: "10", u: "100000", s: "1.0", d: "100000000" });
+    expect(levers).toEqual({ t: "10", u: String(100000 * SHARE), s: "1.0", d: "100000000" });
   });
 
   it("max units per user per person", async () => {
-    await settings({ max_units_per_person: 12 });
+    await settings({ max_units_per_person: 12 * SHARE });
     const over = rejection(await order(dan, "kai-cenat", "BUY", 3));
     expect(over.code).toBe("max_units");
-    expect(over).toMatchObject({ limit_units: 12, held_units: 10 });
+    expect(over).toMatchObject({ limit_units: 12 * SHARE, held_units: 10 * SHARE });
     fill(await order(dan, "kai-cenat", "BUY", 2));
-    await settings({ max_units_per_person: 100000 });
+    await settings({ max_units_per_person: 100000 * SHARE });
   });
 
   it("max share of open interest on one person", async () => {
@@ -427,7 +438,7 @@ describe("risk levers reject at their boundaries", () => {
     expect(Number(now.wait_seconds)).toBeGreaterThan(0);
     expect(Number(now.wait_seconds)).toBeLessThanOrEqual(60);
     // Age the older lot past the cooldown: closing 3 touches only it and is allowed…
-    await database.rows("update public.positions set opened_at = now() - interval '2 minutes' where user_id = $1 and open_units = 3", [eve]);
+    await database.rows("update public.positions set opened_at = now() - interval '2 minutes' where user_id = $1 and open_units = 3000", [eve]);
     fill(await order(eve, "kai-cenat", "SELL", 3));
     // …but closing the young lot is still refused.
     const young = rejection(await order(eve, "kai-cenat", "SELL", 1));
@@ -473,7 +484,7 @@ describe("atomicity and reconciliation", () => {
     const [state] = await database.rows<{ balance: string; ledger: string; open_cost: string }>(
       `select (select wallet_balance_cents from public.users where id = $1)::text as balance,
               (select coalesce(sum(case when type in ('DEPOSIT', 'REDEMPTION') then amount_cents else -amount_cents end), 0) from public.transactions where user_id = $1)::text as ledger,
-              (select coalesce(sum(open_units * entry_price_cents), 0) from public.positions where user_id = $1 and is_open)::text as open_cost`,
+              (select coalesce(sum(open_cost_cents), 0) from public.positions where user_id = $1 and is_open)::text as open_cost`,
       [fay],
     );
     expect(state.balance).toBe(state.ledger);
@@ -493,7 +504,7 @@ describe("atomicity and reconciliation", () => {
     expect(await ledgerNet(fay)).toBe(STARTING_BALANCE_CENTS);
     const [grant] = await database.rows<{ ok: boolean }>("select has_function_privilege('authenticated', 'public.reset_paper_balance(uuid)', 'execute') as ok");
     expect(grant.ok).toBe(false);
-    const [orders] = await database.rows<{ ok: boolean }>("select has_function_privilege('authenticated', 'public.place_order(uuid, text, bigint, bigint, text)', 'execute') as ok");
+    const [orders] = await database.rows<{ ok: boolean }>("select has_function_privilege('authenticated', 'public.place_order(uuid, text, bigint, bigint, text, bigint, text)', 'execute') as ok");
     expect(orders.ok).toBe(true);
   });
 });

@@ -136,12 +136,46 @@ export function quoteFromScore(score: number, spread: number): { buyCents: Cents
 }
 
 // ---------------------------------------------------------------------------
+// The scale a payload is counted in
+// ---------------------------------------------------------------------------
+
+/**
+ * Quantities cross the server boundary as whole integers, but what one of
+ * those integers MEANS is the server's to declare and not this side's to
+ * assume. Until Phase 27 one unit was one share; from Phase 27 one unit is a
+ * thousandth of a share. So every payload that carries a quantity also carries
+ * `units_per_share`, and everything below divides by what it was told rather
+ * than by a constant compiled in here.
+ *
+ * A PAYLOAD WITH NO SUCH FIELD CAME FROM A SERVER THAT ONLY EVER MEANT WHOLE
+ * SHARES, so an absent scale is 1. That one rule is what lets this build ship
+ * BEFORE the data moves and stay correct after: the same code reads both
+ * shapes, and there is no instant at which a holding of three shares can be
+ * printed as three thousand.
+ *
+ * Everything past the parse boundary is therefore in SHARES, and a share may
+ * be fractional.
+ */
+export function payloadUnitsPerShare(payload: unknown): number {
+  if (typeof payload !== "object" || payload === null) return 1;
+  const declared = (payload as Record<string, unknown>).units_per_share;
+  const parsed = typeof declared === "number" ? declared : typeof declared === "string" ? Number(declared) : NaN;
+  return Number.isFinite(parsed) && parsed >= 1 ? parsed : 1;
+}
+
+/** A server quantity, counted in the scale its payload declared, as shares. */
+export function toShares(value: unknown, unitsPerShare: number): number {
+  return toInt(value) / unitsPerShare;
+}
+
+// ---------------------------------------------------------------------------
 // Positions
 // ---------------------------------------------------------------------------
 
 export interface PositionSummary {
   personId: string;
   direction: PositionDirection | null;
+  /** Shares held, from the payload's own scale. May be fractional. */
   openUnits: number;
   costCents: Cents;
   /** Weighted-average entry price, cents per unit. Display only; realized P&L is FIFO by lot. */
@@ -193,10 +227,11 @@ export function toPositionSummary(value: unknown, personId: string): PositionSum
   const direction = record.direction === "HIGH" || record.direction === "LOW" ? record.direction : null;
   const avg = toNullableInt(record.avg_entry_cents);
   const mark = toNullableInt(record.mark_price_cents);
+  const unitsPerShare = payloadUnitsPerShare(record);
   return {
     personId,
     direction,
-    openUnits: toInt(record.open_units),
+    openUnits: toShares(record.open_units, unitsPerShare),
     costCents: cents(toInt(record.cost_cents)),
     avgEntryCents: avg === null ? null : cents(avg),
     lots: toInt(record.lots),
@@ -302,12 +337,15 @@ export function toOrderResult(value: unknown, personId: string): OrderResult {
   }
 
   const order = (typeof record.order === "object" && record.order !== null ? record.order : {}) as Record<string, unknown>;
+  // The order's own declared scale covers every quantity inside it, the fills
+  // included — whatever scale the request itself was expressed in.
+  const unitsPerShare = payloadUnitsPerShare(order);
   const fills = Array.isArray(order.fills)
     ? order.fills
         .filter((fill): fill is Record<string, unknown> => typeof fill === "object" && fill !== null)
         .map((fill) => ({
           positionId: typeof fill.position_id === "string" ? fill.position_id : "",
-          units: toInt(fill.units),
+          units: toShares(fill.units, unitsPerShare),
           entryPriceCents: cents(toInt(fill.entry_price_cents)),
           pnlCents: cents(toInt(fill.pnl_cents)),
           proceedsCents: cents(toInt(fill.proceeds_cents)),
@@ -320,14 +358,14 @@ export function toOrderResult(value: unknown, personId: string): OrderResult {
       id: typeof order.id === "string" ? order.id : "",
       personId,
       side: order.side === "SELL" ? "SELL" : "BUY",
-      units: toInt(order.units),
+      units: toShares(order.units, unitsPerShare),
       fillPriceCents: cents(toInt(order.fill_price_cents)),
       grossCents: cents(toInt(order.gross_cents)),
-      openedUnits: toInt(order.opened_units),
+      openedUnits: toShares(order.opened_units, unitsPerShare),
       openedDirection: order.opened_direction === "HIGH" || order.opened_direction === "LOW" ? order.opened_direction : null,
       positionId: typeof order.position_id === "string" ? order.position_id : null,
       costCents: cents(toInt(order.cost_cents)),
-      closedUnits: toInt(order.closed_units),
+      closedUnits: toShares(order.closed_units, unitsPerShare),
       proceedsCents: cents(toInt(order.proceeds_cents)),
       realizedPnlCents: cents(toInt(order.realized_pnl_cents)),
       fills,

@@ -13,6 +13,9 @@ import { CLOSE_COOLDOWN_MIN_SECONDS, RISK_LEVER_DEFAULTS, STARTING_BALANCE_CENTS
  * timestamps.
  */
 
+/** Phase 27: a unit is a thousandth of a share; the cases below speak shares. */
+const SHARE = 1000;
+
 let database: TestDatabase;
 const people = new Map<string, string>();
 let initialCooldown: number;
@@ -128,8 +131,8 @@ async function history(userId: string, before: string | null = null, beforeId: s
  */
 async function independent(userId: string): Promise<{ cash: number; marked: number; cost: number; realized: number; credit: number }> {
   const [wallet] = await database.rows<{ b: string }>("select wallet_balance_cents::text as b from public.users where id = $1", [userId]);
-  const lots = await database.rows<{ open_units: string; entry: string; direction: string; sell: string; buy: string }>(
-    `select l.open_units::text as open_units, l.entry_price_cents::text as entry, l.direction, p.sell_price::text as sell, p.buy_price::text as buy
+  const lots = await database.rows<{ open_units: string; open_cost: string; entry: string; direction: string; sell: string; buy: string }>(
+    `select l.open_units::text as open_units, l.open_cost_cents::text as open_cost, l.entry_price_cents::text as entry, l.direction, p.sell_price::text as sell, p.buy_price::text as buy
        from public.positions l join public.people p on p.id = l.person_id
       where l.user_id = $1 and l.is_open`,
     [userId],
@@ -138,8 +141,8 @@ async function independent(userId: string): Promise<{ cash: number; marked: numb
   let cost = 0;
   for (const lot of lots) {
     const mark = lot.direction === "HIGH" ? pointsToCents(Number(lot.sell)) : pointsToCents(Number(lot.buy));
-    marked += Number(lot.open_units) * mark;
-    cost += Number(lot.open_units) * Number(lot.entry);
+    marked += Math.floor((Number(lot.open_units) * mark) / SHARE);
+    cost += Number(lot.open_cost);
   }
   const [closes] = await database.rows<{ p: string }>("select coalesce(sum(pnl_cents), 0)::text as p from public.position_closes where user_id = $1", [userId]);
   const [credit] = await database.rows<{ c: string }>(
@@ -166,7 +169,7 @@ async function expectReconciled(userId: string): Promise<Summary> {
   expect(s.positions.reduce((sum, p) => sum + p.value_cents, 0)).toBe(s.positions_value_cents);
   expect(s.positions.reduce((sum, p) => sum + p.unrealized_pnl_cents, 0)).toBe(s.unrealized_pnl_cents);
   for (const p of s.positions) {
-    expect(p.value_cents).toBe(p.open_units * p.mark_price_cents);
+    expect(p.value_cents).toBe(Math.floor((p.open_units * p.mark_price_cents) / SHARE));
     expect(p.unrealized_pnl_cents).toBe(p.direction === "HIGH" ? p.value_cents - p.cost_cents : p.cost_cents - p.value_cents);
     expect(p.mark_price_cents).toBe(p.direction === "HIGH" ? p.sell_cents : p.buy_cents);
     expect(p.mark_side).toBe(p.direction === "HIGH" ? "SELL" : "BUY");
@@ -248,8 +251,8 @@ describe("the summary reconciles to the cent", () => {
     expect(s.cash_cents).toBe(1_000_000 - 50500 - 30250);
     // Marked at Sell 49.50 / 59.50 straight away: the spread is the immediate, honest loss.
     expect(s.positions.map((p) => [p.slug, p.open_units, p.mark_side, p.mark_price_cents, p.value_cents, p.unrealized_pnl_cents])).toEqual([
-      ["drake", 10, "SELL", 4950, 49500, -1000],
-      ["mrbeast", 5, "SELL", 5950, 29750, -500],
+      ["drake", 10 * SHARE, "SELL", 4950, 49500, -1000],
+      ["mrbeast", 5 * SHARE, "SELL", 5950, 29750, -500],
     ]);
     expect(s.unrealized_pnl_cents).toBe(-1500);
     expect(s.total_value_cents).toBe(1_000_000 - 1500);
@@ -272,11 +275,11 @@ describe("the summary reconciles to the cent", () => {
 
   it("a partial close realizes FIFO P&L that the summary reads from the close records", async () => {
     const fill = await order(ana, "drake", "SELL", 4); // 4 × (5150 − 5050) = +400
-    expect(fill.order).toMatchObject({ closed_units: 4, realized_pnl_cents: 400, proceeds_cents: 4 * 5150 });
+    expect(fill.order).toMatchObject({ closed_units: 4 * SHARE, realized_pnl_cents: 400, proceeds_cents: 4 * 5150 });
     const s = await expectReconciled(ana);
     expect(s.realized_pnl_cents).toBe(400);
     const drake = s.positions.find((p) => p.slug === "drake")!;
-    expect(drake).toMatchObject({ open_units: 6, cost_cents: 30300, value_cents: 30900, unrealized_pnl_cents: 600, realized_pnl_cents: 400, lots: 1 });
+    expect(drake).toMatchObject({ open_units: 6 * SHARE, cost_cents: 30300, value_cents: 30900, unrealized_pnl_cents: 600, realized_pnl_cents: 400, lots: 1 });
     // Closing at the mark moves nothing: total value is unchanged by the close itself.
     expect(s.total_value_cents).toBe(1_000_000 - 500);
     expect(s.unrealized_pnl_cents).toBe(600 - 1500);
@@ -285,7 +288,7 @@ describe("the summary reconciles to the cent", () => {
 
   it("a full close leaves the person out of the positions and in realized P&L", async () => {
     const fill = await order(ana, "mrbeast", "SELL", 5); // 5 × (5750 − 6050) = −1,500
-    expect(fill.order).toMatchObject({ closed_units: 5, realized_pnl_cents: -1500 });
+    expect(fill.order).toMatchObject({ closed_units: 5 * SHARE, realized_pnl_cents: -1500 });
     const s = await expectReconciled(ana);
     expect(s.positions.map((p) => p.slug)).toEqual(["drake"]);
     expect(s.realized_pnl_cents).toBe(400 - 1500);
@@ -303,7 +306,7 @@ describe("the summary reconciles to the cent", () => {
     const s = await expectReconciled(ana);
     const drake = s.positions.find((p) => p.slug === "drake")!;
     // cost 6 × 5050 + 1 × 5250 = 35,550 over 7 units = 5,078.57…: shown as 5,079.
-    expect(drake).toMatchObject({ open_units: 7, cost_cents: 35550, avg_entry_cents: 5079, lots: 2, mark_price_cents: 5150, value_cents: 36050 });
+    expect(drake).toMatchObject({ open_units: 7 * SHARE, cost_cents: 35550, avg_entry_cents: 5079, lots: 2, mark_price_cents: 5150, value_cents: 36050 });
     // Exact: value − cost = 500. The rounded average would have said (5150 − 5079) × 7 = 497.
     expect(drake.unrealized_pnl_cents).toBe(500);
     expect((5150 - 5079) * 7).toBe(497);
@@ -437,8 +440,8 @@ describe("trade history", () => {
     await order(dee, "kendrick-lamar", "BUY", 1); // someone else's order, never in Cy's history
     const rows = await history(cy);
     expect(rows.map((row) => row.id)).toEqual([sell.order.id, buy.order.id]);
-    expect(rows[1]).toMatchObject({ side: "BUY", units: 6, fill_price_cents: 4050, cost_cents: 24300, proceeds_cents: 0, realized_pnl_cents: 0, person_slug: "kendrick-lamar" });
-    expect(rows[0]).toMatchObject({ side: "SELL", units: 2, fill_price_cents: 4350, cost_cents: 0, proceeds_cents: 2 * 4350, realized_pnl_cents: 2 * (4350 - 4050) });
+    expect(rows[1]).toMatchObject({ side: "BUY", units: 6 * SHARE, fill_price_cents: 4050, cost_cents: 24300, proceeds_cents: 0, realized_pnl_cents: 0, person_slug: "kendrick-lamar" });
+    expect(rows[0]).toMatchObject({ side: "SELL", units: 2 * SHARE, fill_price_cents: 4350, cost_cents: 0, proceeds_cents: 2 * 4350, realized_pnl_cents: 2 * (4350 - 4050) });
     // The quote has moved since; the stored price is the snapshot, not today's.
     await setQuote("kendrick-lamar", 48, 0.5);
     expect((await history(cy))[1].fill_price_cents).toBe(4050);

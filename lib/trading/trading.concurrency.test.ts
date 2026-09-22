@@ -2,6 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createTestServer, type TestServer } from "@/lib/__tests__/postgres";
 
+/** Phase 27: a unit is a thousandth of a share; the cases below speak shares. */
+const SHARE = 1000;
+
 /**
  * Concurrent orders on a real, multi-connection Postgres server. The wallet
  * row lock in place_order() is what stops two sessions spending the same
@@ -72,7 +75,7 @@ describe("concurrent orders on one wallet", () => {
     expect(results.filter((r) => !r.ok).every((r) => r.code === "insufficient_balance")).toBe(true);
     const { rows } = await server.pool.query<{ balance: string; open_cost: string; ledger: string }>(
       `select (select wallet_balance_cents from public.users where id = $1)::text as balance,
-              (select coalesce(sum(open_units * entry_price_cents), 0) from public.positions where user_id = $1 and is_open)::text as open_cost,
+              (select coalesce(sum(open_cost_cents), 0) from public.positions where user_id = $1 and is_open)::text as open_cost,
               (select coalesce(sum(case when type in ('DEPOSIT', 'REDEMPTION') then amount_cents else -amount_cents end), 0) from public.transactions where user_id = $1)::text as ledger`,
       [userId],
     );
@@ -94,6 +97,6 @@ describe("concurrent orders on one wallet", () => {
       [userId],
     );
     // Sold 18 at the Sell quote 4950: 9,100 + 89,100 = 98,200, the round trip costing the spread.
-    expect(rows[0]).toEqual({ open: "0", closes: "18", balance: "98200" });
+    expect(rows[0]).toEqual({ open: "0", closes: String(18 * SHARE), balance: "98200" });
   });
 }, 120_000);
