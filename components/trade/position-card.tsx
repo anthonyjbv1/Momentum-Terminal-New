@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/page-header";
 
-import { Money, pointsText } from "./money";
+import { Money } from "./money";
 
 /**
  * The viewer's position on this person, marked to the live quote: shares
@@ -15,6 +15,12 @@ import { Money, pointsText } from "./money";
  * by lot), the value at the quote it would close at, and both P&L figures.
  * Colour appears only on the two P&L numbers, by direction. Absent when
  * nothing is held: the trade controls say so instead.
+ *
+ * The Value hint used to name the mark in points — "at Sell 55.6" — with
+ * the same price in money, "$55.64 per share", directly underneath it: one
+ * quote, twice, in two units. Phase 26 dropped the figure from the hint
+ * rather than converting it, since the line below already states it to the
+ * cent; the hint now says only which side the position is marked at.
  */
 export interface PositionCardProps {
   position: PositionSummary;
@@ -57,7 +63,7 @@ export function PositionCard({ position, buyCents, sellCents, className }: Posit
           <Money cents={position.avgEntryCents ?? 0} className="text-2xl font-semibold tracking-tight text-fg" />
           <span className="text-sm text-fg-muted">cost {formatCents(position.costCents)}</span>
         </Stat>
-        <Stat label="Value" hint={`at ${position.direction === "HIGH" ? "Sell" : "Buy"} ${pointsText(mark)}`}>
+        <Stat label="Value" hint={`at the ${position.direction === "HIGH" ? "Sell" : "Buy"} quote`}>
           <Money cents={value} className="text-2xl font-semibold tracking-tight text-fg" />
           <span className="text-sm text-fg-muted">{formatCents(mark)} per share</span>
         </Stat>

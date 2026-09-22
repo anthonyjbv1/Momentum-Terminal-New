@@ -2,7 +2,7 @@
 
 A social data terminal where users take **HIGH** or **LOW** positions on individual people. Each person has a continuously updating Momentum Score driven by their observable real-world data. Users profit when a score moves in their predicted direction; the platform is the sole counterparty. The scoring system is called **the Engine**; its five forces are **Gravity**, **Signals**, **Market Mood**, **Conviction** and **Trading Activity**.
 
-> **Status: Phase 24 complete, and the platform is RUNNING.** Both schedules are on: the Engine's heartbeat every 30 s (`ENGINE_CRON_ENABLED`) and ingestion every fifteen minutes (`INGEST_CRON_ENABLED`). As of 2026-09-21 that is **13,740 ticks**, **3,347 signals**, 162 Engine narratives and 219,840 recorded score points across the sixteen subjects, whose scores now sit between **52.2 and 69.9** rather than at the seeded 50.0. Eight sources are active — `rss` and `publisher_rss` (the two news doors), `youtube`, `youtube_comments`, `youtube_trending`, `twitch`, `finnhub` and `apisports` — every one of them registered as data on a row rather than as code. `ENGINE_TARGET_DRIFT_ENABLED` stays unset and shorting stays off. The whole app sits behind a signed-in session while the test is closed (`lib/auth-gate.ts`, one file, removable in one step; robots disallowed, every response `noindex`). Every metric a connector reads is snapshotted into a service-role-only raw table, differenced, normalised against the person's own trailing baseline and turned into a signal that carries **direction and magnitude only**, never a level; a trigger on `signals` refuses anything more. Trading is live, on paper: Buy opens a HIGH position at the server-read Buy quote, Sell closes it FIFO, every amount is integer cents, every order is one atomic RPC behind a tolerance band and the long-only gate, and `/portfolio` reconciles the lot to the cent. Home, the person profile, the Feed, Forecast and search are all live; `/design` is the living reference; `/admin` is the operator console, and the only surface where σ appears. **The first live NFL game ran through it on 2026-09-21** — Mahomes 60.9 → 66.0, the largest single-subject move recorded — and Phase 24 is what that game taught. The recommendation layer (For You) is the next phase.
+> **Status: Phase 26 complete, and the platform is RUNNING.** Both schedules are on: the Engine's heartbeat every 30 s (`ENGINE_CRON_ENABLED`) and ingestion every fifteen minutes (`INGEST_CRON_ENABLED`). As of 2026-09-22 that is **16,666 ticks**, **3,579 signals**, 197 Engine narratives and 266,656 recorded score points across the sixteen subjects, whose scores now sit between **52.1 and 68.6** rather than at the seeded 50.0. Eight sources are active — `rss` and `publisher_rss` (the two news doors), `youtube`, `youtube_comments`, `youtube_trending`, `twitch`, `finnhub` and `apisports` — every one of them registered as data on a row rather than as code. `ENGINE_TARGET_DRIFT_ENABLED` stays unset and shorting stays off. The whole app sits behind a signed-in session while the test is closed (`lib/auth-gate.ts`, one file, removable in one step; robots disallowed, every response `noindex`). Every metric a connector reads is snapshotted into a service-role-only raw table, differenced, normalised against the person's own trailing baseline and turned into a signal that carries **direction and magnitude only**, never a level; a trigger on `signals` refuses anything more. Trading is live, on paper: Buy opens a HIGH position at the server-read Buy quote, Sell closes it FIFO, every amount is integer cents, every order is one atomic RPC behind a tolerance band and the long-only gate, and `/portfolio` reconciles the lot to the cent. Home, the person profile, the Feed, Forecast and search are all live; `/design` is the living reference; `/admin` is the operator console, and the only surface where σ appears. **The first live NFL game ran through it on 2026-09-21** — Mahomes 60.9 → 66.0, the largest single-subject move recorded — and Phase 24 is what that game taught. Phases 25 and 26 are the trading surfaces themselves: one typeface per line, one format for every price you can trade at, and the modal that finally covers the app it interrupts. The recommendation layer (For You) is the next phase.
 
 ## Stack
 
@@ -657,7 +657,7 @@ The visual foundation every screen inherits, plus the navigation frame. Full ref
 
 Every visual value lives in **`app/styles/tokens.css`** as a Tailwind 4 `@theme` block: semantic colours (`canvas`, `surface*`, `line*`, `fg*`, `positive`, `negative`, `neutral`, `accent`), the two typefaces, a type scale, the spacing base plus the shell's structural sizes (`banner`, `tabbar`, `rail`, `shell`, `touch`), radii, shadows (glows derive from the semantic colours) and motion. Tailwind's stock palette, fonts, radii and shadows are reset, so `bg-red-500` does not exist; components can only use tokens. Changing a token is a one-line edit that cascades platform-wide, and `lib/__tests__/design-tokens.test.ts` fails the build if a component ever hardcodes a colour, pixel size or arbitrary value.
 
-The look is editorial monochrome: a jet-black ground, neutral grey cards with no borders, white type with a strong hierarchy, generous space. Green and red are the only saturated colours and appear only on Buy / Sell and directional score movement; navigation, focus, status and the timer are white or grey. Inter carries the interface; JetBrains Mono appears only on numbers, through the `num` utility, **with one documented exception — Portfolio (Phase 25), which sets its figures in Inter with `tabular-nums`**. Both fonts are self-hosted through `next/font`.
+The look is editorial monochrome: a jet-black ground, neutral grey cards with no borders, white type with a strong hierarchy, generous space. Green and red are the only saturated colours and appear only on Buy / Sell and directional score movement; navigation, focus, status and the timer are white or grey. Inter carries the interface; JetBrains Mono appears only on numbers, through the `num` utility, **with three documented exceptions — Portfolio (Phase 25), the trade sheet and the profile score card's change line (Phase 26), which set their figures in Inter with `tabular-nums`**. Every chart keeps its mono axis and time labels. Both fonts are self-hosted through `next/font`.
 
 Two signature utilities are defined once in `globals.css`: `num` (mono, tabular figures) for every number and `text-label` (small uppercase section caption) for section headers.
 
@@ -2781,6 +2781,100 @@ apart. Colour, shape, height, padding, gap and behaviour are untouched — the
 pill is simply wider, because Inter's digits at the label's size are wider than
 mono's at `text-xs`, and `Button` sizes to its content.
 
+## One price, one format, everywhere you trade (Phase 26)
+
+The pill said **Buy 56.7**. The sheet it opened charged **$56.64**. Both were
+honest — one score point is one dollar, and a quote of 56.6449 points rounds to
+56.7 at one decimal and to $56.64 at two — but nobody reads it that way. A tap
+and a payment one screen apart, in two units at two precisions, reads as the
+price moving while you decided, and that is the one thing a trading interface
+may never look like.
+
+The rule, flat, and now the only one:
+
+| | unit | where |
+| --- | --- | --- |
+| A **score** | points, no currency, one decimal | the hero, the axis, the crosshair, the Gravity line, the change line |
+| Anything you can **trade at** | dollars and cents, two decimals | the pill, the sheet's quote box, price per share, the recorded fill |
+
+`pointsText()` — the one-decimal formatter that produced "56.7" — was **deleted**
+rather than left unused. It was on the pills, under the sheet's quote boxes, in
+the sheet's own confirmation sentence and on both position cards. A second
+formatter still in reach is how the drift comes back.
+
+Two places showed the mark in points beside the same figure in money: the
+profile position card's "Value · at Sell 55.6" and Portfolio's row label, each
+with "$55.64 per share" directly underneath. Neither was converted — the figure
+was dropped from the label, because the price is already stated to the cent a
+line below. Both now read "at the Sell quote".
+
+**The four readings, to the cent** (`components/trade/one-price.db.test.ts`,
+against a real Postgres with the migrations applied verbatim). A quote of
+56.6449 points at a 0.5 spread, carried from the score panel to the ledger:
+
+| reading | value |
+| --- | --- |
+| the Buy pill (`TradeQuote`, rendered) | `$57.14` |
+| the sheet's quote box | `$57.14` |
+| price per share, in the summary (`Money`, rendered) | `$57.14` |
+| `orders.fill_price_cents`, written by `place_order()` | `$57.14` |
+
+The same test scans the trading surfaces for a second way to format a price and
+fails if one reappears.
+
+## The score card, and two bugs at the sheet's edges (Phase 26)
+
+**The change line is one statement.** It was three pieces that happened to sit
+next to each other — arrow and points figure at one size and weight, the
+percentage at another, the period smaller again — and because the arrow was an
+inline icon inside the first piece it pushed that figure off the baseline the
+percentage sat on. Three sizes, two baselines, one reading. Both figures are
+now a single text run, `↗ +0.3 (+0.59%) · 1H`, so they share a baseline by
+construction rather than by alignment; the arrow is centred on the line instead
+of set in it; the period label stays neutral. Measured in the browser across
+all twelve combinations (1H/24H/7D/ALL × rising/falling/flat): one text node,
+figure and period label on the same baseline to the pixel, arrow centre equal
+to text centre to the pixel, Inter 16px/500 with `tabular-nums` throughout. A
+zero move renders `0.0 (0.00%)` with no sign and no colour, which is the
+Phase 19+ rule.
+
+**Both stat rows came off the card.** Buy and Sell repeated the trade bar that
+is on screen at all times, in a second format. Spread showed the HALF-spread
+(`0.5`) while the trade sheet showed the full one (`$1.00`) — the platform was
+stating two different spreads, and the sheet, where a spread is actually
+charged, is now the only place it is stated. Gravity moved into the chart,
+where the target is a line on the same axis as the score instead of a number
+the reader has to place: in range, a dashed line labelled `Gravity 55.0` at the
+right edge, under the score line; out of range, the existing edge note. The
+vertical domain is untouched — the 0.5-point floor and the domain arithmetic
+are shared with the Portfolio value chart and were not part of this.
+
+**Two bugs at the sheet's edges**, both reproduced at 375×667 before being
+fixed:
+
+- The title block was a sibling ABOVE the scroll area, with no background of
+  its own and nothing between it and the content. Scrolled content was clipped
+  hard at its bottom edge, so the surviving few pixels of a half-scrolled line
+  landed under "Paper trading. Not real money." and the sheet read as though
+  its content were showing through its own title. The title block is now sticky
+  INSIDE the scroll area, carrying the sheet's own background; content passes
+  under it and is covered.
+- `--z-tabbar` was **40** and `--z-sheet` **35**: a row of navigation drawn on
+  top of an `aria-modal` dialog, covering the bottom of the sheet and staying
+  tappable while the dialog claimed to have trapped focus. The tab bar moved to
+  **20**, under the overlay — a modal covers the app, and the banner stays the
+  single documented exception because the countdown has to be honest
+  everywhere. The sheet also stopped padding by a tab bar's height, which was
+  only ever there to dodge the nav; it is now `env(safe-area-inset-bottom)`
+  plus the body's own padding.
+
+  Measured at 375×667, the primary action at rest, before and after:
+
+  | | Buy sheet | Sell sheet |
+  | --- | --- | --- |
+  | before | 23px of the 52px button visible; a tap at its centre hits the tab bar | **0px visible**; a tap at its centre hits the tab bar |
+  | after | **52px visible**; the tap hits the button | 41px visible; the tap hits the button |
+
 ## Scope so far
 
 - **Phase 1**: scaffold, schema, RLS, auth, seed data, typed clients.
@@ -2793,6 +2887,7 @@ mono's at `text-xs`, and `Button` sizes to its content.
 - **Phase 12+**: newest-first selection with a least-recently-served rotation across people, and memory event expiry (30 days, dated folds written as history, today's date and event ages in the person block).
 - **Phase 13**: publisher-direct feeds — the `publisher_feeds` catalogue read as one shared fetch per run, whole-word name matching scoped by topic, undated items refused, per-feed health and discovery written back onto the rows, the two news doors deduplicated as one story family with Google News kept as the fallback — and the ingestion cron at every fifteen minutes with every source interval off the multiple.
 - **Phase 13+**: athlete metrics beyond passing yards — `config.game_stats` on the API-Sports row (every per-game figure read from one request per game, each with its own anchor), the rating figure (+1) and `game_interceptions` (−1) registered beside yards with touchdowns and every composite figure refused, and the Signals force folding one source's metric signals of one moment into one reading carrying their mean, so a game is its event and its stat line and never three copies of the line.
+- **Phase 26**: one price and one card — every tradeable price in dollars and cents through one formatter, with the points formatter deleted rather than left unused, and the pill, the sheet's quote box, its price per share and the recorded fill proved equal to the cent against a real Postgres; the profile score card's change line rebuilt as one statement (both figures a single text run on one baseline, the arrow centred on it, measured across all twelve range × direction combinations); the Buy/Sell and Spread stat rows removed — the spread had been stated twice, at two different values — and the Gravity target moved onto the chart as a labelled reference line with the vertical domain untouched; the trade sheet set in one typeface with its summary values right-aligned; and two layout bugs fixed at the sheet's edges, a title block that scrolled content ran into and a tab bar drawn on top of a modal, which had left the Sell sheet's Review button with none of it visible and a tap at its centre landing on the nav.
 - **Phase 25**: Portfolio typography — the page set in one typeface, with `tabular-nums` carrying the fixed-width digits that mono was there for (measured: four different money strings render to the same pixel width at every size on the page); the mid-sentence face changes gone from the return line, the position sub-line and every trade-history row; and the Buy/Sell quote pill extracted into one shared component with its price matched to its label. The value chart, the header and every other page are untouched.
 - **Phase 24**: what the first live NFL game taught — a metric now emits when its REGISTER changes rather than when its number does (39 emissions to 7 on the Mahomes window, 2,074 to 220 board-wide, replayed against the stored ledger before shipping), held with 0.25σ of asymmetric hysteresis from the board's own step sizes; a game result dated at the first poll that observed it FINISHED rather than at kickoff, with a config hook for a reported final time and a fallback to kickoff when nothing was watching; the subject's plain-numeric line in the result headline, omitted rather than guessed when a statistic is not where config says; every boundary in the language module decided on the DISPLAYED figure, which closed the 2x/100%, the 100x and the below-pace-fraction collisions in one rule; and `game_passer_rating` renamed `game_rating` and re-floored after the API's own numbers disproved the passer-rating assumption two games running.
 - **Phase 23**: search — a per-person `is_discoverable` flag that ships **off** and is switched on for the sixteen by slug in the migration, enforced inside `search_people()` so a person who has not opted in is unreachable through it for any caller and at any limit; name, full name and slug matched partially and forgivingly of case, punctuation and Latin diacritics through two immutable normalisations; ranked and tie-broken in the database on the board's own total order, with the trailing-hour change on the same row so a result and the board cannot disagree; three partial expression indexes (the first `people` has ever had) covering the anchored half and an honest note on the contains half; and the placeholder replaced by two written states, one saying what search is for and one answering what somebody who searched their own name and found nothing is really asking.

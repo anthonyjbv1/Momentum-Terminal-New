@@ -11,7 +11,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/page-header";
-import { Money, pointsText } from "@/components/trade/money";
+import { Money } from "@/components/trade/money";
 import { TradeQuote } from "@/components/trade/trade-quote";
 
 /**
@@ -26,6 +26,11 @@ import { TradeQuote } from "@/components/trade/trade-quote";
  * carries a figure. "3 shares · avg $51.65 · 2 lots" was a whole sentence in
  * the monospace face; the value and the mark move on the Engine's cadence, so
  * they stay fixed-width without it.
+ *
+ * The Value label used to carry the mark in points — "at Sell 55.6" — with
+ * "$55.64 per share" two lines below it. Phase 26 dropped the figure rather
+ * than converting it: the price is already stated to the cent underneath, so
+ * the label only needs to say which side the position is marked at.
  */
 export interface PositionsListProps {
   positions: PortfolioPosition[];
@@ -106,7 +111,7 @@ function PositionRow({ position, onClose, onOpenPerson }: { position: PortfolioP
 
       <div className="col-start-2 flex min-w-0 flex-col gap-0.5 sm:col-start-auto">
         <p className="text-label text-fg-muted">
-          Value <span className="normal-case tracking-normal text-fg-faint">at {markLabel} {pointsText(position.markPriceCents)}</span>
+          Value <span className="normal-case tracking-normal text-fg-faint">at the {markLabel} quote</span>
         </p>
         <Money cents={position.valueCents} face="text" className="text-lg font-semibold tracking-tight text-fg" />
         <p className="text-xs tabular-nums text-fg-faint">{formatCents(position.markPriceCents)} per share</p>

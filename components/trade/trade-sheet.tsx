@@ -21,12 +21,27 @@ import { Button } from "@/components/ui/button";
 import { inputClassName } from "@/components/ui/input";
 import { Sheet } from "@/components/ui/sheet";
 
-import { Money, pointsText } from "./money";
+import { Money } from "./money";
 
 /**
  * The trade sheet: compose → confirm → result. A bottom sheet on a phone, a
  * dialog on desktop (the Sheet primitive), always below the banner so the
  * 30-second countdown stays in view.
+ *
+ * ONE PRICE, ONE FORMAT (Phase 26). Every price in here is the quote the
+ * score panel computed once and handed down, rendered through formatCents —
+ * the same value through the same function as the Buy/Sell pill that opened
+ * the sheet. The quote boxes used to repeat themselves in points ("56.6
+ * pts") under the money figure, and the confirmation sentence named the
+ * quote in points too; both are gone. Scores are points; anything you can
+ * trade at is dollars and cents.
+ *
+ * TYPOGRAPHY (Phase 26). Inter with tabular figures throughout, the
+ * Portfolio rule from Phase 25: the quote boxes, the spread sentence, the
+ * quantity field, the chips and every summary value. "2 shares" is a phrase
+ * and is set as one. The summary's value column is right-aligned so the
+ * decimal points line up down it — $56.64 over $9,741.71 rather than two
+ * strings starting at the same left edge and ending wherever they end.
  *
  * THE QUOTE IS LIVE. The score is static for 30 seconds and then moves, and
  * a sheet open across that boundary is the expected case. The price shown
@@ -217,7 +232,7 @@ export function TradeSheet({
                   value={unitsText}
                   onChange={(event) => setUnitsText(event.target.value.replace(/[^0-9]/g, "").slice(0, 6))}
                   aria-invalid={composeError ? true : undefined}
-                  className={cn(inputClassName, "num text-center text-xl")}
+                  className={cn(inputClassName, "text-center text-xl tabular-nums")}
                 />
                 <Button variant="outline" size="icon" aria-label="One more share" onClick={() => setUnitsText(String(Math.min(MAX_ORDER_UNITS, units + 1)))}>
                   <Plus />
@@ -259,24 +274,24 @@ export function TradeSheet({
               <p className="text-label text-fg-muted">You are about to</p>
               <p className="text-xl font-semibold leading-snug tracking-tight text-fg">
                 {verb(side)} {sharesLabel(units)} of {person.displayName} at{" "}
-                <span key={livePrice} className="num animate-tick-flash">
+                <span key={livePrice} className="tabular-nums animate-tick-flash">
                   {formatCents(livePrice)}
                 </span>{" "}
                 each.
               </p>
-              <p className="num text-base text-fg-secondary">
+              <p className="text-base tabular-nums text-fg-secondary">
                 {units.toLocaleString("en-US")} × {formatCents(livePrice)} = {formatCents(preview.grossCents)}
               </p>
-              <p className="text-xs text-fg-faint">
-                {side === "BUY" ? "Buy" : "Sell"} quote {pointsText(livePrice)}, as of now. If it moves more than {formatCents(toleranceCents)} before the server reads it, you will be
-                asked to confirm again.
+              <p className="text-xs tabular-nums text-fg-faint">
+                The {side === "BUY" ? "Buy" : "Sell"} quote as of now. If it moves more than {formatCents(toleranceCents)} before the server reads it, you will be asked to confirm
+                again.
               </p>
             </div>
 
             {quoteMoved && armedPriceCents !== null ? (
               <p role="status" className="rounded-xl bg-surface-raised px-4 py-3 text-sm text-fg">
-                The quote moved while you were reviewing: <Money cents={armedPriceCents} className="text-fg-muted" /> → <Money cents={livePrice} />. The button below carries
-                the new price.
+                The quote moved while you were reviewing: <Money cents={armedPriceCents} face="text" className="text-fg-muted" /> →{" "}
+                <Money cents={livePrice} face="text" />. The button below carries the new price.
               </p>
             ) : null}
 
@@ -334,7 +349,8 @@ function QuoteBlock({ side, buyCents, sellCents }: { side: OrderSide; buyCents: 
         <QuoteCell label="Sell at" cents={sellCents} active={side === "SELL"} />
       </div>
       <p className="text-xs text-fg-faint">
-        You buy at the Buy quote and sell at the Sell quote. The <Money cents={spread} className="text-fg-muted" /> per share between them is the platform&rsquo;s spread.
+        You buy at the Buy quote and sell at the Sell quote. The <Money cents={spread} face="text" className="text-fg-muted" /> per share between them is the platform&rsquo;s
+        spread.
       </p>
     </div>
   );
@@ -344,10 +360,9 @@ function QuoteCell({ label, cents, active }: { label: string; cents: Cents; acti
   return (
     <div className={cn("flex flex-col gap-1 rounded-2xl px-4 py-3", active ? "bg-surface-raised" : "bg-surface-raised/40")}>
       <span className="text-label text-fg-muted">{label}</span>
-      <span key={cents} className={cn("num text-xl font-semibold tracking-tight", active ? "text-fg animate-tick-flash" : "text-fg-muted")}>
+      <span key={cents} className={cn("text-xl font-semibold tabular-nums tracking-tight", active ? "text-fg animate-tick-flash" : "text-fg-muted")}>
         {formatCents(cents)}
       </span>
-      <span className="num text-xs text-fg-faint">{pointsText(cents)} pts</span>
     </div>
   );
 }
@@ -375,18 +390,22 @@ function PreviewList({
   const positionAfter = side === "BUY" ? position.openUnits + units : Math.max(0, position.openUnits - units);
 
   return (
-    <dl className={cn("grid grid-cols-[1fr_auto] gap-x-6 text-sm", compact ? "gap-y-2" : "gap-y-2.5")}>
+    // The value column is right-aligned (Phase 26): the figures stack in one
+    // column with their decimal points under each other, which is the only
+    // way "$56.64" and "$9,741.71" read as a column of money rather than two
+    // strings that happen to be near each other. tabular-nums does the rest.
+    <dl className={cn("grid grid-cols-[1fr_auto] gap-x-6 text-sm [&>dd]:text-right", compact ? "gap-y-2" : "gap-y-2.5")}>
       {!compact ? (
         <>
           <dt className="text-fg-muted">Price per share</dt>
           <dd>
-            <Money cents={priceCents} className="text-fg" />
+            <Money cents={priceCents} face="text" className="text-fg" />
           </dd>
         </>
       ) : null}
       <dt className="text-fg-muted">{side === "BUY" ? "Cost" : "Proceeds"}</dt>
       <dd>
-        <Money cents={grossCents} className="font-medium text-fg" />
+        <Money cents={grossCents} face="text" className="font-medium text-fg" />
       </dd>
       {estimatedPnl !== null ? (
         <>
@@ -394,16 +413,16 @@ function PreviewList({
             Est. realized P&amp;L <span className="text-fg-faint">· settles FIFO by lot</span>
           </dt>
           <dd>
-            <Money cents={estimatedPnl} signed />
+            <Money cents={estimatedPnl} signed face="text" />
           </dd>
         </>
       ) : null}
       <dt className="text-fg-muted">Paper balance after</dt>
       <dd>
-        <Money cents={balanceAfterCents} className="text-fg" />
+        <Money cents={balanceAfterCents} face="text" className="text-fg" />
       </dd>
       <dt className="text-fg-muted">Position after</dt>
-      <dd className="num text-fg">{positionAfter > 0 ? sharesLabel(positionAfter) : "None"}</dd>
+      <dd className="tabular-nums text-fg">{positionAfter > 0 ? sharesLabel(positionAfter) : "None"}</dd>
     </dl>
   );
 }
@@ -433,37 +452,37 @@ function FilledView({ result, side, personName, onDone }: { result: Extract<Orde
           <Check className="size-6" strokeWidth={2.5} />
         </span>
         <p className="text-xl font-semibold tracking-tight text-fg">
-          {verb(side, "past")} {sharesLabel(order.units)} of {personName} at <Money cents={order.fillPriceCents} /> each.
+          {verb(side, "past")} {sharesLabel(order.units)} of {personName} at <Money cents={order.fillPriceCents} face="text" /> each.
         </p>
         <p className="text-sm text-fg-muted">Filled at the {side === "BUY" ? "Buy" : "Sell"} quote the server read as it received the order.</p>
       </div>
 
-      <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-2.5 text-sm">
+      <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-2.5 text-sm [&>dd]:text-right">
         <dt className="text-fg-muted">{side === "BUY" ? "Cost" : "Proceeds"}</dt>
         <dd>
-          <Money cents={side === "BUY" ? order.costCents : order.proceedsCents} className="font-medium text-fg" />
+          <Money cents={side === "BUY" ? order.costCents : order.proceedsCents} face="text" className="font-medium text-fg" />
         </dd>
         {order.closedUnits > 0 ? (
           <>
             <dt className="text-fg-muted">Realized P&amp;L</dt>
             <dd>
-              <Money cents={order.realizedPnlCents} signed className="font-medium" />
+              <Money cents={order.realizedPnlCents} signed face="text" className="font-medium" />
             </dd>
           </>
         ) : null}
         <dt className="text-fg-muted">Paper balance now</dt>
         <dd>
-          <Money cents={balanceCents} className="text-fg" />
+          <Money cents={balanceCents} face="text" className="text-fg" />
         </dd>
         <dt className="text-fg-muted">Position now</dt>
-        <dd className="num text-fg">
+        <dd className="tabular-nums text-fg">
           {position.openUnits > 0 ? (
             <>
               {sharesLabel(position.openUnits)}
               {position.avgEntryCents !== null ? (
                 <span className="text-fg-muted">
                   {" "}
-                  · avg <Money cents={position.avgEntryCents} />
+                  · avg <Money cents={position.avgEntryCents} face="text" />
                 </span>
               ) : null}
             </>
@@ -512,7 +531,7 @@ function RejectedView({
         <div className="flex flex-col gap-3">
           <div className="flex items-baseline justify-between rounded-xl bg-surface-raised px-4 py-3">
             <span className="text-sm text-fg-muted">New {side === "BUY" ? "Buy" : "Sell"} quote</span>
-            <span className="num text-lg font-semibold text-fg">{formatCents(newPrice)}</span>
+            <span className="text-lg font-semibold tabular-nums text-fg">{formatCents(newPrice)}</span>
           </div>
           <Button variant={side === "BUY" ? "buy" : "sell"} size="lg" className="w-full" onClick={() => onRequote(newPrice)}>
             Review at {formatCents(newPrice)} · {sharesLabel(units)}
@@ -546,7 +565,7 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
       type="button"
       onClick={onClick}
       className={cn(
-        "num inline-flex h-9 items-center rounded-full px-3.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+        "inline-flex h-9 items-center rounded-full px-3.5 text-sm tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
         active ? "bg-surface-inverse text-fg-inverse" : "bg-surface-raised text-fg-secondary hover:text-fg",
       )}
     >

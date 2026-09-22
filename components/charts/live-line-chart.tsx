@@ -42,8 +42,15 @@ export interface LiveLineChartProps {
   cadenceMs?: number;
   /** The vertical domain rule: floor, padding, and whether the reference is pulled in. */
   domain: (points: TimedScore[]) => ValueDomain;
-  /** A dashed reference line with a label: the gravity target, the paper credit. */
-  reference?: { value: number; label: string } | null;
+  /**
+   * A dashed reference line with a label: the gravity target, the paper
+   * credit. `anchor` places the in-range label at the left edge of the plot
+   * (the default, and what the portfolio chart has always drawn) or at the
+   * right, above the line's own end. `edgeLabel` is the longer wording for
+   * the note shown when the value falls outside the range, where the label
+   * has to name itself without the line beside it to explain it.
+   */
+  reference?: { value: number; label: string; edgeLabel?: string; anchor?: "start" | "end" } | null;
   /** Axis labels. */
   formatAxis: (value: number) => string;
   /** The crosshair's value. */
@@ -309,13 +316,19 @@ export function LiveLineChart({
                     strokeWidth={1}
                     strokeDasharray="3 5"
                   />
-                  <text x={MARGIN.left} y={geometry.y(reference.value) - 6} className="fill-fg-faint text-2xs">
+                  <text
+                    x={reference.anchor === "end" ? MARGIN.left + geometry.innerWidth - 6 : MARGIN.left}
+                    y={geometry.y(reference.value) - 6}
+                    textAnchor={reference.anchor === "end" ? "end" : undefined}
+                    className="fill-fg-faint text-2xs"
+                  >
                     {reference.label} <tspan className="num">{formatAxis(reference.value)}</tspan>
                   </text>
                 </g>
               ) : (
                 <text x={MARGIN.left} y={MARGIN.top - 6} className="fill-fg-faint text-2xs">
-                  {reference.label} <tspan className="num">{formatAxis(reference.value)}</tspan> {reference.value > geometry.hi ? "above this range" : "below this range"}
+                  {reference.edgeLabel ?? reference.label} <tspan className="num">{formatAxis(reference.value)}</tspan>{" "}
+                  {reference.value > geometry.hi ? "above this range" : "below this range"}
                 </text>
               )
             ) : null}

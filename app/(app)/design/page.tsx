@@ -130,8 +130,8 @@ export default function DesignPage() {
       </Section>
 
       <Section
-        title="The one exception: Portfolio"
-        description="Portfolio sets its figures in Inter with tabular-nums instead of num. Deliberate, documented, and not a new global rule."
+        title="The exceptions: Portfolio, the trade sheet, the change line"
+        description="Three surfaces set their figures in Inter with tabular-nums instead of num. Deliberate, documented, and still not a new global rule."
       >
         <Card>
           <CardContent className="flex flex-col gap-8 p-8">
@@ -166,9 +166,58 @@ export default function DesignPage() {
             </p>
             <p className="max-w-prose text-sm leading-relaxed text-fg-muted">
               The rule is per-surface, not global: <span className="text-fg-secondary">num</span> stays the default for numerals everywhere
-              else — Home, the profile, the Feed, the trade sheet, the header, the operator console. Portfolio passes{" "}
-              <span className="text-fg-secondary">face=&quot;text&quot;</span> to Money at every call site, so the exception is visible in the
-              code rather than inherited from a wrapper. The Portfolio value chart is untouched and keeps its own labels.
+              else — Home, the Feed, the header, the operator console, the profile&rsquo;s position card. Each exception passes{" "}
+              <span className="text-fg-secondary">face=&quot;text&quot;</span> to Money at every call site, so it is visible in the code rather
+              than inherited from a wrapper. Every chart is untouched and keeps its mono axis and time labels — the Portfolio value chart and
+              the profile score line both.
+            </p>
+            <p className="max-w-prose text-sm leading-relaxed text-fg-muted">
+              Phase 26 added the second and third. THE TRADE SHEET, because it is one continuous sentence about money — a quote, a quantity,
+              a cost, a balance after — and it was changing typeface at every figure in it. THE PROFILE SCORE CARD&rsquo;S CHANGE LINE, because
+              the hero score above it is already Inter, and a change set in mono under a score set in Inter is two typefaces stating one
+              reading. Both figures on that line are a single text run —{" "}
+              <span className="tabular-nums text-fg-secondary">+0.3 (+0.59%)</span> — so they share a baseline by construction rather than by
+              alignment, and the arrow is centred on the line rather than set in it.
+            </p>
+          </CardContent>
+        </Card>
+      </Section>
+
+      <Section
+        title="Points or money"
+        description="A score is points and carries no currency. Anything you can trade at is dollars and cents, through one formatter."
+      >
+        <Card>
+          <CardContent className="flex flex-col gap-8 p-8">
+            <div className="grid gap-8 sm:grid-cols-2">
+              <div className="flex flex-col gap-3">
+                <p className="text-label text-fg-muted">A score — points</p>
+                <ScoreDisplay score={56.1} size="lg" />
+                <p className="text-sm text-fg-muted">
+                  One decimal, no currency. The axis, the crosshair, the Gravity line and the change line all read in the same unit.
+                </p>
+              </div>
+              <div className="flex flex-col gap-3">
+                <p className="text-label text-fg-muted">A price — dollars and cents</p>
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button variant="buy">
+                    <TradeQuote label="Buy" cents={cents(5664)} />
+                  </Button>
+                  <Button variant="sell">
+                    <TradeQuote label="Sell" cents={cents(5564)} />
+                  </Button>
+                </div>
+                <p className="text-sm text-fg-muted">
+                  Two decimals, always a currency symbol. The pill, the sheet&rsquo;s quote box, its price per share and the fill the ledger
+                  records are one integer number of cents through one formatter.
+                </p>
+              </div>
+            </div>
+            <p className="max-w-prose text-sm leading-relaxed text-fg-muted">
+              Before Phase 26 the pill read <span className="tabular-nums text-fg-secondary">Buy 56.7</span> and the sheet it opened charged{" "}
+              <span className="tabular-nums text-fg-secondary">$56.64</span>. Both were honest — one score point is one dollar, and 56.6449
+              points rounds to 56.7 at one decimal and to $56.64 at two — but nobody reads a tap and a payment as two separate
+              measurements. They read it as the price moving while they decided. There is no longer a second formatter to reach for.
             </p>
           </CardContent>
         </Card>
@@ -212,7 +261,7 @@ export default function DesignPage() {
 
       <Section
         title="Buttons"
-        description="Pills. Buy is the light pill, Sell the dark one; everything else is white, grey or bare. No colour on any button. A quote pill comes from TradeQuote — one component behind every Buy/Sell on the platform, with the price in Inter at the label's own size and weight (tabular, so a moving quote cannot change the pill's width). Two versions of one control would look like a bug."
+        description="Pills. Buy is the light pill, Sell the dark one; everything else is white, grey or bare. No colour on any button. A quote pill comes from TradeQuote — one component behind every Buy/Sell on the platform, carrying the price in dollars and cents through the same formatter the trade sheet uses, in Inter at the label's own size and weight (tabular, so a moving quote cannot change the pill's width). Two versions of one control would look like a bug; two formats for one price read like a price change."
       >
         <Card>
           <CardContent className="flex flex-col gap-6">

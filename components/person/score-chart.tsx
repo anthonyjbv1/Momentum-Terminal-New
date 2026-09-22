@@ -13,6 +13,14 @@ import { ChartEmpty, LiveLineChart } from "@/components/charts/live-line-chart";
  * point, and the gravity target as the dashed reference. Everything about
  * the cadence, the breath, the tick reveal and reduced motion lives in
  * components/charts/live-line-chart.tsx, shared with the portfolio.
+ *
+ * GRAVITY READS OFF THE CHART NOW (Phase 26). The target used to be stated
+ * twice: a dashed line here and a "Gravity target 55.0" figure in a row of
+ * statistics above the chart. The row is gone, so this line is the only
+ * place it appears and it carries its own value — "Gravity 55.0", set at
+ * the right edge where the line ends and the reader's eye already is. Out
+ * of range it falls back to the edge note, which says "Gravity target"
+ * in full because there is no line beside it to explain the number.
  */
 export interface ScoreChartProps {
   points: SeriesPoint[];
@@ -43,7 +51,7 @@ export function ScoreChart({ points, range, revertTarget, personName, version = 
       version={version}
       cadenceMs={cadenceMs}
       domain={domain}
-      reference={{ value: revertTarget, label: "Gravity target" }}
+      reference={{ value: revertTarget, label: "Gravity", edgeLabel: "Gravity target", anchor: "end" }}
       formatAxis={oneDecimal}
       formatValue={oneDecimal}
       describe={describe}

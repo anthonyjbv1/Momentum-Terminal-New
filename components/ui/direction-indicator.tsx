@@ -51,13 +51,19 @@ export const directionLabels: Record<Direction, string> = {
   neutral: "Flat",
 };
 
-const directionTone: Record<Direction, string> = {
+/**
+ * The direction's colour and its arrow, exported so a surface that composes
+ * its own change line (the profile score card, Phase 26) draws the same
+ * arrow in the same colour as every DirectionIndicator on the platform
+ * rather than keeping a second copy of the mapping.
+ */
+export const directionTone: Record<Direction, string> = {
   heating: "text-positive",
   cooling: "text-negative",
   neutral: "text-neutral",
 };
 
-const directionIcon: Record<Direction, typeof ArrowUpRight> = {
+export const directionIcon: Record<Direction, typeof ArrowUpRight> = {
   heating: ArrowUpRight,
   cooling: ArrowDownRight,
   neutral: Minus,

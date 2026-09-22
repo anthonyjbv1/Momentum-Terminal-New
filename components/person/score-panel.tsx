@@ -5,14 +5,14 @@ import { useCallback, useMemo, useState } from "react";
 
 import { cn } from "@/lib/cn";
 import { relativeTime } from "@/lib/home/relative-time";
-import { RANGES, defaultRange, formatSignedPercent, periodChange, rangeAvailable, type PersonProfile, type RangeKey } from "@/lib/person/profile-model";
+import { RANGES, defaultRange, formatSignedPercent, periodChange, rangeAvailable, type PeriodChange, type PersonProfile, type RangeKey } from "@/lib/person/profile-model";
 import type { OrderSide } from "@/lib/trading/direction";
 import { EMPTY_POSITION, cents, quoteFromScore, type Cents, type OrderResult, type PositionSummary, type ViewerTradingState } from "@/lib/trading/model";
 import { PositionCard } from "@/components/trade/position-card";
 import { TradeSheet } from "@/components/trade/trade-sheet";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { DirectionIndicator } from "@/components/ui/direction-indicator";
+import { directionAtPrecision, directionIcon, directionLabels, directionTone, formatChange } from "@/components/ui/direction-indicator";
 import { SectionHeader } from "@/components/ui/page-header";
 import { ScoreDisplay } from "@/components/ui/score-display";
 
@@ -24,12 +24,22 @@ import { PROFILE_SURFACE, logProfileEvent } from "./use-profile-logging";
 
 /**
  * The hero: the Momentum Score, the change over the selected range beneath
- * it, the gravity target and spread in small type, and the score line with
- * its range toggle. One panel, because the number and the line are one
- * reading. On desktop the Buy / Sell entry sits beside the score; on mobile
- * it is the bar fixed above the tab bar (rendered here so it shares the live
- * quotes). The viewer's position, the trade sheet and the balance it shows
- * all live here too, so a fill updates every one of them without a reload.
+ * it, and the score line with its range toggle. One panel, because the
+ * number and the line are one reading. On desktop the Buy / Sell entry sits
+ * beside the score; on mobile it is the bar fixed above the tab bar
+ * (rendered here so it shares the live quotes). The viewer's position, the
+ * trade sheet and the balance it shows all live here too, so a fill updates
+ * every one of them without a reload.
+ *
+ * WHAT PHASE 26 TOOK OUT. The card carried two rows of small statistics —
+ * Gravity target, Spread, Buy, Sell — and each was a problem of its own.
+ * Buy and Sell repeated the trade bar that is on screen at all times, in a
+ * second format. Spread showed the HALF-spread while the trade sheet showed
+ * the full one, so the platform stated two different spreads; the sheet,
+ * where a spread is actually charged, is now the only place it is stated.
+ * Gravity moved into the chart, where the target is a line on the same axis
+ * as the score rather than a number the reader has to place themselves.
+ * What is left is the score, its change, and the line.
  *
  * Everything in it is kept current on the Engine's cadence by useLiveSeries:
  * the score flashes, the change and the quotes update, and the chart reveals
@@ -51,11 +61,51 @@ export interface ScorePanelProps {
   className?: string;
 }
 
-const changeTones = {
-  heating: "text-positive",
-  cooling: "text-negative",
-  neutral: "text-neutral",
-} as const;
+/**
+ * THE CHANGE, AS ONE STATEMENT (Phase 26): "↗ +0.3 (+0.59%) · 1H".
+ *
+ * It used to be three pieces that happened to sit next to each other — the
+ * arrow and the points figure at one size and weight, the percentage at
+ * another, the period smaller again — and because the arrow was an inline
+ * icon inside the first piece it pushed that figure off the baseline the
+ * percentage sat on. Three sizes and two baselines for one sentence.
+ *
+ * So both figures are now one text node: the same size, the same weight,
+ * one line box, and therefore one baseline by construction rather than by
+ * alignment. The arrow is centred on that line rather than set in it, the
+ * period label stays neutral, and direction colour lands on the figures
+ * only. The colour and the arrow follow the points figure at the precision
+ * it is DISPLAYED at, which is the Phase 19+ rule and the same call the
+ * shared DirectionIndicator makes, so a reading that shows "0.0" is never
+ * coloured or arrowed as a move.
+ *
+ * Set in Inter with tabular figures to match the hero score above it. This
+ * is the second documented exception to "mono for numerics" (Portfolio is
+ * the first); the chart's axis and time labels below it stay mono.
+ */
+function ChangeLine({ change, rangeLabel }: { change: PeriodChange; rangeLabel: string | null }) {
+  const direction = directionAtPrecision(change.change, 1);
+  const Icon = directionIcon[direction];
+  const points = formatChange(change.change);
+  const figures = change.percent !== null ? `${points} (${formatSignedPercent(change.percent)})` : points;
+
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 text-base">
+      <span className={cn("inline-flex items-center gap-1.5 font-medium tabular-nums", directionTone[direction])} aria-label={`${directionLabels[direction]}, ${figures}`}>
+        <Icon className="size-5 shrink-0" strokeWidth={2.5} aria-hidden />
+        <span>{figures}</span>
+      </span>
+      {rangeLabel ? (
+        <>
+          <span className="text-fg-faint" aria-hidden>
+            ·
+          </span>
+          <span className="text-fg-muted">{rangeLabel}</span>
+        </>
+      ) : null}
+    </p>
+  );
+}
 
 export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnabled, viewer: initialViewer, toleranceCents, live, className }: ScorePanelProps) {
   const { person, series: initialSeries, latestTick } = profile;
@@ -132,36 +182,7 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnable
           <div className="flex min-w-0 flex-col gap-4">
             <ScoreDisplay score={state.score} size="xl" flash />
 
-            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              {change ? (
-                <>
-                  <DirectionIndicator change={change.change} size="lg" />
-                  {change.percent !== null ? <span className={cn("num text-base", changeTones[change.direction])}>{formatSignedPercent(change.percent)}</span> : null}
-                  <span className="text-sm text-fg-muted">{rangeLabel}</span>
-                </>
-              ) : (
-                <span className="text-sm text-fg-muted">No change recorded yet</span>
-              )}
-            </div>
-
-            <dl className="flex flex-wrap gap-x-6 gap-y-1.5 text-sm text-fg-muted">
-              <div className="flex items-baseline gap-2">
-                <dt>Gravity target</dt>
-                <dd className="num text-fg-secondary">{person.revertTarget.toFixed(1)}</dd>
-              </div>
-              <div className="flex items-baseline gap-2">
-                <dt>Spread</dt>
-                <dd className="num text-fg-secondary">{state.spread.toFixed(1)}</dd>
-              </div>
-              <div className="flex items-baseline gap-2">
-                <dt>Buy</dt>
-                <dd className="num text-fg-secondary">{(quote.buyCents / 100).toFixed(1)}</dd>
-              </div>
-              <div className="flex items-baseline gap-2">
-                <dt>Sell</dt>
-                <dd className="num text-fg-secondary">{(quote.sellCents / 100).toFixed(1)}</dd>
-              </div>
-            </dl>
+            {change ? <ChangeLine change={change} rangeLabel={rangeLabel} /> : <p className="text-base text-fg-muted">No change recorded yet</p>}
           </div>
 
           <TradeActions

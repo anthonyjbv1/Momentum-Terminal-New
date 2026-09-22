@@ -20,7 +20,19 @@ import { formatCents } from "@/lib/money";
  *                "mono for numerics" rule, not a new global default.
  *
  * Both faces are tabular, so nothing gains or loses jitter by moving between
- * them; the only difference is the typeface.
+ * them; the only difference is the typeface. Phase 26 added the trade sheet
+ * and the profile trade bar's status line to the face="text" side.
+ *
+ * ONE FORMAT FOR ANYTHING TRADEABLE (Phase 26). This module used to export a
+ * second formatter, `pointsText`, rendering the same integer cents as a
+ * one-decimal score figure: "56.7" for the 5664 this one renders as
+ * "$56.64". It was on the Buy/Sell pills, under the sheet's quote boxes, in
+ * the sheet's confirmation sentence and on both position cards — so one
+ * quote appeared in two units at two precisions, and which you saw depended
+ * on where you were standing. It is gone and nothing replaced it: a SCORE is
+ * points and carries no currency, anything you can TRADE AT is money and
+ * comes through here. Deleting it rather than leaving it unused is the
+ * point — a second format still within reach is how the drift comes back.
  */
 export type MoneyFace = "mono" | "text";
 
@@ -44,9 +56,4 @@ export function Money({ cents, signed = false, face = "mono", className }: Money
       {formatCents(Math.abs(value))}
     </span>
   );
-}
-
-/** A quote in points, one decimal, as the page shows scores. */
-export function pointsText(cents: number): string {
-  return (cents / 100).toFixed(1);
 }

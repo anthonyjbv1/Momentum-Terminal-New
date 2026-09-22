@@ -210,12 +210,22 @@
 
 /* Layering. Not a Tailwind namespace, so plain custom properties; used as
    z-(--z-banner) etc. The banner sits above sheets so the countdown is
-   visible on every page AND every modal. */
+   visible on every page AND every modal.
+
+   THE TAB BAR SITS BELOW SHEETS (Phase 26). It used to sit above them, at
+   40, which put a row of navigation on top of an aria-modal dialog: the
+   bottom of the trade sheet was covered by chrome, and the nav stayed
+   tappable while the dialog claimed to have trapped focus. A modal covers
+   the app — the banner is the single documented exception, because the
+   countdown has to stay honest everywhere — so the tab bar moved to 20,
+   still above the page and the rail, now under the overlay that dims them.
+   The mobile trade bar shares this token and is covered for the same
+   reason (the score panel also unmounts it while its own sheet is up). */
 :root {
   --z-rail: 10;
+  --z-tabbar: 20;
   --z-overlay: 30;
   --z-sheet: 35;
-  --z-tabbar: 40;
   --z-banner: 50;
   --z-toast: 60;
 }

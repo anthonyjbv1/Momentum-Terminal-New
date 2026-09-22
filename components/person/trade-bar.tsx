@@ -43,17 +43,26 @@ function sellState(viewer: ViewerTradingState, shortingEnabled: boolean): { enab
   return { enabled: false, note: "Nothing to close" };
 }
 
+/**
+ * The line above the pills: the paper balance, what is held, and what a Sell
+ * can do. Phase 25 flagged it and Phase 26 changed it. It is a sentence, and
+ * it was switching typeface twice inside itself to say two things, one of
+ * which — "3 shares" — is a phrase rather than a figure at all. Inter
+ * throughout now, with tabular figures so a fill cannot jog the words after
+ * the balance. The pills below it moved in Phase 25, so the control is
+ * finally in one typeface top to bottom.
+ */
 function Status({ viewer, note, className }: { viewer: ViewerTradingState; note: string | null; className?: string }) {
   if (!viewer.signedIn) {
     return <p className={cn("text-xs text-fg-muted", className)}>Sign in to trade with paper money.</p>;
   }
   const held = viewer.position?.openUnits ?? 0;
   return (
-    <p className={cn("text-xs text-fg-muted", className)}>
-      <span className="text-fg-faint">Paper</span> <span className="num text-fg-secondary">{formatCents(viewer.balanceCents ?? 0)}</span>
+    <p className={cn("text-xs tabular-nums text-fg-muted", className)}>
+      <span className="text-fg-faint">Paper</span> <span className="text-fg-secondary">{formatCents(viewer.balanceCents ?? 0)}</span>
       {held > 0 ? (
         <>
-          <span aria-hidden> · </span>holding <span className="num text-fg-secondary">{sharesLabel(held)}</span>
+          <span aria-hidden> · </span>holding <span className="text-fg-secondary">{sharesLabel(held)}</span>
         </>
       ) : null}
       {note ? (
