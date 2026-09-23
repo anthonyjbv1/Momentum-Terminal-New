@@ -54,9 +54,26 @@ export function getSiteUrl(): string {
   return process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 }
 
-/** The same, with no trailing slash: what a path is appended to. */
+const LOCAL_ORIGIN = "http://localhost:3000";
+
+/**
+ * The same as an ORIGIN — scheme, host, port, no path, no trailing slash —
+ * and always a value `new URL()` accepts, because the public layout builds
+ * its metadataBase from it at module evaluation and a throw there fails the
+ * whole build (which is how the first Phase 28 deploy failed: the variable
+ * was set without a scheme). A bare hostname is read as https; anything
+ * that still does not parse falls back to localhost, and the landing page's
+ * absolute links say so rather than the build breaking.
+ */
 export function getSiteOrigin(): string {
-  return getSiteUrl().replace(/\/+$/, "");
+  const raw = (process.env.NEXT_PUBLIC_SITE_URL ?? "").trim();
+  if (raw === "") return LOCAL_ORIGIN;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    return new URL(withScheme).origin;
+  } catch {
+    return LOCAL_ORIGIN;
+  }
 }
 
 /** An absolute URL on this site for a path such as "/privacy". */

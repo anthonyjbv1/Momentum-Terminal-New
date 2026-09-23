@@ -60,6 +60,25 @@ describe("getSiteOrigin / absoluteUrl", () => {
     expect(absoluteUrl("og")).toBe("https://example.test/og");
   });
 
+  it("always yield an origin new URL() accepts: a bare host is https, a path or query is dropped, garbage falls back", () => {
+    // The first Phase 28 deploy failed at build time on `new URL(getSiteOrigin())` in the public layout:
+    // the production variable had no scheme. The helper now normalises rather than the build breaking.
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "example.test");
+    expect(getSiteOrigin()).toBe("https://example.test");
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", " example.test/ ");
+    expect(getSiteOrigin()).toBe("https://example.test");
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://example.test:8443/some/path?x=1");
+    expect(getSiteOrigin()).toBe("https://example.test:8443");
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "http://localhost:3000");
+    expect(getSiteOrigin()).toBe("http://localhost:3000");
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "not a url at all");
+    expect(getSiteOrigin()).toBe("http://localhost:3000");
+    for (const value of ["example.test", "https://example.test/", "not a url at all", ""]) {
+      vi.stubEnv("NEXT_PUBLIC_SITE_URL", value);
+      expect(() => new URL(getSiteOrigin()), JSON.stringify(value)).not.toThrow();
+    }
+  });
+
   it("fall back to localhost when unset, for local runs", () => {
     vi.stubEnv("NEXT_PUBLIC_SITE_URL", "");
     // An empty string is "unset" to Next's env loader as much as a missing one; the fallback covers both.
