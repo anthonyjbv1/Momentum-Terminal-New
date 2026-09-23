@@ -15,6 +15,7 @@ const SCAN_DIRS = ["app", "components"];
 /** Files allowed to carry a literal, each with the reason. */
 const ALLOWED: Record<string, string> = {
   "app/layout.tsx": "viewport themeColor: browser chrome cannot read CSS variables (mirrors --color-canvas)",
+  "app/(public)/og/route.tsx": "the Open Graph image is rendered by Satori, which reads no stylesheet: its four greys and its pixel sizes mirror the tokens by name (Phase 28)",
 };
 
 const RULES: Array<{ name: string; pattern: RegExp }> = [

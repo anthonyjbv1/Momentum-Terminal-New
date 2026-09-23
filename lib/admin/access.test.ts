@@ -97,7 +97,7 @@ describe("requireAdmin", () => {
 
 describe("every admin read", () => {
   /** Called with a window where one is taken; the argument is ignored by the ones that don't. */
-  const readers = ["readLlmCost", "readIngestion", "readEngine", "readLevers", "readBehaviour"] as const;
+  const readers = ["readLlmCost", "readIngestion", "readEngine", "readLevers", "readBehaviour", "readWaitlist"] as const;
 
   it("refuses a signed-out caller and never builds the service-role client", async () => {
     const admin = await loadAdmin();

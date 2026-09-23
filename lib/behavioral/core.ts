@@ -46,7 +46,8 @@ const defaultLog: BehavioralLogger = (message, data) => {
   console.warn(`[behavioral] ${message}`, data ?? "");
 };
 
-export function toRow(userId: string, event: ValidatedBehavioralEvent): BehavioralEventRow {
+/** userId null is a public-page event (Phase 28): the row then carries a session id, which the table's actor check requires. */
+export function toRow(userId: string | null, event: ValidatedBehavioralEvent): BehavioralEventRow {
   return {
     user_id: userId,
     event_type: event.eventType,

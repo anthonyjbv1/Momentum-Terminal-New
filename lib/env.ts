@@ -42,9 +42,26 @@ export function getSupabaseServiceRoleKey(): string {
   );
 }
 
-/** Public base URL of the app, used to build auth redirect links. */
+/**
+ * THE SITE'S PUBLIC ADDRESS, from one variable. Auth redirect links, the
+ * landing page's canonical URL, its OG image and every absolute link derive
+ * from this; nothing in the code names a hostname. It is the Vercel URL
+ * today and becomes the custom domain by changing this one value.
+ * lib/site-url.test.ts fails the build if a vercel.app hostname is ever
+ * written as a literal in app code.
+ */
 export function getSiteUrl(): string {
   return process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+}
+
+/** The same, with no trailing slash: what a path is appended to. */
+export function getSiteOrigin(): string {
+  return getSiteUrl().replace(/\/+$/, "");
+}
+
+/** An absolute URL on this site for a path such as "/privacy". */
+export function absoluteUrl(path: string): string {
+  return `${getSiteOrigin()}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
 // ---------------------------------------------------------------------------

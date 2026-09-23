@@ -36,6 +36,9 @@ export const BEHAVIORAL_EVENT_TYPES = [
   "reject_trade",
   "view_portfolio",
   "cast_forecast",
+  // Public pages (Phase 28): logged server-side with no user, a session id only.
+  "view_landing",
+  "join_waitlist",
 ] as const;
 
 export const TRADE_SHEET_STEPS = ["compose", "confirm", "result"] as const;
@@ -150,6 +153,16 @@ export const BEHAVIORAL_EVENT_DEFINITIONS: Record<BehavioralEventType, Behaviora
     description: "Opened the portfolio.",
     requiresPerson: false,
     metadata: "{ positions?: integer >= 0, orders?: integer >= 0 }  what it showed on arrival",
+  },
+  view_landing: {
+    description: "A visitor loaded the public landing page (Phase 28). Anonymous: no user, a one-off session id.",
+    requiresPerson: false,
+    metadata: "{ surface: 'landing', referrer_host?: string, utm_source?: string, utm_medium?: string, utm_campaign?: string }",
+  },
+  join_waitlist: {
+    description: "A waitlist submission reached the server (Phase 28). Anonymous. Never carries the address; the disposition says what became of it.",
+    requiresPerson: false,
+    metadata: "{ source: 'landing_hero' | 'landing_footer', disposition: 'new' | 'existing' | 'dropped' | 'rate_limited' | 'invalid' | 'failed' }",
   },
 };
 
@@ -313,7 +326,28 @@ function normalizeDirection(value: unknown): "HIGH" | "LOW" | null {
   return upper === "HIGH" || upper === "LOW" ? upper : null;
 }
 
+const WAITLIST_DISPOSITIONS = ["new", "existing", "dropped", "rate_limited", "invalid", "failed"] as const;
+const WAITLIST_SOURCES = ["landing_hero", "landing_footer"] as const;
+
 const TYPE_CHECKS: Partial<Record<BehavioralEventType, TypeCheck>> = {
+  view_landing: (metadata) => {
+    for (const key of ["referrer_host", "utm_source", "utm_medium", "utm_campaign"] as const) {
+      if (metadata?.[key] !== undefined && typeof metadata[key] !== "string") return { ok: false, reason: `metadata.${key} must be a string` };
+    }
+    return { ok: true, metadata: { ...metadata, surface: "landing" } };
+  },
+  join_waitlist: (metadata) => {
+    const source = typeof metadata?.source === "string" ? metadata.source : "";
+    if (!(WAITLIST_SOURCES as readonly string[]).includes(source)) return { ok: false, reason: `join_waitlist requires metadata.source (${WAITLIST_SOURCES.join(" | ")})` };
+    const disposition = typeof metadata?.disposition === "string" ? metadata.disposition : "";
+    if (!(WAITLIST_DISPOSITIONS as readonly string[]).includes(disposition)) {
+      return { ok: false, reason: `join_waitlist requires metadata.disposition (${WAITLIST_DISPOSITIONS.join(" | ")})` };
+    }
+    // Belt and braces: an address never travels in an event, whatever a caller passes.
+    const { email: _email, ...rest } = metadata ?? {};
+    void _email;
+    return { ok: true, metadata: { ...rest, source, disposition } };
+  },
   time_spent: (metadata) => {
     const raw = metadata?.duration_ms;
     if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) {

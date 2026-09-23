@@ -105,6 +105,11 @@
   --text-5xl--line-height: 1.1;
   --text-6xl: 3.5rem;
   --text-6xl--line-height: 1;
+  /* Display sizes for the one number a public page is built around (Phase 28). */
+  --text-7xl: 5rem;
+  --text-7xl--line-height: 1;
+  --text-8xl: 7rem;
+  --text-8xl--line-height: 1;
 
   --font-weight-normal: 400;
   --font-weight-medium: 500;

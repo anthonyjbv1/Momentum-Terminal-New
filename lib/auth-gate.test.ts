@@ -5,8 +5,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { describe, expect, it } from "vitest";
 
 import {
+  INDEXABLE_ROUTES,
+  LANDING_ROUTE,
   NOINDEX_HEADER_NAME,
   NOINDEX_HEADER_VALUE,
+  PUBLIC_API_ROUTES,
   PUBLIC_ROUTES,
   ROBOTS_TXT,
   SHARED_SECRET_ROUTES,
@@ -26,8 +29,7 @@ const SIGNED_IN = true;
 const root = join(__dirname, "..");
 
 describe("decideAuthGate", () => {
-  it("sends a signed-out visitor to login from every page, remembering where they were going", () => {
-    expect(decideAuthGate("/", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/" });
+  it("sends a signed-out visitor to login from every page but the landing, remembering where they were going", () => {
     expect(decideAuthGate("/person/drake", "?range=7d", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/person/drake?range=7d" });
     expect(decideAuthGate("/feed", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/feed" });
     expect(decideAuthGate("/portfolio", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/portfolio" });
@@ -44,16 +46,44 @@ describe("decideAuthGate", () => {
     expect(decideAuthGate("/api", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
   });
 
-  it("keeps sign-in, sign-up and the auth callback reachable, by exact route only", () => {
-    expect(PUBLIC_ROUTES).toEqual(["/login", "/signup", "/auth/callback"]);
+  it("keeps sign-in, sign-up, the auth callback, the privacy page and the OG image reachable, by exact route only", () => {
+    expect(PUBLIC_ROUTES).toEqual(["/login", "/signup", "/auth/callback", "/privacy", "/og"]);
     expect(decideAuthGate("/login", "?next=%2Ffeed", SIGNED_OUT)).toEqual({ kind: "allow" });
     expect(decideAuthGate("/signup", "", SIGNED_OUT)).toEqual({ kind: "allow" });
     expect(decideAuthGate("/auth/callback", "?code=abc", SIGNED_OUT)).toEqual({ kind: "allow" });
+    expect(decideAuthGate("/privacy", "", SIGNED_OUT)).toEqual({ kind: "allow" });
+    expect(decideAuthGate("/og", "", SIGNED_OUT)).toEqual({ kind: "allow" });
     // No prefix semantics: nothing that merely starts with a public route is open.
     expect(decideAuthGate("/auth", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/auth" });
     expect(decideAuthGate("/auth/callback/extra", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/auth/callback/extra" });
     expect(decideAuthGate("/login-help", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/login-help" });
     expect(decideAuthGate("/signup/", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/signup/" });
+    expect(decideAuthGate("/privacy/policy", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/privacy/policy" });
+    expect(decideAuthGate("/og/drake", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/og/drake" });
+  });
+
+  it("serves the landing page at / to a signed-out visitor, and sends its own path back to / (Phase 28)", () => {
+    expect(LANDING_ROUTE).toBe("/welcome");
+    expect(decideAuthGate("/", "", SIGNED_OUT)).toEqual({ kind: "landing" });
+    expect(decideAuthGate("/", "?utm_source=x", SIGNED_OUT)).toEqual({ kind: "landing" });
+    // The landing's own path is never an address of its own, signed in or out.
+    expect(decideAuthGate("/welcome", "", SIGNED_OUT)).toEqual({ kind: "home" });
+    expect(decideAuthGate("/welcome", "?utm_source=x", SIGNED_IN)).toEqual({ kind: "home" });
+    expect(decideAuthGate("/welcome/", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/welcome/" });
+    // Signed in, "/" is the app's home exactly as before.
+    expect(decideAuthGate("/", "", SIGNED_IN)).toEqual({ kind: "allow" });
+  });
+
+  it("opens the two public API routes to a signed-out visitor, by exact route only, and nothing else under /api (Phase 28)", () => {
+    expect(PUBLIC_API_ROUTES).toEqual(["/api/public/featured", "/api/waitlist"]);
+    expect(decideAuthGate("/api/public/featured", "?slug=drake", SIGNED_OUT)).toEqual({ kind: "allow" });
+    expect(decideAuthGate("/api/waitlist", "", SIGNED_OUT)).toEqual({ kind: "allow" });
+    // A path that names somebody else is not a public route: the gate refuses it before any handler runs.
+    expect(decideAuthGate("/api/public/featured/drake", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
+    expect(decideAuthGate("/api/public", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
+    expect(decideAuthGate("/api/public/drake", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
+    expect(decideAuthGate("/api/person/anthony-baptiste/live", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
+    expect(decideAuthGate("/api/waitlist/count", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
   });
 
   it("leaves the shared-secret internal routes to their own check, by exact route only", () => {
@@ -107,13 +137,15 @@ describe("applyAuthGate", () => {
     expect(response.headers.get(NOINDEX_HEADER_NAME)).toBe(NOINDEX_HEADER_VALUE);
   });
 
-  it("serves the disallow-all robots file", async () => {
+  it("serves a robots file that allows exactly the landing page, the privacy page and the OG image, and disallows the rest", async () => {
     const request = new NextRequest("https://example.test/robots.txt");
     const response = applyAuthGate(request, session(SIGNED_OUT), passThrough);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/plain");
     expect(await response.text()).toBe(ROBOTS_TXT);
-    expect(ROBOTS_TXT).toMatch(/^User-agent: \*\nDisallow: \/\n$/);
+    expect(ROBOTS_TXT).toBe("User-agent: *\nAllow: /$\nAllow: /privacy$\nAllow: /og$\nDisallow: /\n");
+    // Every allowed path is anchored: nothing under /person, /feed or /api is offered.
+    for (const line of ROBOTS_TXT.split("\n").filter((line) => line.startsWith("Allow:"))) expect(line).toMatch(/\$$/);
   });
 
   it("passes an allowed request through to the route rules and still marks it noindex", () => {
@@ -124,9 +156,56 @@ describe("applyAuthGate", () => {
     };
     const signedIn = applyAuthGate(new NextRequest("https://example.test/feed"), session(SIGNED_IN), next);
     const login = applyAuthGate(new NextRequest("https://example.test/login"), session(SIGNED_OUT), next);
-    expect(called).toBe(2);
+    const api = applyAuthGate(new NextRequest("https://example.test/api/public/featured"), session(SIGNED_OUT), next);
+    expect(called).toBe(3);
     expect(signedIn.headers.get(NOINDEX_HEADER_NAME)).toBe(NOINDEX_HEADER_VALUE);
     expect(login.headers.get(NOINDEX_HEADER_NAME)).toBe(NOINDEX_HEADER_VALUE);
+    expect(api.headers.get(NOINDEX_HEADER_NAME)).toBe(NOINDEX_HEADER_VALUE);
+  });
+
+  it("rewrites / to the landing page for a signed-out visitor, keeping the query and the refreshed cookies, with no noindex header (Phase 28)", () => {
+    const request = new NextRequest("https://example.test/?utm_source=x&utm_campaign=y");
+    const response = applyAuthGate(request, session(SIGNED_OUT, [["sb-token", "refreshed"]]), passThrough);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    const rewrite = new URL(response.headers.get("x-middleware-rewrite")!);
+    expect(rewrite.pathname).toBe(LANDING_ROUTE);
+    expect(rewrite.search).toBe("?utm_source=x&utm_campaign=y");
+    expect(response.cookies.get("sb-token")?.value).toBe("refreshed");
+    expect(response.headers.get(NOINDEX_HEADER_NAME)).toBeNull();
+  });
+
+  it("serves / to a signed-in user as the app's home, exactly as before, and unindexed like the rest of the app", () => {
+    let reached = false;
+    const response = applyAuthGate(new NextRequest("https://example.test/"), session(SIGNED_IN), () => {
+      reached = true;
+      return NextResponse.next();
+    });
+    expect(reached).toBe(true);
+    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+    // "/" is indexable as the landing page; the header rule is by path, and a
+    // signed-in home is never served to a crawler (crawlers hold no session).
+    expect(INDEXABLE_ROUTES).toEqual(["/", "/privacy"]);
+  });
+
+  it("redirects the landing's own path to /, signed in or out, dropping the query", () => {
+    for (const signedIn of [SIGNED_OUT, SIGNED_IN]) {
+      const response = applyAuthGate(new NextRequest("https://example.test/welcome?utm_source=x"), session(signedIn), passThrough);
+      expect(response.status).toBe(307);
+      const location = new URL(response.headers.get("location")!);
+      expect(location.pathname).toBe("/");
+      expect(location.search).toBe("");
+    }
+  });
+
+  it("leaves the privacy page indexable and everything else noindex", () => {
+    const privacy = applyAuthGate(new NextRequest("https://example.test/privacy"), session(SIGNED_OUT), passThrough);
+    expect(privacy.status).toBe(200);
+    expect(privacy.headers.get(NOINDEX_HEADER_NAME)).toBeNull();
+    const og = applyAuthGate(new NextRequest("https://example.test/og"), session(SIGNED_OUT), passThrough);
+    expect(og.headers.get(NOINDEX_HEADER_NAME)).toBe(NOINDEX_HEADER_VALUE);
+    const person = applyAuthGate(new NextRequest("https://example.test/person/anthony-baptiste"), session(SIGNED_IN), passThrough);
+    expect(person.headers.get(NOINDEX_HEADER_NAME)).toBe(NOINDEX_HEADER_VALUE);
   });
 });
 
@@ -170,8 +249,23 @@ describe("the unauthenticated flows complete against the gate", () => {
 
   it("a signed-out visitor who is not signing up or in still cannot reach a page or an API route", () => {
     expect(passes("GET", "https://example.test/person/drake")).toMatchObject({ reached: false, status: 307 });
+    expect(passes("GET", "https://example.test/person/anthony-baptiste")).toMatchObject({ reached: false, status: 307 });
     expect(passes("GET", "https://example.test/api/feed")).toMatchObject({ reached: false, status: 401 });
     expect(passes("POST", "https://example.test/api/trade/order")).toMatchObject({ reached: false, status: 401 });
+    expect(passes("POST", "https://example.test/api/behavioral/log")).toMatchObject({ reached: false, status: 401 });
+  });
+
+  it("the landing page's own calls: the featured read and the waitlist POST, and nothing else (Phase 28)", () => {
+    expect(passes("GET", "https://example.test/api/public/featured")).toMatchObject({ reached: true, status: 200 });
+    expect(passes("POST", "https://example.test/api/waitlist", { "content-type": "application/json" })).toMatchObject({ reached: true, status: 200 });
+    // The landing page's source is audited the same way the auth flows are: every /api path it names is a public one.
+    const landingCode = [join(root, "app", "(public)"), join(root, "components", "landing"), join(root, "lib", "landing")].flatMap((dir) => sourceFiles(dir));
+    expect(landingCode.length).toBeGreaterThan(5);
+    const apiPaths = new Set<string>();
+    for (const file of landingCode) {
+      for (const match of readFileSync(file, "utf8").matchAll(/["'`](\/api\/[a-z0-9/_\-[\]]+)/g)) apiPaths.add(match[1]);
+    }
+    expect([...apiPaths].sort()).toEqual([...PUBLIC_API_ROUTES].sort());
   });
 });
 

@@ -1,12 +1,13 @@
-import { WINDOWS, readBehaviour, readEngine, readIngestion, readLevers, readLlmCost, type Window } from "@/lib/admin/data";
+import { WINDOWS, readBehaviour, readEngine, readIngestion, readLevers, readLlmCost, readWaitlist, type Window } from "@/lib/admin/data";
 import { getRenderedAt } from "@/lib/render-time";
 import { BehaviourSection } from "@/components/admin/behaviour";
 import { EngineSection, LeversSection } from "@/components/admin/engine";
 import { IngestionSection } from "@/components/admin/ingestion";
 import { LlmCostSection } from "@/components/admin/llm-cost";
+import { WaitlistSection } from "@/components/admin/waitlist";
 
 /**
- * /admin — one page, five sections, everything on it read at request time.
+ * /admin — one page, six sections, everything on it read at request time.
  *
  * Each read re-checks the admin flag itself (lib/admin/data.ts), so the layout's
  * check is a convenience and not the boundary. `?window=` moves the two
@@ -25,12 +26,13 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   // One clock for the whole page, so every "3m ago" on it agrees.
   const now = getRenderedAt();
 
-  const [llm, ingestion, engine, levers, behaviour] = await Promise.all([
+  const [llm, ingestion, engine, levers, behaviour, waitlist] = await Promise.all([
     readLlmCost(window),
     readIngestion(),
     readEngine(),
     readLevers(),
     readBehaviour(window),
+    readWaitlist(),
   ]);
 
   return (
@@ -40,6 +42,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       <EngineSection report={engine} now={now} />
       <LeversSection levers={levers} />
       <BehaviourSection report={behaviour} />
+      <WaitlistSection report={waitlist} now={now} />
     </>
   );
 }

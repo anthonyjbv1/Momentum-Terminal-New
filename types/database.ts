@@ -22,7 +22,7 @@ export type Database = {
           metadata: Json | null
           person_id: string | null
           session_id: string | null
-          user_id: string
+          user_id: string | null
         }
         Insert: {
           created_at?: string
@@ -31,7 +31,7 @@ export type Database = {
           metadata?: Json | null
           person_id?: string | null
           session_id?: string | null
-          user_id: string
+          user_id: string | null
         }
         Update: {
           created_at?: string
@@ -40,7 +40,7 @@ export type Database = {
           metadata?: Json | null
           person_id?: string | null
           session_id?: string | null
-          user_id?: string
+          user_id?: string | null
         }
         Relationships: [
           {
@@ -1737,6 +1737,48 @@ export type Database = {
       }
     }
     Views: {
+      waitlist: {
+        Row: {
+          consent_at: string
+          created_at: string
+          email: string
+          id: string
+          referrer: string | null
+          source: string | null
+          utm_campaign: string | null
+          utm_content: string | null
+          utm_medium: string | null
+          utm_source: string | null
+          utm_term: string | null
+        }
+        Insert: {
+          consent_at?: string
+          created_at?: string
+          email: string
+          id?: string
+          referrer?: string | null
+          source?: string | null
+          utm_campaign?: string | null
+          utm_content?: string | null
+          utm_medium?: string | null
+          utm_source?: string | null
+          utm_term?: string | null
+        }
+        Update: {
+          consent_at?: string
+          created_at?: string
+          email?: string
+          id?: string
+          referrer?: string | null
+          source?: string | null
+          utm_campaign?: string | null
+          utm_content?: string | null
+          utm_medium?: string | null
+          utm_source?: string | null
+          utm_term?: string | null
+        }
+        Relationships: []
+      }
       llm_cost_per_tick: {
         Row: {
           anomaly_calls: number | null
@@ -1906,6 +1948,10 @@ export type Database = {
           points: number
           sparkline: number[]
         }[]
+      }
+      join_waitlist: {
+        Args: { p_email: string; p_referrer?: string; p_source?: string; p_utm?: Json }
+        Returns: Json
       }
       my_portfolio: { Args: never; Returns: Json }
       my_portfolio_value_series: {

@@ -1,4 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
+import { citext } from "@electric-sql/pglite/contrib/citext";
 
 import { SUPABASE_STUBS, loadMigrations, migrationFiles } from "./migrations";
 
@@ -30,7 +31,9 @@ export interface TestDatabase {
 
 /** A fresh database with every migration applied. */
 export async function createTestDatabase(): Promise<TestDatabase> {
-  const db = new PGlite();
+  // citext is the one extension a migration creates (Phase 28's waitlist);
+  // PGlite has to be handed it up front for CREATE EXTENSION to find it.
+  const db = new PGlite({ extensions: { citext } });
   await db.exec(SUPABASE_STUBS);
   for (const [file, sql] of loadMigrations()) {
     try {

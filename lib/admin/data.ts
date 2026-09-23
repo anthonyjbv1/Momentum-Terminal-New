@@ -770,3 +770,59 @@ export async function readBehaviour(window: Window): Promise<BehaviourReport> {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// f) The waitlist (Phase 28)
+// ---------------------------------------------------------------------------
+
+export interface WaitlistReport {
+  total: number;
+  last24h: number;
+  last7d: number;
+  /** Newest first. The only surface on which an address is ever shown. */
+  latest: Array<{ id: string; position: number; email: string; createdAt: string; source: string | null; campaign: string | null; referrerHost: string | null }>;
+}
+
+function hostOf(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname || null;
+  } catch {
+    return url.slice(0, 80);
+  }
+}
+
+export async function readWaitlist(): Promise<WaitlistReport> {
+  const client = await adminClient();
+  const now = Date.now();
+  const dayAgo = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+  const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const [total, day, week, latest] = await Promise.all([
+    client.from("waitlist").select("id", { count: "exact", head: true }),
+    client.from("waitlist").select("id", { count: "exact", head: true }).gte("created_at", dayAgo),
+    client.from("waitlist").select("id", { count: "exact", head: true }).gte("created_at", weekAgo),
+    client.from("waitlist").select("id, email, created_at, source, utm_campaign, utm_source, referrer").order("created_at", { ascending: false }).order("id", { ascending: false }).limit(RECENT_LIMIT),
+  ]);
+  for (const [label, result] of Object.entries({ total, day, week, latest })) {
+    if (result.error) throw new Error(`${label}: ${result.error.message}`);
+  }
+
+  const count = total.count ?? 0;
+  return {
+    total: count,
+    last24h: day.count ?? 0,
+    last7d: week.count ?? 0,
+    // The newest row is position `count`, the next `count - 1`, … — the same
+    // number the visitor was shown, since a row is never deleted except on request.
+    latest: (latest.data ?? []).map((row, index) => ({
+      id: row.id,
+      position: count - index,
+      email: row.email,
+      createdAt: row.created_at,
+      source: row.source,
+      campaign: row.utm_campaign ?? row.utm_source ?? null,
+      referrerHost: hostOf(row.referrer),
+    })),
+  };
+}

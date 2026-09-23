@@ -13,7 +13,7 @@ const PERSON = "11111111-1111-4111-8111-111111111111";
 const SESSION = "22222222-2222-4222-8222-222222222222";
 
 describe("canonical event types", () => {
-  it("lists the nineteen documented types, each with a definition", () => {
+  it("lists the twenty-one documented types, each with a definition", () => {
     expect([...BEHAVIORAL_EVENT_TYPES]).toEqual([
       "view_person",
       "time_spent",
@@ -34,6 +34,8 @@ describe("canonical event types", () => {
       "reject_trade",
       "view_portfolio",
       "cast_forecast",
+      "view_landing",
+      "join_waitlist",
     ]);
     for (const type of BEHAVIORAL_EVENT_TYPES) {
       expect(BEHAVIORAL_EVENT_DEFINITIONS[type].description.length).toBeGreaterThan(0);
@@ -178,6 +180,26 @@ describe("validateBehavioralEvent", () => {
       expect(validateBehavioralEvent({ eventType: "filter_change", metadata: { surface: "feed", filter: "category" } }).ok).toBe(false);
       const ok = validateBehavioralEvent({ eventType: "filter_change", metadata: { surface: "feed", filter: "category", value: " creator " } });
       expect(ok.ok && ok.event.metadata).toEqual({ surface: "feed", filter: "category", value: "creator" });
+    });
+
+    it("view_landing is anonymous, needs nothing, and is always stamped surface: landing", () => {
+      expect(validateBehavioralEvent({ eventType: "view_landing" }, { sessionId: SESSION })).toEqual({
+        ok: true,
+        event: { eventType: "view_landing", personId: null, metadata: { surface: "landing" }, sessionId: SESSION },
+      });
+      const ok = validateBehavioralEvent({ eventType: "view_landing", metadata: { referrer_host: "news.example", utm_source: "x", surface: "elsewhere" } });
+      expect(ok.ok && ok.event.metadata).toEqual({ referrer_host: "news.example", utm_source: "x", surface: "landing" });
+      expect(validateBehavioralEvent({ eventType: "view_landing", metadata: { utm_campaign: 7 } })).toMatchObject({ ok: false, reason: expect.stringContaining("utm_campaign") });
+    });
+
+    it("join_waitlist needs a known form and a known disposition, and never keeps an address", () => {
+      expect(validateBehavioralEvent({ eventType: "join_waitlist", metadata: { disposition: "new" } })).toMatchObject({ ok: false, reason: expect.stringContaining("source") });
+      expect(validateBehavioralEvent({ eventType: "join_waitlist", metadata: { source: "landing_hero" } })).toMatchObject({ ok: false, reason: expect.stringContaining("disposition") });
+      expect(validateBehavioralEvent({ eventType: "join_waitlist", metadata: { source: "email_footer", disposition: "new" } }).ok).toBe(false);
+      expect(validateBehavioralEvent({ eventType: "join_waitlist", metadata: { source: "landing_hero", disposition: "banned" } }).ok).toBe(false);
+      const ok = validateBehavioralEvent({ eventType: "join_waitlist", metadata: { source: "landing_footer", disposition: "existing", email: "someone@example.com" } });
+      expect(ok.ok && ok.event.metadata).toEqual({ source: "landing_footer", disposition: "existing" });
+      expect(JSON.stringify(ok)).not.toContain("someone@example.com");
     });
 
     it("change_range needs a person and a range, and normalises the range", () => {

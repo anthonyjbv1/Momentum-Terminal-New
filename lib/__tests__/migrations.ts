@@ -21,6 +21,8 @@ export const SUPABASE_STUBS = `
   create role supabase_auth_admin nologin;
 
   create schema auth;
+  -- Supabase keeps extensions in their own schema (Phase 28's citext).
+  create schema extensions;
   create table auth.users (
     id                 uuid        primary key default gen_random_uuid(),
     email              text,
