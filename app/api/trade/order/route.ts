@@ -3,7 +3,9 @@ import { NextResponse, type NextRequest } from "next/server";
 import { logEventInBackground } from "@/lib/behavioral/log";
 import type { BehavioralEventInput } from "@/lib/behavioral/events";
 import { getCurrentUser } from "@/lib/auth";
+import { getFingerprintSaltOrNull } from "@/lib/env";
 import type { OrderSide } from "@/lib/trading/direction";
+import { fingerprintFor } from "@/lib/trading/fingerprint";
 import { MAX_ORDER_SHARES, MIN_ORDER_CENTS, UNITS_PER_SHARE, sharesToUnits, type OrderRejectionCode, type OrderResult } from "@/lib/trading/model";
 import { placeOrderAsUser } from "@/lib/trading/server";
 
@@ -28,6 +30,14 @@ import { placeOrderAsUser } from "@/lib/trading/server";
  * structured value with a code, a sentence and the current quote, so the
  * sheet can say exactly what happened. Identity comes from the auth cookies,
  * never from the body.
+ *
+ * THE FINGERPRINT (Phase 29). The route hashes the connection's address and
+ * user agent with FINGERPRINT_SALT and passes the hash — never the inputs —
+ * to place_order(), which stores it on the order for the shared-
+ * infrastructure detector (several accounts trading one person from one
+ * hash inside the surveillance window). The client cannot influence it: it is
+ * read from the request's own headers here, not from the body. No salt, no
+ * hash, and that detector stays silent.
  *
  * Behavioural events (take_position, close_position, reject_trade) are
  * written after the response, fire-and-forget: they never block or fail a
@@ -54,6 +64,8 @@ interface ParsedOrder {
   maxSpendCents: number | null;
   quotedPriceCents: number | null;
   surface: string | null;
+  /** Computed from the request's headers, never parsed from the body. */
+  fingerprintHash: string | null;
 }
 
 function parse(body: unknown): ParsedOrder | string {
@@ -95,7 +107,7 @@ function parse(body: unknown): ParsedOrder | string {
     quotedPriceCents = quoted;
   }
   const surface = typeof record.surface === "string" && record.surface.trim() ? record.surface.trim().slice(0, 40) : null;
-  return { personId, side, units, maxSpendCents, quotedPriceCents, surface };
+  return { personId, side, units, maxSpendCents, quotedPriceCents, surface, fingerprintHash: null };
 }
 
 export async function POST(request: NextRequest) {
@@ -108,8 +120,9 @@ export async function POST(request: NextRequest) {
   } catch {
     return reject(400, "invalid", "The order must be JSON.");
   }
-  const parsed = parse(body);
-  if (typeof parsed === "string") return reject(400, "invalid", parsed);
+  const parsedBody = parse(body);
+  if (typeof parsedBody === "string") return reject(400, "invalid", parsedBody);
+  const parsed: ParsedOrder = { ...parsedBody, fingerprintHash: fingerprintFor(request.headers, getFingerprintSaltOrNull()) };
 
   let result: OrderResult;
   try {

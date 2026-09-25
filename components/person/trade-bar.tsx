@@ -4,7 +4,7 @@ import Link from "next/link";
 
 import { cn } from "@/lib/cn";
 import { formatCents } from "@/lib/money";
-import type { ProfilePerson } from "@/lib/person/profile-model";
+import type { ProfilePerson, TradingAvailability } from "@/lib/person/profile-model";
 import type { OrderSide } from "@/lib/trading/direction";
 import { sharesLabel, type Cents, type ViewerTradingState } from "@/lib/trading/model";
 import { Button, buttonClassName } from "@/components/ui/button";
@@ -22,25 +22,73 @@ import { TradeQuote } from "@/components/trade/trade-quote";
  * viewer holds nothing Sell is not offered as Buy's equal: it sits back as a
  * quiet outline reading "Nothing to close". Signed out, Buy leads to sign-in
  * and says the money is paper.
+ *
+ * THE MARKET'S STATES (Phase 29). A person can be HALTED (a circuit breaker
+ * or an operator; every order refused until a time), PAUSED (nothing can be
+ * placed) or DISPLAY-ONLY (the Momentum Score is shown, nothing new can be
+ * opened, what is held can still be closed). Each state is said in the
+ * status line in plain words, and the pill that cannot act is disabled with
+ * the state as its label rather than a price it will not honour.
  */
 export interface TradeControlProps {
   person: ProfilePerson;
   /** platform_settings.shorting_enabled, read on the server. */
   shortingEnabled: boolean;
-  /** Live quotes, cents per unit. */
+  /** Live quotes, cents per unit, premium included. */
   buyCents: Cents;
   sellCents: Cents;
   viewer: ViewerTradingState;
+  /** Whether the market is open, and if not, why (Phase 29). */
+  availability: TradingAvailability;
   onTrade: (side: OrderSide) => void;
   className?: string;
 }
 
-function sellState(viewer: ViewerTradingState, shortingEnabled: boolean): { enabled: boolean; note: string | null } {
-  if (!viewer.signedIn) return { enabled: false, note: null };
+function untilLabel(iso: string, now = Date.now()): string {
+  const remaining = Math.max(0, Date.parse(iso) - now);
+  const minutes = Math.ceil(remaining / 60_000);
+  if (minutes <= 1) return "under a minute";
+  if (minutes < 90) return `${minutes} min`;
+  const hours = Math.round((minutes / 60) * 10) / 10;
+  return `${hours} h`;
+}
+
+/** The one sentence about the market's state, or null when it is open. */
+export function availabilityNote(availability: TradingAvailability): string | null {
+  switch (availability.state) {
+    case "halted":
+      return `Trading halted · ${untilLabel(availability.until)} left${availability.reason ? ` · ${availability.reason}` : ""}`;
+    case "paused":
+      return "Trading paused";
+    case "display_only":
+      return "Display-only · the score is shown, nothing new can be opened";
+    case "tradeable":
+      return null;
+  }
+}
+
+function buyState(availability: TradingAvailability): { enabled: boolean; label: string } {
+  switch (availability.state) {
+    case "halted":
+      return { enabled: false, label: "Halted" };
+    case "paused":
+      return { enabled: false, label: "Paused" };
+    case "display_only":
+      return { enabled: false, label: "Display only" };
+    case "tradeable":
+      return { enabled: true, label: "Buy" };
+  }
+}
+
+function sellState(viewer: ViewerTradingState, shortingEnabled: boolean, availability: TradingAvailability): { enabled: boolean; note: string | null; label: string } {
+  if (!viewer.signedIn) return { enabled: false, note: null, label: "Sell" };
   const held = viewer.position?.openUnits ?? 0;
-  if (shortingEnabled) return { enabled: true, note: held > 0 ? `Closes up to ${sharesLabel(held)}` : null };
-  if (held > 0) return { enabled: true, note: `Closes up to ${sharesLabel(held)}` };
-  return { enabled: false, note: "Nothing to close" };
+  // A halt or a pause closes both doors. Display-only leaves the way out open.
+  if (availability.state === "halted") return { enabled: false, note: null, label: "Halted" };
+  if (availability.state === "paused") return { enabled: false, note: null, label: "Paused" };
+  if (shortingEnabled && availability.state === "tradeable") return { enabled: true, note: held > 0 ? `Closes up to ${sharesLabel(held)}` : null, label: "Sell" };
+  if (held > 0) return { enabled: true, note: `Closes up to ${sharesLabel(held)}`, label: "Sell" };
+  return { enabled: false, note: "Nothing to close", label: "Sell" };
 }
 
 /**
@@ -52,9 +100,13 @@ function sellState(viewer: ViewerTradingState, shortingEnabled: boolean): { enab
  * the balance. The pills below it moved in Phase 25, so the control is
  * finally in one typeface top to bottom.
  */
-function Status({ viewer, note, className }: { viewer: ViewerTradingState; note: string | null; className?: string }) {
+function Status({ viewer, note, market, className }: { viewer: ViewerTradingState; note: string | null; market: string | null; className?: string }) {
   if (!viewer.signedIn) {
-    return <p className={cn("text-xs text-fg-muted", className)}>Sign in to trade with paper money.</p>;
+    return (
+      <p className={cn("text-xs text-fg-muted", className)}>
+        {market ? <span className="text-fg-secondary">{market}</span> : "Sign in to trade with paper money."}
+      </p>
+    );
   }
   const held = viewer.position?.openUnits ?? 0;
   return (
@@ -65,7 +117,12 @@ function Status({ viewer, note, className }: { viewer: ViewerTradingState; note:
           <span aria-hidden> · </span>holding <span className="text-fg-secondary">{sharesLabel(held)}</span>
         </>
       ) : null}
-      {note ? (
+      {market ? (
+        <>
+          <span aria-hidden> · </span>
+          <span className="text-fg-secondary">{market}</span>
+        </>
+      ) : note ? (
         <>
           <span aria-hidden> · </span>
           {note}
@@ -75,28 +132,30 @@ function Status({ viewer, note, className }: { viewer: ViewerTradingState; note:
   );
 }
 
-export function TradeActions({ person, shortingEnabled, buyCents, sellCents, viewer, onTrade, className }: TradeControlProps) {
-  const sell = sellState(viewer, shortingEnabled);
+export function TradeActions({ person, shortingEnabled, buyCents, sellCents, viewer, availability, onTrade, className }: TradeControlProps) {
+  const sell = sellState(viewer, shortingEnabled, availability);
+  const buy = buyState(availability);
   return (
     <div className={cn("flex flex-col items-stretch gap-2 md:items-end", className)}>
       <div className="flex gap-2">
-        <BuyControl person={person} buyCents={buyCents} viewer={viewer} onTrade={onTrade} size="md" className="min-w-28" />
-        <SellControl person={person} sellCents={sellCents} enabled={sell.enabled} onTrade={onTrade} size="md" className="min-w-28" />
+        <BuyControl person={person} buyCents={buyCents} viewer={viewer} state={buy} onTrade={onTrade} size="md" className="min-w-28" />
+        <SellControl person={person} sellCents={sellCents} state={sell} onTrade={onTrade} size="md" className="min-w-28" />
       </div>
-      <Status viewer={viewer} note={sell.note} className="min-h-4 md:text-right" />
+      <Status viewer={viewer} note={sell.note} market={availabilityNote(availability)} className="min-h-4 md:text-right" />
     </div>
   );
 }
 
-export function TradeBar({ person, shortingEnabled, buyCents, sellCents, viewer, onTrade }: Omit<TradeControlProps, "className">) {
-  const sell = sellState(viewer, shortingEnabled);
+export function TradeBar({ person, shortingEnabled, buyCents, sellCents, viewer, availability, onTrade }: Omit<TradeControlProps, "className">) {
+  const sell = sellState(viewer, shortingEnabled, availability);
+  const buy = buyState(availability);
   return (
     <div className="fixed inset-x-0 bottom-tabbar-safe z-(--z-tabbar) border-t border-line bg-canvas/85 backdrop-blur-xl md:hidden">
       <div className="mx-auto flex max-w-shell flex-col gap-1.5 px-5 pb-3 pt-2.5">
-        <Status viewer={viewer} note={sell.note} className="min-h-4 text-center" />
+        <Status viewer={viewer} note={sell.note} market={availabilityNote(availability)} className="min-h-4 text-center" />
         <div className="flex gap-3">
-          <BuyControl person={person} buyCents={buyCents} viewer={viewer} onTrade={onTrade} size="lg" className="flex-1" />
-          <SellControl person={person} sellCents={sellCents} enabled={sell.enabled} onTrade={onTrade} size="lg" className="flex-1" />
+          <BuyControl person={person} buyCents={buyCents} viewer={viewer} state={buy} onTrade={onTrade} size="lg" className="flex-1" />
+          <SellControl person={person} sellCents={sellCents} state={sell} onTrade={onTrade} size="lg" className="flex-1" />
         </div>
       </div>
     </div>
@@ -107,6 +166,7 @@ function BuyControl({
   person,
   buyCents,
   viewer,
+  state,
   onTrade,
   size,
   className,
@@ -114,10 +174,18 @@ function BuyControl({
   person: ProfilePerson;
   buyCents: Cents;
   viewer: ViewerTradingState;
+  state: { enabled: boolean; label: string };
   onTrade: (side: OrderSide) => void;
   size: "md" | "lg";
   className?: string;
 }) {
+  if (!state.enabled) {
+    return (
+      <Button variant="outline" size={size} className={cn("text-fg-muted", className)} disabled aria-label={`Buy ${person.displayName}: ${state.label.toLowerCase()}`}>
+        {state.label}
+      </Button>
+    );
+  }
   if (!viewer.signedIn) {
     return (
       <Link href={`/login?next=${encodeURIComponent(`/person/${person.slug}`)}`} className={buttonClassName("buy", size, className)} aria-label={`Sign in to buy ${person.displayName}`}>
@@ -135,22 +203,28 @@ function BuyControl({
 function SellControl({
   person,
   sellCents,
-  enabled,
+  state,
   onTrade,
   size,
   className,
 }: {
   person: ProfilePerson;
   sellCents: Cents;
-  enabled: boolean;
+  state: { enabled: boolean; note: string | null; label: string };
   onTrade: (side: OrderSide) => void;
   size: "md" | "lg";
   className?: string;
 }) {
-  if (!enabled) {
+  if (!state.enabled) {
     return (
-      <Button variant="outline" size={size} className={cn("text-fg-muted", className)} disabled aria-label={`Sell ${person.displayName}: nothing to close`}>
-        <TradeQuote label="Sell" cents={sellCents} />
+      <Button
+        variant="outline"
+        size={size}
+        className={cn("text-fg-muted", className)}
+        disabled
+        aria-label={`Sell ${person.displayName}: ${state.label === "Sell" ? "nothing to close" : state.label.toLowerCase()}`}
+      >
+        {state.label === "Sell" ? <TradeQuote label="Sell" cents={sellCents} /> : state.label}
       </Button>
     );
   }

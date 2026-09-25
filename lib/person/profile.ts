@@ -7,12 +7,14 @@ import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 import {
   FORCES_WINDOW_MINUTES,
   RANGES,
-  convictionLevel,
+  convictionLevelFromConcentration,
   deriveState,
+  emptyMarketReadings,
   emptySeries,
   isValidSlug,
   mergeSignals,
   readForces,
+  readMarketReadings,
   toProfilePerson,
   toSeries,
   type ForceImpactRow,
@@ -25,6 +27,7 @@ import {
   type SeriesByRange,
   type SeriesRow,
   type SignalRow,
+  type TradeEventRow,
 } from "./profile-model";
 
 /**
@@ -42,7 +45,8 @@ import {
  */
 
 const PERSON_COLUMNS =
-  "id, slug, display_name, category, avatar_url, current_score, revert_target, target_offset, spread, buy_price, sell_price, created_at, last_tick_at, forecast_paused";
+  "id, slug, display_name, category, avatar_url, current_score, revert_target, target_offset, spread, buy_price, sell_price, created_at, last_tick_at, forecast_paused, " +
+  "premium_cents, market_price, market_inventory_units, tier, trading_mode, halted_until, halt_reason, max_allocation_cents";
 
 /** Most signal / narrative items the page lists. */
 const SIGNAL_LIMIT = 30;
@@ -50,25 +54,45 @@ const SIGNAL_LIMIT = 30;
 /** The request's render time; lives in lib/render-time.ts, re-exported for the profile routes. */
 export { getRenderedAt } from "@/lib/render-time";
 
-/** The person behind a slug, or null when there is no active person by that name. */
+/**
+ * The person behind a slug, or null when there is no active person by that
+ * name. The row carries the market's STATE (inventory, premium, mode, halt);
+ * the market's PARAMETERS (the depth the curve runs on, the premium cap) come
+ * from trade_quote(), which resolves the tier's settings and any per-person
+ * override exactly as place_order() does, so the book the sheet previews on
+ * is the book the server prices on.
+ */
 export const getPersonBySlug = cache(async (slug: string): Promise<ProfilePerson | null> => {
   if (!isValidSlug(slug)) return null;
 
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase.from("people").select(PERSON_COLUMNS).eq("slug", slug).eq("is_active", true).maybeSingle();
   if (error) throw new Error(`Could not load person: ${error.message}`);
+  if (!data) return null;
 
-  return data ? toProfilePerson(data as ProfilePersonRow) : null;
+  const row = data as unknown as ProfilePersonRow & { id: string };
+  const quote = await supabase.rpc("trade_quote", { p_person_id: row.id });
+  if (quote.error) {
+    // The parameters are an enhancement to the preview; the server enforces them regardless.
+    console.warn("[person] trade_quote failed, previewing on a flat market:", quote.error.message);
+    return toProfilePerson(row);
+  }
+  const params = (typeof quote.data === "object" && quote.data !== null ? quote.data : {}) as Record<string, unknown>;
+  return toProfilePerson({
+    ...row,
+    depth_units: (params.depth_units as number | string | null | undefined) ?? null,
+    premium_cap_cents: (params.premium_cap_cents as number | string | null | undefined) ?? null,
+  });
 });
 
-/** Score history for every chart range, each downsampled by the database. */
+/** Score and market-price history for every chart range, each downsampled by the database. */
 async function getScoreSeries(personId: string): Promise<SeriesByRange> {
   const supabase = createSupabaseAdminClient();
   const now = Date.now();
 
   const results = await Promise.all(
     RANGES.map((range) =>
-      supabase.rpc("person_score_series", {
+      supabase.rpc("person_market_series", {
         p_person_id: personId,
         p_since: range.windowMs === null ? undefined : new Date(now - range.windowMs).toISOString(),
         p_points: range.points,
@@ -81,7 +105,7 @@ async function getScoreSeries(personId: string): Promise<SeriesByRange> {
     const result = results[index];
     if (result.error) {
       // The chart is an enhancement: a failed range reads as empty, the page still renders.
-      console.warn(`[person] person_score_series(${range.key}) failed:`, result.error.message);
+      console.warn(`[person] person_market_series(${range.key}) failed:`, result.error.message);
       return;
     }
     series[range.key] = toSeries((result.data ?? []) as SeriesRow[]);
@@ -91,8 +115,9 @@ async function getScoreSeries(personId: string): Promise<SeriesByRange> {
 
 /**
  * Everything the profile page shows for a person except the signal list:
- * identity, the chart series, the STATE reading, the five forces and the
- * CONVICTION level. Null when the slug matches nobody.
+ * identity, the chart series, the STATE reading, the five forces, the market
+ * readings behind the two market forces and the CONVICTION level. Null when
+ * the slug matches nobody.
  */
 export const getPersonProfile = cache(async (slug: string): Promise<PersonProfile | null> => {
   const person = await getPersonBySlug(slug);
@@ -100,7 +125,7 @@ export const getPersonProfile = cache(async (slug: string): Promise<PersonProfil
 
   const supabase = createSupabaseAdminClient();
   const windowStart = new Date(Date.now() - FORCES_WINDOW_MINUTES * 60_000).toISOString();
-  const [series, latestTickResult, windowResult, eventsResult] = await Promise.all([
+  const [series, latestTickResult, windowResult, eventsResult, capitalResult, tradesResult] = await Promise.all([
     getScoreSeries(person.id),
     supabase
       .from("score_history")
@@ -111,18 +136,16 @@ export const getPersonProfile = cache(async (slug: string): Promise<PersonProfil
       .limit(1)
       .maybeSingle(),
     // Every force row of the last FORCES_WINDOW_MINUTES, which is what the
-    // panel adds up. Two ticks a minute and at most six rows a tick bounds an
-    // hour at 720; the limit is the ceiling, not a page. Force and impact
-    // only — the working is read once, below, not 720 times.
+    // panel adds up. Two ticks a minute and at most four rows a tick bounds an
+    // hour at 480; the limit is the ceiling, not a page. Force and impact
+    // only — the working is read once, below, not 480 times.
     supabase
       .from("score_events")
       .select("force, impact")
       .eq("person_id", person.id)
       .gte("created_at", windowStart)
       .limit(1_000),
-    // The latest tick's rows, for the working each force recorded there
-    // (Conviction's capital concentration). Six rows at most per tick (five
-    // forces plus inverse_pair), so twelve covers it with room to spare.
+    // The latest tick's rows, for the working each force recorded there.
     supabase
       .from("score_events")
       .select("force, impact, tick_number, details")
@@ -130,22 +153,40 @@ export const getPersonProfile = cache(async (slug: string): Promise<PersonProfil
       .order("tick_number", { ascending: false })
       .order("id")
       .limit(12),
+    // THE MARKET READINGS (Phase 29). Conviction reads open paper capital on
+    // the person — the same rows and the same column the Engine sums — and
+    // Trading Activity reads the tape over the display window. Neither
+    // touches the score; both move the market price, and the panel says so.
+    supabase.from("positions").select("amount_cents").eq("person_id", person.id).eq("is_open", true).limit(5_000),
+    supabase.from("trade_events").select("side, amount_cents").eq("person_id", person.id).gte("created_at", windowStart).limit(5_000),
   ]);
 
   if (latestTickResult.error) console.warn("[person] latest tick read failed:", latestTickResult.error.message);
   if (windowResult.error) console.warn("[person] score_events window read failed:", windowResult.error.message);
   if (eventsResult.error) console.warn("[person] score_events read failed:", eventsResult.error.message);
+  if (capitalResult.error) console.warn("[person] positions read failed:", capitalResult.error.message);
+  if (tradesResult.error) console.warn("[person] trade_events read failed:", tradesResult.error.message);
 
   const latestRow = latestTickResult.data;
   const latestTick = latestRow ? { tickNumber: Number(latestRow.tick_number), at: latestRow.recorded_at } : null;
   const forces = readForces((windowResult.data ?? []) as ForceImpactRow[], (eventsResult.data ?? []) as ScoreEventRow[], latestTick?.tickNumber ?? null);
+
+  const openCapitalCents = (capitalResult.data ?? []).reduce((total, row) => total + Number(row.amount_cents), 0);
+  const market =
+    capitalResult.error && tradesResult.error
+      ? emptyMarketReadings()
+      : readMarketReadings(openCapitalCents, person.maxAllocationCents, (tradesResult.data ?? []) as TradeEventRow[]);
 
   return {
     person,
     series,
     state: deriveState(series["24h"]),
     forces,
-    conviction: convictionLevel(forces.find((force) => force.key === "conviction")),
+    // Read from the concentration itself: the Conviction force no longer
+    // writes score_events (it moves the market price, not the score), so the
+    // level comes straight from the capital rather than from an audit row.
+    conviction: latestTick === null ? null : convictionLevelFromConcentration(market.conviction.concentration ?? 0),
+    market,
     latestTick,
   };
 });

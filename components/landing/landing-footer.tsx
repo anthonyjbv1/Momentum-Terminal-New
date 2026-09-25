@@ -12,6 +12,9 @@ export function LandingFooter() {
           {CHROME.footer.paper}
         </p>
         <nav className="flex items-center gap-5">
+          <Link href="/how-the-price-works" className="transition-colors hover:text-fg">
+            How the price works
+          </Link>
           <Link href="/privacy" className="transition-colors hover:text-fg">
             {CHROME.footer.privacy}
           </Link>

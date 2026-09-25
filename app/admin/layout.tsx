@@ -31,6 +31,7 @@ const SECTIONS = [
   { href: "#ingestion", label: "Ingestion" },
   { href: "#engine", label: "Engine" },
   { href: "#levers", label: "Levers" },
+  { href: "#market", label: "Market" },
   { href: "#behaviour", label: "Behaviour" },
   { href: "#waitlist", label: "Waitlist" },
 ];

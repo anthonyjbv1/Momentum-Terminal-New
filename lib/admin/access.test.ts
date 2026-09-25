@@ -97,7 +97,7 @@ describe("requireAdmin", () => {
 
 describe("every admin read", () => {
   /** Called with a window where one is taken; the argument is ignored by the ones that don't. */
-  const readers = ["readLlmCost", "readIngestion", "readEngine", "readLevers", "readBehaviour", "readWaitlist"] as const;
+  const readers = ["readLlmCost", "readIngestion", "readEngine", "readLevers", "readMarket", "readBehaviour", "readWaitlist"] as const;
 
   it("refuses a signed-out caller and never builds the service-role client", async () => {
     const admin = await loadAdmin();
@@ -156,13 +156,30 @@ describe("the admin surface", () => {
     }
   });
 
-  it("has no write path: the operator console reads and nothing else", () => {
+  /**
+   * THE ONE WRITE PATH (Phase 29). Until Phase 29 the console had none. It now
+   * has exactly one file that writes, app/admin/actions.ts, and that file
+   * writes only by calling the audit-logged admin RPCs as the signed-in
+   * operator: no table is inserted, updated or deleted from the application
+   * side, and no other file under the admin surface carries a Server Action.
+   */
+  it("has one write path, and it only calls the audit-logged admin RPCs", () => {
+    const actions = join(root, "app", "admin", "actions.ts");
     for (const file of surface) {
       const source = readFileSync(file, "utf8");
-      for (const write of [".insert(", ".update(", ".upsert(", ".delete(", '"use server"']) {
+      for (const write of [".insert(", ".update(", ".upsert(", ".delete("]) {
         expect(source.includes(write), `${relative(root, file)} contains ${write}`).toBe(false);
       }
+      if (file !== actions) expect(source.includes('"use server"'), `${relative(root, file)} is a Server Action`).toBe(false);
     }
+    const source = readFileSync(actions, "utf8");
+    expect(source.startsWith('"use server"')).toBe(true);
+    const calls = [...source.matchAll(/\.rpc\(\s*"([a-z_]+)"/g)].map((match) => match[1]);
+    expect(calls.length).toBeGreaterThan(0);
+    for (const name of calls) expect(name, name).toMatch(/^admin_/);
+    // The operator's own session client, never the service role.
+    expect(source.includes("createSupabaseServerClient")).toBe(true);
+    expect(source.includes("createSupabaseAdminClient")).toBe(false);
   });
 
   it("lives outside the main app tree, so removing the Phase 7 auth gate cannot expose it", () => {

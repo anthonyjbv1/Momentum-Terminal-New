@@ -46,12 +46,13 @@ describe("decideAuthGate", () => {
     expect(decideAuthGate("/api", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
   });
 
-  it("keeps sign-in, sign-up, the auth callback, the privacy page and the OG image reachable, by exact route only", () => {
-    expect(PUBLIC_ROUTES).toEqual(["/login", "/signup", "/auth/callback", "/privacy", "/og"]);
+  it("keeps sign-in, sign-up, the auth callback, the privacy page, the price explainer and the OG image reachable, by exact route only", () => {
+    expect(PUBLIC_ROUTES).toEqual(["/login", "/signup", "/auth/callback", "/privacy", "/how-the-price-works", "/og"]);
     expect(decideAuthGate("/login", "?next=%2Ffeed", SIGNED_OUT)).toEqual({ kind: "allow" });
     expect(decideAuthGate("/signup", "", SIGNED_OUT)).toEqual({ kind: "allow" });
     expect(decideAuthGate("/auth/callback", "?code=abc", SIGNED_OUT)).toEqual({ kind: "allow" });
     expect(decideAuthGate("/privacy", "", SIGNED_OUT)).toEqual({ kind: "allow" });
+    expect(decideAuthGate("/how-the-price-works", "", SIGNED_OUT)).toEqual({ kind: "allow" });
     expect(decideAuthGate("/og", "", SIGNED_OUT)).toEqual({ kind: "allow" });
     // No prefix semantics: nothing that merely starts with a public route is open.
     expect(decideAuthGate("/auth", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/auth" });
@@ -137,13 +138,13 @@ describe("applyAuthGate", () => {
     expect(response.headers.get(NOINDEX_HEADER_NAME)).toBe(NOINDEX_HEADER_VALUE);
   });
 
-  it("serves a robots file that allows exactly the landing page, the privacy page and the OG image, and disallows the rest", async () => {
+  it("serves a robots file that allows exactly the landing page, the privacy page, the price explainer and the OG image, and disallows the rest", async () => {
     const request = new NextRequest("https://example.test/robots.txt");
     const response = applyAuthGate(request, session(SIGNED_OUT), passThrough);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/plain");
     expect(await response.text()).toBe(ROBOTS_TXT);
-    expect(ROBOTS_TXT).toBe("User-agent: *\nAllow: /$\nAllow: /privacy$\nAllow: /og$\nDisallow: /\n");
+    expect(ROBOTS_TXT).toBe("User-agent: *\nAllow: /$\nAllow: /privacy$\nAllow: /how-the-price-works$\nAllow: /og$\nDisallow: /\n");
     // Every allowed path is anchored: nothing under /person, /feed or /api is offered.
     for (const line of ROBOTS_TXT.split("\n").filter((line) => line.startsWith("Allow:"))) expect(line).toMatch(/\$$/);
   });
@@ -185,7 +186,7 @@ describe("applyAuthGate", () => {
     expect(response.headers.get("x-middleware-rewrite")).toBeNull();
     // "/" is indexable as the landing page; the header rule is by path, and a
     // signed-in home is never served to a crawler (crawlers hold no session).
-    expect(INDEXABLE_ROUTES).toEqual(["/", "/privacy"]);
+    expect(INDEXABLE_ROUTES).toEqual(["/", "/privacy", "/how-the-price-works"]);
   });
 
   it("redirects the landing's own path to /, signed in or out, dropping the query", () => {

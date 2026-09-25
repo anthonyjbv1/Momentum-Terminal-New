@@ -28,6 +28,13 @@ import { useReducedMotion } from "@/components/ui/use-reduced-motion";
  * touch. No gradients, no fills, no glow. Colour never touches the line;
  * direction lives in the change figure above the chart.
  *
+ * THE SECOND LINE (Phase 29). A chart may carry one secondary series read
+ * off the same points — the market price beside the score — drawn thinner
+ * and in the muted ink, on the same axis (one point is one dollar), with its
+ * own value in the crosshair. It reveals and slides with the primary; the
+ * primary keeps the breathing dot and the ring, the secondary gets a still
+ * dot at its end. The caller draws the legend, since only it knows the names.
+ *
  * The vertical axis clamps to the data but never spans less than the
  * caller's floor (`domain`). prefers-reduced-motion removes the breath and
  * the ripple and applies each tick directly.
@@ -40,7 +47,7 @@ export interface LiveLineChartProps {
   version?: number;
   /** The Engine's cadence, for the breath. Defaults to the real 30 seconds. */
   cadenceMs?: number;
-  /** The vertical domain rule: floor, padding, and whether the reference is pulled in. */
+  /** The vertical domain rule: floor, padding, and whether the reference is pulled in. Sees BOTH series' points. */
   domain: (points: TimedScore[]) => ValueDomain;
   /**
    * A dashed reference line with a label: the gravity target, the paper
@@ -51,6 +58,13 @@ export interface LiveLineChartProps {
    * has to name itself without the line beside it to explain it.
    */
   reference?: { value: number; label: string; edgeLabel?: string; anchor?: "start" | "end" } | null;
+  /**
+   * The secondary series: a value read off each point (undefined or null to
+   * leave that point out), its name for the crosshair, and its own formatter.
+   */
+  secondary?: { label: string; value: (point: SeriesPoint) => number | null | undefined; formatValue?: (value: number) => string } | null;
+  /** The primary series' name in the crosshair, shown only when a secondary is drawn. */
+  primaryLabel?: string;
   /** Axis labels. */
   formatAxis: (value: number) => string;
   /** The crosshair's value. */
@@ -99,9 +113,22 @@ function axisTime(ms: number, spanMs: number): string {
   return spanMs <= TWO_DAYS ? clockFormat.format(ms) : dayFormat.format(ms);
 }
 
+/** The secondary series as timed points: only the points that carry a value. */
+function toTimedBy(points: SeriesPoint[], value: (point: SeriesPoint) => number | null | undefined): TimedScore[] {
+  const out: TimedScore[] = [];
+  for (const point of points) {
+    const t = Date.parse(point.at);
+    const v = value(point);
+    if (Number.isFinite(t) && typeof v === "number" && Number.isFinite(v)) out.push({ t, score: v });
+  }
+  return out;
+}
+
 interface Transition {
   from: TimedScore[];
   to: TimedScore[];
+  fromSecondary: TimedScore[];
+  toSecondary: TimedScore[];
   startedAt: number;
 }
 
@@ -112,6 +139,8 @@ export function LiveLineChart({
   cadenceMs = LIVE_TICK_MS,
   domain,
   reference = null,
+  secondary = null,
+  primaryLabel,
   formatAxis,
   formatValue,
   describe,
@@ -126,6 +155,9 @@ export function LiveLineChart({
   const [hover, setHover] = useState<number | null>(null);
 
   const timed = useMemo(() => toTimed(points), [points]);
+  const secondaryValue = secondary?.value;
+  const timedSecondary = useMemo(() => (secondaryValue ? toTimedBy(points, secondaryValue) : []), [points, secondaryValue]);
+  const hasSecondary = timedSecondary.length >= 2;
   const drawable = timed.length >= 2;
   const rangeDefinition = RANGES.find((definition) => definition.key === range) ?? RANGES[0];
 
@@ -133,6 +165,7 @@ export function LiveLineChart({
   // on screen to what is now true. A range switch keeps the version, so it
   // simply shows the other series.
   const shownRef = useRef<TimedScore[]>(timed);
+  const shownSecondaryRef = useRef<TimedScore[]>(timedSecondary);
   const versionRef = useRef(version);
   const [transition, setTransition] = useState<Transition | null>(null);
   const [progress, setProgress] = useState(1);
@@ -140,19 +173,22 @@ export function LiveLineChart({
   useEffect(() => {
     if (version === versionRef.current) {
       shownRef.current = timed;
+      shownSecondaryRef.current = timedSecondary;
       return;
     }
     versionRef.current = version;
     const from = shownRef.current;
+    const fromSecondary = shownSecondaryRef.current;
     shownRef.current = timed;
+    shownSecondaryRef.current = timedSecondary;
     if (reducedMotion || from.length < 2 || timed.length < 2) {
       setTransition(null);
       setProgress(1);
       return;
     }
-    setTransition({ from, to: timed, startedAt: performance.now() });
+    setTransition({ from, to: timed, fromSecondary, toSecondary: timedSecondary, startedAt: performance.now() });
     setProgress(0);
-  }, [timed, version, reducedMotion]);
+  }, [timed, timedSecondary, version, reducedMotion]);
 
   useEffect(() => {
     if (!transition) return;
@@ -185,11 +221,14 @@ export function LiveLineChart({
     if (!drawable) return null;
     const eased = transition ? easeOutCubic(progress) : 1;
     const series = transition ? blendSeries(transition.from, transition.to, eased) : timed;
-    const target = { ...timeDomain(timed), ...domain(timed) };
-    if (!transition) return { series, domain: target, transitioning: false };
-    const origin = { ...timeDomain(transition.from), ...domain(transition.from) };
+    const secondarySeries = transition ? blendSeries(transition.fromSecondary, transition.toSecondary, eased) : timedSecondary;
+    // Both lines share one axis, so the domain sees both.
+    const target = { ...timeDomain(timed), ...domain([...timed, ...timedSecondary]) };
+    if (!transition) return { series, secondarySeries, domain: target, transitioning: false };
+    const origin = { ...timeDomain(transition.from), ...domain([...transition.from, ...transition.fromSecondary]) };
     return {
       series,
+      secondarySeries,
       domain: {
         t0: lerp(origin.t0, target.t0, eased),
         t1: lerp(origin.t1, target.t1, eased),
@@ -199,7 +238,7 @@ export function LiveLineChart({
       },
       transitioning: true,
     };
-  }, [drawable, transition, progress, timed, domain]);
+  }, [drawable, transition, progress, timed, timedSecondary, domain]);
 
   const geometry = useMemo(() => {
     if (!frame || !size || size.width === 0) return null;
@@ -214,6 +253,9 @@ export function LiveLineChart({
 
     const plotted = frame.series.map((point) => ({ t: point.t, score: point.score, x: x(point.t), y: y(point.score) }));
     const lead = plotted[plotted.length - 1];
+    const secondaryPlotted = frame.secondarySeries.map((point) => ({ t: point.t, score: point.score, x: x(point.t), y: y(point.score) }));
+    const secondaryLead = secondaryPlotted.length >= 2 ? secondaryPlotted[secondaryPlotted.length - 1] : null;
+    const secondaryByTime = new Map(secondaryPlotted.map((point) => [point.t, point.score]));
 
     let min = timed[0];
     let max = timed[0];
@@ -236,6 +278,9 @@ export function LiveLineChart({
       plotted,
       path: seriesPath(plotted, gapMs),
       lead,
+      secondaryPath: secondaryPlotted.length >= 2 ? seriesPath(secondaryPlotted, gapMs) : null,
+      secondaryLead,
+      secondaryByTime,
       grid: gridValues(lo, hi),
       first: timed[0],
       last: timed[timed.length - 1],
@@ -265,6 +310,8 @@ export function LiveLineChart({
     : undefined;
 
   const hovered = hover !== null && geometry && !geometry.transitioning && geometry.plotted[hover] ? geometry.plotted[hover] : null;
+  const hoveredSecondary = hovered && hasSecondary && geometry ? (geometry.secondaryByTime.get(hovered.t) ?? null) : null;
+  const formatSecondary = secondary?.formatValue ?? formatValue;
 
   return (
     <div ref={wrapperRef} className={cn("relative h-56 w-full select-none sm:h-72", className)}>
@@ -344,10 +391,16 @@ export function LiveLineChart({
               </text>
             ))}
 
-            {/* The line, clipped so aged-out points slide away under the left edge */}
+            {/* The lines, clipped so aged-out points slide away under the left edge. The secondary sits under the primary. */}
             <g clipPath={`url(#${clipId})`}>
+              {geometry.secondaryPath ? (
+                <path d={geometry.secondaryPath} fill="none" className="stroke-fg-muted" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+              ) : null}
               <path d={geometry.path} fill="none" className="stroke-fg" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
             </g>
+
+            {/* The secondary's end: a still dot, so the two ends read as two lines. */}
+            {geometry.secondaryLead ? <circle cx={geometry.secondaryLead.x} cy={geometry.secondaryLead.y} r={2.5} className="fill-fg-muted" /> : null}
 
             {/* The leading edge: the dot, its breath, and the ring that marks a tick landing */}
             <g transform={`translate(${geometry.lead.x.toFixed(2)} ${geometry.lead.y.toFixed(2)})`}>
@@ -359,6 +412,7 @@ export function LiveLineChart({
             {hovered ? (
               <g>
                 <line x1={hovered.x} x2={hovered.x} y1={MARGIN.top} y2={MARGIN.top + geometry.innerHeight} className="stroke-line-strong" strokeWidth={1} strokeDasharray="2 3" />
+                {hoveredSecondary !== null ? <circle cx={hovered.x} cy={geometry.y(hoveredSecondary)} r={3.5} className="fill-fg-muted stroke-canvas" strokeWidth={2} /> : null}
                 <circle cx={hovered.x} cy={hovered.y} r={4.5} className="fill-fg stroke-canvas" strokeWidth={2} />
               </g>
             ) : null}
@@ -367,9 +421,22 @@ export function LiveLineChart({
           {hovered ? (
             <div
               className="pointer-events-none absolute top-0 flex -translate-x-1/2 flex-col items-center gap-0.5 rounded-md bg-surface-overlay px-2.5 py-1.5 shadow-raised"
-              style={{ left: Math.min(Math.max(hovered.x, 56), size.width - 56) }}
+              style={{ left: Math.min(Math.max(hovered.x, 64), size.width - 64) }}
             >
-              <span className="num text-sm font-semibold leading-none text-fg">{formatValue(hovered.score)}</span>
+              {hasSecondary && hoveredSecondary !== null ? (
+                <>
+                  <span className="num whitespace-nowrap text-sm font-semibold leading-none text-fg">
+                    {primaryLabel ? <span className="mr-1 text-2xs font-medium text-fg-muted">{primaryLabel}</span> : null}
+                    {formatValue(hovered.score)}
+                  </span>
+                  <span className="num whitespace-nowrap text-xs leading-none text-fg-secondary">
+                    <span className="mr-1 text-2xs font-medium text-fg-muted">{secondary?.label}</span>
+                    {formatSecondary(hoveredSecondary)}
+                  </span>
+                </>
+              ) : (
+                <span className="num text-sm font-semibold leading-none text-fg">{formatValue(hovered.score)}</span>
+              )}
               <span className="num whitespace-nowrap text-2xs text-fg-muted">
                 {(geometry.t1 - geometry.t0 <= TWO_DAYS ? clockFormat : dayClockFormat).format(hovered.t)}
               </span>

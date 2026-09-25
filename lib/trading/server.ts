@@ -59,6 +59,12 @@ export interface PlaceOrderInput {
   /** The price the user confirmed, in cents per share, for the tolerance check. */
   quotedPriceCents: number | null;
   surface: string | null;
+  /**
+   * A salted hash of the caller's address and user agent (Phase 29), or null
+   * when no salt is configured. Stored on the order for the shared-
+   * infrastructure detector; never the address itself.
+   */
+  fingerprintHash: string | null;
 }
 
 /** Calls place_order() as the signed-in user. Rejections come back as values; only transport failures throw. */
@@ -76,6 +82,7 @@ export async function placeOrderAsUser(input: PlaceOrderInput): Promise<OrderRes
     // server never infers it from the size of the number. Phase 27a removes
     // the other branch once trade_orders.quantity_scale shows no 'share' rows.
     p_quantity_scale: "milli",
+    p_fingerprint_hash: input.fingerprintHash ?? undefined,
   });
   if (error) throw new Error(error.message);
   return toOrderResult(data, input.personId);

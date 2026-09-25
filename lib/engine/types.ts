@@ -6,8 +6,20 @@ import type { TargetDriftState } from "@/lib/engine/target-drift";
 import type { InversePair, Person } from "@/types";
 import type { Json } from "@/types/database";
 
-/** The five forces plus the second-pass inverse-pair adjustment. */
+/**
+ * The five forces plus the second-pass inverse-pair adjustment. Since Phase
+ * 29 only three of the five (and the inverse pair) move the SCORE; Conviction
+ * and Trading Activity are still computed every tick and reported, but they
+ * read participant activity, and nothing derived from participant activity
+ * may feed the index. They describe the MARKET PRICE instead.
+ */
 export type ForceName = "gravity" | "signals" | "market_mood" | "conviction" | "trading_activity" | "inverse_pair";
+
+/** The forces that move the score. Everything else the tick computes is a market reading. */
+export const SCORE_FORCES: readonly ForceName[] = ["gravity", "signals", "market_mood", "inverse_pair"];
+
+/** The forces that read participant activity: computed, reported, and kept out of the score (Phase 29, Option A). */
+export const MARKET_FORCES: readonly ForceName[] = ["conviction", "trading_activity"];
 
 export const FORCE_NAMES: readonly ForceName[] = [
   "gravity",
@@ -101,7 +113,10 @@ export interface PersonTickResult {
   deltaHours: number;
   /** Concentration = open capital / max_allocation. */
   concentration: number;
+  /** The forces that moved the score this tick. */
   forces: ForceEntry[];
+  /** Conviction and Trading Activity: computed from participant activity, reported, never summed into the score (Phase 29). */
+  marketForces: ForceEntry[];
   scoredSignals: ScoredSignal[];
   /** Sum of the Signals force this tick (input to Market Mood and inverse pairs). */
   signalsImpact: number;
@@ -134,8 +149,15 @@ export interface PersonSummary {
   spread: number;
   buyPrice: number;
   sellPrice: number;
-  /** Non-zero force contributions. */
+  /** Non-zero force contributions TO THE SCORE. */
   forces: Partial<Record<ForceName, number>>;
+  /**
+   * The two participant-derived readings (Phase 29): what Conviction and
+   * Trading Activity computed this tick, in the points they would once have
+   * moved the score by. Recorded for the market, never added to the score.
+   * Absent on summaries written before Phase 29.
+   */
+  market?: { conviction: number; tradingActivity: number };
   signalsProcessed: number;
 }
 

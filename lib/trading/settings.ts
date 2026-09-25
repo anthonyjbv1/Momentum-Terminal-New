@@ -5,7 +5,7 @@ import { cache } from "react";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 import { SHORTING_ENABLED_DEFAULT } from "./direction";
-import { PRICE_TOLERANCE_CENTS_DEFAULT, RISK_LEVER_DEFAULTS, cents, type Cents } from "./model";
+import { MIN_ORDER_CENTS, PRICE_TOLERANCE_CENTS_DEFAULT, RISK_LEVER_DEFAULTS, cents, type Cents } from "./model";
 
 /**
  * Platform-wide switches and tunables, read from public.platform_settings
@@ -31,6 +31,10 @@ export interface PlatformSettings {
   maxDailyCloseCents: Cents;
   /** RISK LEVER 4: seconds a lot must be open before it can be closed. */
   closeCooldownSeconds: number;
+  /** RISK LEVER 5 (Phase 27): the smallest order, in cents, either mode. */
+  minOrderCents: Cents;
+  /** THE IDENTITY HOOK (Phase 29): when true, an account with no verified identity cannot place an order. */
+  requireVerifiedIdentity: boolean;
   updatedAt: string | null;
 }
 
@@ -41,6 +45,8 @@ export const DEFAULT_PLATFORM_SETTINGS: PlatformSettings = {
   maxOpenInterestShare: RISK_LEVER_DEFAULTS.maxOpenInterestShare,
   maxDailyCloseCents: RISK_LEVER_DEFAULTS.maxDailyCloseCents,
   closeCooldownSeconds: RISK_LEVER_DEFAULTS.closeCooldownSeconds,
+  minOrderCents: MIN_ORDER_CENTS,
+  requireVerifiedIdentity: false,
   updatedAt: null,
 };
 
@@ -53,7 +59,7 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("platform_settings")
-    .select("shorting_enabled, price_tolerance_cents, max_units_per_person, max_open_interest_share, max_daily_close_cents, close_cooldown_seconds, updated_at")
+    .select("shorting_enabled, price_tolerance_cents, max_units_per_person, max_open_interest_share, max_daily_close_cents, close_cooldown_seconds, min_order_cents, require_verified_identity, updated_at")
     .eq("id", true)
     .maybeSingle();
 
@@ -71,6 +77,8 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
     maxOpenInterestShare: Number.isFinite(share) ? share : RISK_LEVER_DEFAULTS.maxOpenInterestShare,
     maxDailyCloseCents: cents(toInt(data.max_daily_close_cents, RISK_LEVER_DEFAULTS.maxDailyCloseCents)),
     closeCooldownSeconds: toInt(data.close_cooldown_seconds, RISK_LEVER_DEFAULTS.closeCooldownSeconds),
+    minOrderCents: cents(toInt(data.min_order_cents, MIN_ORDER_CENTS)),
+    requireVerifiedIdentity: data.require_verified_identity === true,
     updatedAt: data.updated_at ?? null,
   };
 });

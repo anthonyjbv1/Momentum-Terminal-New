@@ -6,12 +6,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createTestDatabase, type TestDatabase } from "@/lib/__tests__/pglite";
 
 /**
- * PHASE 27 IS REVERSIBLE, AND THIS IS WHAT SAYS SO.
+ * PHASE 27 WAS REVERSIBLE, AND PHASE 29 SUPERSEDES THAT.
  *
- * supabase/rollback/ holds a down migration that takes units back to whole
- * shares. A rollback file nobody has run is a claim, not a property, so these
- * tests run it: against a database that has been traded on, and against one
- * holding a fraction, which it must refuse rather than round away.
+ * supabase/rollback/ holds the down migration that took units back to whole
+ * shares. Until Phase 29 these tests ran it against a traded-on database and
+ * against one holding a fraction (which it refused). Phase 29 — the market
+ * price — renamed positions.entry_score, replaced the flat CHECK constraints
+ * the down file restores with the cost-curve identities, and gave
+ * place_order() an eighth argument, so running that file on a Phase 29 schema
+ * would install flat functions over curve-priced rows. The file now refuses
+ * on such a schema, having changed nothing, and that refusal is what these
+ * tests pin. The whole-share path itself was verified by this file's earlier
+ * form, before Phase 29.
  *
  * The rollback lives outside supabase/migrations/ so nothing applies it by
  * accident, which is also why it is read from disk here by name.
@@ -36,6 +42,7 @@ async function seed(): Promise<{ userId: string; drake: string }> {
   const [user] = await database.rows<{ id: string }>("insert into auth.users (email) values ('rollback@example.com') returning id");
   const [drake] = await database.rows<{ id: string }>("select id from public.people where slug = 'drake'");
   await database.exec("update public.platform_settings set close_cooldown_seconds = 0 where id");
+  await database.exec("update public.market_tier_settings set min_hold_seconds = 0");
   await database.rows("update public.people set current_score = 50, spread = 0.5 where id = $1", [drake.id]);
   await database.actAs(user.id);
   return { userId: user.id, drake: drake.id };
@@ -49,10 +56,11 @@ interface Figures {
   open_units: string;
   closed_units: string;
   order_units: string;
+  premium: string;
 }
 
-/** The same money figures the production reconciliation reads, per user. */
-async function figures(userId: string): Promise<Figures> {
+/** The same money figures the production reconciliation reads, per user, plus the dealer's state. */
+async function figures(userId: string, personId: string): Promise<Figures> {
   const [row] = await database.rows<Figures>(
     `select (select wallet_balance_cents from public.users where id = $1)::text as cash,
             (select coalesce(sum(p.amount_cents - coalesce((select sum(c.cost_cents) from public.position_closes c where c.position_id = p.id), 0)), 0)
@@ -62,79 +70,49 @@ async function figures(userId: string): Promise<Figures> {
                from public.transactions t where t.user_id = $1)::text as credit,
             (select coalesce(sum(p.open_units), 0) from public.positions p where p.user_id = $1 and p.is_open)::text as open_units,
             (select coalesce(sum(c.units), 0) from public.position_closes c where c.user_id = $1)::text as closed_units,
-            (select coalesce(sum(o.units), 0) from public.trade_orders o where o.user_id = $1)::text as order_units`,
-    [userId],
+            (select coalesce(sum(o.units), 0) from public.trade_orders o where o.user_id = $1)::text as order_units,
+            (select premium_cents from public.people where id = $2)::text as premium`,
+    [userId, personId],
   );
   return row;
 }
 
-describe("the Phase 27 rollback", () => {
-  it("takes a traded-on database back to whole shares with every cent intact", async () => {
+describe("the Phase 27 rollback under Phase 29", () => {
+  it("refuses on a Phase 29 schema, naming the reason, and changes nothing", async () => {
     const { userId, drake } = await seed();
     // Three whole-share orders through the compatibility path, one of them a
-    // partial close, so a lot has been cut and a basis has been split.
+    // partial close, so a lot has been cut, a basis split and the dealer moved.
     await database.rows("select public.place_order($1::uuid, 'BUY', 4)", [drake]);
     await database.rows("select public.place_order($1::uuid, 'BUY', 2)", [drake]);
     await database.rows("select public.place_order($1::uuid, 'SELL', 3)", [drake]);
 
-    const before = await figures(userId);
+    const before = await figures(userId, drake);
     expect(before.open_units).toBe(String(3 * SHARE));
     expect(before.closed_units).toBe(String(3 * SHARE));
 
-    await database.exec(ROLLBACK);
+    await expect(database.exec(ROLLBACK)).rejects.toThrow(/Phase 29 .* supersedes/i);
 
-    const after = await figures(userId);
-    // Every cent is the same number it was.
-    expect(after.cash).toBe(before.cash);
-    expect(after.basis).toBe(before.basis);
-    expect(after.realized).toBe(before.realized);
-    expect(after.credit).toBe(before.credit);
-    // Every quantity is a thousandth of what it was: whole shares again.
-    expect(after.open_units).toBe("3");
-    expect(after.closed_units).toBe("3");
-    expect(after.order_units).toBe(String(Number(before.order_units) / SHARE));
-  });
-
-  it("leaves the pre-Phase-27 shape behind it: no basis column, no scale column, the five-argument order", async () => {
-    const { drake } = await seed();
-    await database.rows("select public.place_order($1::uuid, 'BUY', 2)", [drake]);
-    await database.exec(ROLLBACK);
-
-    const [columns] = await database.rows<{ open_cost: string; scale: string; spend: string; minimum: string }>(
-      `select (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'positions' and column_name = 'open_cost_cents')::text as open_cost,
-              (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'trade_orders' and column_name = 'quantity_scale')::text as scale,
-              (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'trade_orders' and column_name = 'requested_spend_cents')::text as spend,
-              (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'platform_settings' and column_name = 'min_order_cents')::text as minimum`,
-    );
-    expect(columns).toEqual({ open_cost: "0", scale: "0", spend: "0", minimum: "0" });
-
-    const [functions] = await database.rows<{ scale_fn: string; seven_arg: string; five_arg: string }>(
-      `select (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'units_per_share')::text as scale_fn,
-              has_function_privilege('authenticated', 'public.place_order(uuid, text, bigint, bigint, text)', 'execute')::text as five_arg,
+    // The refusal is the whole transaction: every figure is exactly as it was,
+    // the schema included.
+    expect(await figures(userId, drake)).toEqual(before);
+    const [columns] = await database.rows<{ premium: string; entry_points: string; entry_score: string; eight_arg: string }>(
+      `select (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'people' and column_name = 'premium_cents')::text as premium,
+              (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'positions' and column_name = 'entry_price_points')::text as entry_points,
+              (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'positions' and column_name = 'entry_score')::text as entry_score,
               (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-                where n.nspname = 'public' and p.proname = 'place_order' and p.pronargs = 7)::text as seven_arg`,
+                where n.nspname = 'public' and p.proname = 'place_order' and p.pronargs = 8)::text as eight_arg`,
     );
-    expect(functions).toEqual({ scale_fn: "0", five_arg: "true", seven_arg: "0" });
-
-    // And the restored order still works, in whole shares.
-    const [{ r }] = await database.rows<{ r: { ok: boolean; order: { units: number } } }>(
-      "select public.place_order($1::uuid, 'BUY', 1) as r",
-      [drake],
-    );
-    expect(r.ok).toBe(true);
-    expect(r.order.units).toBe(1);
+    expect(columns).toEqual({ premium: "1", entry_points: "1", entry_score: "0", eight_arg: "1" });
   });
 
-  it("refuses, changing nothing, when anyone holds a fraction of a share", async () => {
+  it("refuses before it reaches the fractional-quantity guard", async () => {
     const { userId, drake } = await seed();
-    // 0.25 of a share: nothing whole-share units can express.
     await database.rows("select public.place_order($1::uuid, 'BUY', $2::bigint, null::bigint, null, null::bigint, 'milli')", [drake, 250]);
-    const before = await figures(userId);
+    const before = await figures(userId, drake);
 
-    await expect(database.exec(ROLLBACK)).rejects.toThrow(/fractional quantities exist/i);
+    await expect(database.exec(ROLLBACK)).rejects.toThrow(/Phase 29/i);
 
-    // The refusal is the whole transaction: the holding is exactly as it was.
-    expect(await figures(userId)).toEqual(before);
+    expect(await figures(userId, drake)).toEqual(before);
     expect(before.open_units).toBe("250");
   });
 }, 120_000);

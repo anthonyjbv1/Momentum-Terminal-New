@@ -34,17 +34,19 @@ import { TradeQuote } from "@/components/trade/trade-quote";
  */
 export interface PositionsListProps {
   positions: PortfolioPosition[];
+  /** The clock a halt is judged against (Phase 29): the page's render time, moved on by the view. */
+  now: number;
   onClose: (position: PortfolioPosition) => void;
   onOpenPerson: (position: PortfolioPosition) => void;
   className?: string;
 }
 
-export function PositionsList({ positions, onClose, onOpenPerson, className }: PositionsListProps) {
+export function PositionsList({ positions, now, onClose, onOpenPerson, className }: PositionsListProps) {
   return (
     <section aria-labelledby="positions-heading" className={cn("flex flex-col gap-4", className)}>
       <SectionHeader
         title="Open positions"
-        meta={positions.length > 0 ? `${positions.length === 1 ? "1 person" : `${positions.length} people`} · marked at the Sell quote` : "None open"}
+        meta={positions.length > 0 ? `${positions.length === 1 ? "1 person" : `${positions.length} people`} · marked at the Sell side of the market price` : "None open"}
       />
       <h2 id="positions-heading" className="sr-only">
         Open positions
@@ -70,7 +72,7 @@ export function PositionsList({ positions, onClose, onOpenPerson, className }: P
       ) : (
         <Card className="flex flex-col divide-y divide-line">
           {positions.map((position) => (
-            <PositionRow key={`${position.person.id}:${position.direction}`} position={position} onClose={onClose} onOpenPerson={onOpenPerson} />
+            <PositionRow key={`${position.person.id}:${position.direction}`} position={position} now={now} onClose={onClose} onOpenPerson={onOpenPerson} />
           ))}
         </Card>
       )}
@@ -78,11 +80,14 @@ export function PositionsList({ positions, onClose, onOpenPerson, className }: P
   );
 }
 
-function PositionRow({ position, onClose, onOpenPerson }: { position: PortfolioPosition; onClose: (position: PortfolioPosition) => void; onOpenPerson: (position: PortfolioPosition) => void }) {
+function PositionRow({ position, now, onClose, onOpenPerson }: { position: PortfolioPosition; now: number; onClose: (position: PortfolioPosition) => void; onOpenPerson: (position: PortfolioPosition) => void }) {
   const { person } = position;
   const pct = position.unrealizedPct;
   const tone = position.unrealizedPnlCents > 0 ? "text-positive" : position.unrealizedPnlCents < 0 ? "text-negative" : "text-fg-muted";
   const markLabel = position.markSide === "SELL" ? "Sell" : "Buy";
+  // A halt or a pause closes the way out for now; display-only leaves it open (Phase 29).
+  const halted = position.haltedUntil !== null && Date.parse(position.haltedUntil) > now;
+  const closedState = halted ? "Halted" : position.tradingMode === "paused" ? "Paused" : null;
 
   return (
     <div className="grid grid-cols-[auto_1fr_1fr] items-center gap-x-4 gap-y-4 px-5 py-5 sm:grid-cols-[auto_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_auto] sm:gap-x-6">
@@ -132,7 +137,11 @@ function PositionRow({ position, onClose, onOpenPerson }: { position: PortfolioP
       </div>
 
       <div className="col-span-2 col-start-2 flex sm:col-span-1 sm:col-start-auto sm:justify-end">
-        {person.isActive ? (
+        {person.isActive && closedState ? (
+          <Button variant="outline" size="sm" className="min-w-24 text-fg-muted" disabled title={`Trading in ${person.name} is ${closedState.toLowerCase()}.`}>
+            {closedState}
+          </Button>
+        ) : person.isActive ? (
           <Button variant="sell" size="sm" className="min-w-24" onClick={() => onClose(position)} aria-label={`Sell ${person.name}`}>
             <TradeQuote label="Sell" cents={position.sellCents} />
           </Button>

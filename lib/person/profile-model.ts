@@ -22,6 +22,9 @@ export { categoryLabel };
 // The person
 // ---------------------------------------------------------------------------
 
+export type SubjectTier = "public_figure" | "private_individual";
+export type TradingMode = "tradeable" | "display_only" | "paused";
+
 export interface ProfilePerson {
   id: string;
   slug: string;
@@ -32,8 +35,28 @@ export interface ProfilePerson {
   /** The Gravity force's target as the Engine last used it: the seed plus the drifting target's offset (Phase 14). Where the score settles with nothing happening. */
   revertTarget: number;
   spread: number;
+  /** The market price's Buy side: score + premium + spread (Phase 29). */
   buyPrice: number | null;
+  /** The market price's Sell side: score + premium − spread. */
   sellPrice: number | null;
+  /**
+   * THE PREMIUM (Phase 29), in cents per share: how far the market price sits
+   * from the data. 0 means the market price is the score.
+   */
+  premiumCents: number;
+  /** score + premium, in points. */
+  marketPrice: number;
+  /** The dealer's inventory in units, and the depth the cost curve runs on (null: a flat market). */
+  inventoryUnits: number;
+  depthUnits: number | null;
+  premiumCapCents: number | null;
+  tier: SubjectTier;
+  tradingMode: TradingMode;
+  /** While in the future, every order is refused. */
+  haltedUntil: string | null;
+  haltReason: string | null;
+  /** The allocation cap Conviction's concentration is read against, in cents. 0 when the row did not carry it. */
+  maxAllocationCents: number;
   /** When the person entered the board. */
   createdAt: string;
   lastTickAt: string | null;
@@ -55,6 +78,18 @@ export interface ProfilePersonRow {
   spread: number | string;
   buy_price: number | string | null;
   sell_price: number | string | null;
+  /** Phase 29; absent (an older row shape) reads as a flat market at the score. */
+  premium_cents?: number | string | null;
+  market_price?: number | string | null;
+  market_inventory_units?: number | string | null;
+  tier?: string | null;
+  trading_mode?: string | null;
+  halted_until?: string | null;
+  halt_reason?: string | null;
+  /** The effective market parameters, joined by the reader; absent reads as a flat market. */
+  depth_units?: number | string | null;
+  premium_cap_cents?: number | string | null;
+  max_allocation_cents?: number | string | null;
   created_at: string;
   last_tick_at: string | null;
   /** Phase 19; absent reads as not paused. */
@@ -73,21 +108,64 @@ function toNullableNumber(value: unknown): number | null {
 }
 
 export function toProfilePerson(row: ProfilePersonRow): ProfilePerson {
+  const score = toNumber(row.current_score);
+  const premiumCents = Math.trunc(toNumber(row.premium_cents));
+  const haltedUntil = typeof row.halted_until === "string" ? row.halted_until : null;
   return {
     id: row.id,
     slug: row.slug,
     displayName: row.display_name,
     category: row.category,
     avatarUrl: row.avatar_url,
-    score: toNumber(row.current_score),
+    score,
     revertTarget: toNumber(row.revert_target) + toNumber(row.target_offset),
     spread: toNumber(row.spread),
     buyPrice: toNullableNumber(row.buy_price),
     sellPrice: toNullableNumber(row.sell_price),
+    premiumCents,
+    marketPrice: toNullableNumber(row.market_price) ?? score + premiumCents / 100,
+    inventoryUnits: Math.trunc(toNumber(row.market_inventory_units)),
+    depthUnits: toNullableNumber(row.depth_units) === null ? null : Math.trunc(toNumber(row.depth_units)),
+    premiumCapCents: toNullableNumber(row.premium_cap_cents) === null ? null : Math.trunc(toNumber(row.premium_cap_cents)),
+    tier: row.tier === "private_individual" ? "private_individual" : "public_figure",
+    tradingMode: row.trading_mode === "display_only" || row.trading_mode === "paused" ? row.trading_mode : "tradeable",
+    haltedUntil,
+    haltReason: haltedUntil && typeof row.halt_reason === "string" ? row.halt_reason : null,
+    maxAllocationCents: Math.max(0, Math.trunc(toNumber(row.max_allocation_cents))),
     createdAt: row.created_at,
     lastTickAt: row.last_tick_at,
     forecastPaused: row.forecast_paused === true,
   };
+}
+
+/**
+ * THE MARKET LINE under the score (Phase 29): "Market $66.00 · +4.0 above the
+ * data" / "in line with the data" / "−2.1 below the data". The premium is
+ * spoken at one decimal, so anything under 0.05 of a point reads as in line.
+ */
+export function marketLine(person: Pick<ProfilePerson, "premiumCents">): { relation: "above" | "below" | "in_line"; points: number; text: string } {
+  const points = Math.round(Math.abs(person.premiumCents) / 10) / 10;
+  if (points === 0) return { relation: "in_line", points: 0, text: "in line with the data" };
+  const figure = points.toFixed(1);
+  return person.premiumCents > 0 ? { relation: "above", points, text: `+${figure} above the data` } : { relation: "below", points, text: `−${figure} below the data` };
+}
+
+/**
+ * Whether the person can be traded right now, and the sentence to show when
+ * not. A halt outranks the mode: a display-only person can still be closed
+ * out of, but not while halted.
+ */
+export type TradingAvailability =
+  | { state: "tradeable" }
+  | { state: "halted"; until: string; reason: string | null }
+  | { state: "display_only" }
+  | { state: "paused" };
+
+export function tradingAvailability(person: Pick<ProfilePerson, "tradingMode" | "haltedUntil" | "haltReason">, now: number): TradingAvailability {
+  if (person.haltedUntil && Date.parse(person.haltedUntil) > now) return { state: "halted", until: person.haltedUntil, reason: person.haltReason };
+  if (person.tradingMode === "paused") return { state: "paused" };
+  if (person.tradingMode === "display_only") return { state: "display_only" };
+  return { state: "tradeable" };
 }
 
 /** Slugs are lowercase words joined by hyphens; anything else is a 404 before it reaches the database. */
@@ -139,16 +217,26 @@ export interface SeriesPoint {
   open: number;
   /** How many ticks the slice holds. */
   samples: number;
+  /**
+   * THE MARKET PRICE at the slice's last tick (Phase 29): the score plus the
+   * premium as it stood then. Absent on a series that carries no market line
+   * (the portfolio's value series, a row from before Phase 29).
+   */
+  market?: number;
+  /** The market price at the slice's first tick. */
+  marketOpen?: number;
 }
 
 export type SeriesByRange = Record<RangeKey, SeriesPoint[]>;
 
-/** A row of person_score_series() as the database returns it. */
+/** A row of person_score_series() / person_market_series() as the database returns it. */
 export interface SeriesRow {
   bucket_at: string;
   score: number | string;
   open: number | string | null;
   samples: number | string;
+  market?: number | string | null;
+  market_open?: number | string | null;
 }
 
 export function toSeries(rows: SeriesRow[]): SeriesPoint[] {
@@ -156,12 +244,18 @@ export function toSeries(rows: SeriesRow[]): SeriesPoint[] {
   for (const row of rows) {
     const score = toNullableNumber(row.score);
     if (score === null || !row.bucket_at) continue;
-    points.push({
+    const market = toNullableNumber(row.market);
+    const point: SeriesPoint = {
       at: row.bucket_at,
       score,
       open: toNullableNumber(row.open) ?? score,
       samples: Math.max(1, Math.round(toNumber(row.samples, 1))),
-    });
+    };
+    if (market !== null) {
+      point.market = market;
+      point.marketOpen = toNullableNumber(row.market_open) ?? market;
+    }
+    points.push(point);
   }
   return points.sort((a, b) => a.at.localeCompare(b.at));
 }
@@ -290,12 +384,19 @@ export const stateLabels: Record<MarketState, string> = {
 export const FORCE_KEYS = ["gravity", "signals", "market_mood", "conviction", "trading_activity"] as const;
 export type ForceKey = (typeof FORCE_KEYS)[number];
 
-export const FORCE_DEFINITIONS: Record<ForceKey, { label: string; description: string }> = {
-  gravity: { label: "Gravity", description: "Drift toward the gravity target" },
-  signals: { label: "Signals", description: "News and data about the person" },
-  market_mood: { label: "Market Mood", description: "The tide across the whole board" },
-  conviction: { label: "Conviction", description: "How much capital is committed" },
-  trading_activity: { label: "Trading Activity", description: "Live Buy and Sell flow" },
+/**
+ * What each force does. Since Phase 29 two of the five move the MARKET PRICE
+ * rather than the score: Conviction and Trading Activity read participant
+ * activity, and nothing derived from participant activity may feed the index.
+ */
+export type ForceRole = "score" | "market";
+
+export const FORCE_DEFINITIONS: Record<ForceKey, { label: string; description: string; role: ForceRole }> = {
+  gravity: { label: "Gravity", description: "Drift toward the gravity target", role: "score" },
+  signals: { label: "Signals", description: "News and data about the person", role: "score" },
+  market_mood: { label: "Market Mood", description: "The tide across the whole board", role: "score" },
+  conviction: { label: "Conviction", description: "Capital committed · moves the market price", role: "market" },
+  trading_activity: { label: "Trading Activity", description: "Buy and Sell flow · moves the market price", role: "market" },
 };
 
 export function isForceKey(value: unknown): value is ForceKey {
@@ -350,11 +451,15 @@ export interface ForceReading {
   key: ForceKey;
   label: string;
   description: string;
+  /** Whether the force moves the score or the market price (Phase 29). */
+  role: ForceRole;
   /**
    * Points this force added to the score over the last FORCES_WINDOW_MINUTES:
    * the sum of its per-tick contributions, which is exactly what it moved the
    * score by. 0 when the Engine ticked and the force did nothing (it writes no
-   * row for zero impact); null when it has never ticked this person.
+   * row for zero impact); null when it has never ticked this person. For a
+   * MARKET force it is always 0 once the Engine has ticked: it adds nothing to
+   * the score by construction, and the panel shows its market reading instead.
    */
   impact: number | null;
   direction: Direction;
@@ -403,6 +508,7 @@ export function readForces(window: ForceImpactRow[], latest: ScoreEventRow[], la
       key,
       label: FORCE_DEFINITIONS[key].label,
       description: FORCE_DEFINITIONS[key].description,
+      role: FORCE_DEFINITIONS[key].role,
       impact,
       // Coloured by the figure the panel shows, not by the sign underneath:
       // Gravity's pull toward a target just above the score is a small
@@ -452,11 +558,76 @@ export function convictionLevel(force: ForceReading | undefined): ConvictionLeve
   return "low";
 }
 
+/** The same bands, from the concentration itself: what the profile reads since the force stopped writing score_events (Phase 29). */
+export function convictionLevelFromConcentration(concentration: number | null): ConvictionLevel | null {
+  if (concentration === null || !Number.isFinite(concentration)) return null;
+  if (concentration <= CONVICTION_BANDS.lowUpTo) return "low";
+  if (concentration <= CONVICTION_BANDS.moderateUpTo) return "moderate";
+  return "high";
+}
+
 export const convictionLabels: Record<ConvictionLevel, string> = {
   low: "Low",
   moderate: "Moderate",
   high: "High",
 };
+
+// ---------------------------------------------------------------------------
+// THE MARKET READINGS (Phase 29): what the two market forces describe
+// ---------------------------------------------------------------------------
+
+/**
+ * Conviction and Trading Activity move the MARKET PRICE, not the score, so
+ * the forces panel shows what each of them reads rather than a points figure
+ * that is zero by construction. Both are participant activity, and both are
+ * computed from the same rows the Engine reads: open paper capital on the
+ * person over their allocation cap, and the trade tape over the display
+ * window.
+ */
+export interface MarketReadings {
+  conviction: {
+    /** Open paper capital on the person, in cents. */
+    openCapitalCents: number;
+    maxAllocationCents: number;
+    /** openCapital / maxAllocation, or null when the cap is zero. */
+    concentration: number | null;
+  };
+  tradingActivity: {
+    /** Buy cents minus Sell cents over the window. */
+    netFlowCents: number;
+    trades: number;
+    windowMinutes: number;
+  };
+}
+
+export function emptyMarketReadings(): MarketReadings {
+  return {
+    conviction: { openCapitalCents: 0, maxAllocationCents: 0, concentration: null },
+    tradingActivity: { netFlowCents: 0, trades: 0, windowMinutes: FORCES_WINDOW_MINUTES },
+  };
+}
+
+/** A trade_events row as the profile reads it. */
+export interface TradeEventRow {
+  side: string;
+  amount_cents: number | string;
+}
+
+export function readMarketReadings(openCapitalCents: number, maxAllocationCents: number, trades: TradeEventRow[], windowMinutes = FORCES_WINDOW_MINUTES): MarketReadings {
+  let netFlow = 0;
+  for (const trade of trades) {
+    const amount = toNumber(trade.amount_cents);
+    netFlow += trade.side === "SELL" ? -amount : amount;
+  }
+  return {
+    conviction: {
+      openCapitalCents,
+      maxAllocationCents,
+      concentration: maxAllocationCents > 0 ? openCapitalCents / maxAllocationCents : null,
+    },
+    tradingActivity: { netFlowCents: netFlow, trades: trades.length, windowMinutes },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Signals and the Engine's narratives, one list, newest first
@@ -567,6 +738,8 @@ export interface PersonProfile {
   state: StateReading;
   forces: ForceReading[];
   conviction: ConvictionLevel | null;
+  /** What the two market forces read right now (Phase 29). */
+  market: MarketReadings;
   /** The person's newest score_history row, or null before their first tick. */
   latestTick: { tickNumber: number; at: string } | null;
 }

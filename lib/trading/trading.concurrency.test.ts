@@ -42,6 +42,8 @@ beforeAll(async () => {
     ({ id: drake } = (await admin.query<{ id: string }>("select id from public.people where slug = 'drake'")).rows[0]);
     await admin.query("update public.people set current_score = 50, spread = 0.5 where id = $1", [drake]); // Buy 5050¢
     await admin.query("update public.platform_settings set close_cooldown_seconds = 0 where id");
+    // A flat market (Phase 29): the race is the point, not the curve.
+    await admin.query("update public.market_tier_settings set depth_units = null, min_hold_seconds = 0");
   } finally {
     admin.release();
   }

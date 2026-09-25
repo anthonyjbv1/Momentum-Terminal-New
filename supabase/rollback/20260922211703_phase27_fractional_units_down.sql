@@ -26,8 +26,25 @@ set local lock_timeout = '5s';
 lock table public.positions, public.position_closes, public.trade_orders, public.platform_settings in access exclusive mode;
 
 -- ---------------------------------------------------------------------------
--- 0. Refuse if any fraction of a share exists
+-- 0. Refuse if Phase 29 is applied, or if any fraction of a share exists
 -- ---------------------------------------------------------------------------
+
+-- PHASE 29 SUPERSEDES THIS FILE. The market price migration renamed
+-- positions.entry_score, replaced the flat CHECK constraints this file
+-- restores with the cost-curve identities, and gave place_order() an eighth
+-- argument. Running this on a Phase 29 schema would reinstall the flat
+-- functions over curve-priced rows, so it refuses, having changed nothing.
+-- Phase 29 has no down file of its own: it is forward-only by design, and the
+-- whole-share path this file guards was verified by its test before Phase 29.
+do $phase29$
+begin
+  if exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'people' and column_name = 'premium_cents') then
+    raise exception 'Phase 27 rollback refused: Phase 29 (the market price) is applied and supersedes this file.'
+      using errcode = '22023';
+  end if;
+end
+$phase29$;
 
 do $guard$
 begin

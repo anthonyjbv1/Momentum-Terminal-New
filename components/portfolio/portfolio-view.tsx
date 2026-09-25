@@ -5,13 +5,14 @@ import { useCallback, useMemo, useState } from "react";
 
 import { cn } from "@/lib/cn";
 import type { RosterPerson } from "@/lib/feed/feed";
-import { RANGES, defaultRange, rangeAvailable, type RangeKey, type SeriesByRange } from "@/lib/person/profile-model";
+import { RANGES, defaultRange, rangeAvailable, tradingAvailability, type RangeKey, type SeriesByRange } from "@/lib/person/profile-model";
 import { portfolioState, toPositionSummary, type PortfolioPosition, type PortfolioSummary, type TradeHistoryEntry, type TradeHistoryPage } from "@/lib/portfolio/model";
-import { cents, type Cents } from "@/lib/trading/model";
+import { cents, flatBook, type Cents } from "@/lib/trading/model";
 import { RangeToggle } from "@/components/person/range-toggle";
 import { TradeSheet } from "@/components/trade/trade-sheet";
 import { Card } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/page-header";
+import { useNow } from "@/components/ui/use-now";
 
 import { PortfolioEmpty } from "./portfolio-empty";
 import { PositionsList } from "./positions-list";
@@ -39,6 +40,10 @@ export interface PortfolioViewProps {
   roster: RosterPerson[];
   shortingEnabled: boolean;
   toleranceCents: Cents;
+  /** platform_settings.min_order_cents, for the sheet's floor. */
+  minOrderCents: Cents;
+  /** Server render time, so a halt's state agrees between server and client. */
+  renderedAt: number;
   loggingEnabled: boolean;
   /** Live overrides for verification harnesses; production uses the defaults. */
   live?: LivePortfolioOptions;
@@ -47,10 +52,11 @@ export interface PortfolioViewProps {
   className?: string;
 }
 
-export function PortfolioView({ initialSummary, initialSeries, initialHistory, roster, shortingEnabled, toleranceCents, loggingEnabled, live, historyEndpoint, className }: PortfolioViewProps) {
+export function PortfolioView({ initialSummary, initialSeries, initialHistory, roster, shortingEnabled, toleranceCents, minOrderCents, renderedAt, loggingEnabled, live, historyEndpoint, className }: PortfolioViewProps) {
   const router = useRouter();
   const { summary, series, version, refresh } = useLivePortfolio(initialSummary, initialSeries, live);
   const state = portfolioState(summary);
+  const now = useNow(renderedAt);
 
   usePortfolioLogging(loggingEnabled, { positions: initialSummary.positionCount, orders: initialSummary.orders });
 
@@ -116,23 +122,28 @@ export function PortfolioView({ initialSummary, initialSeries, initialHistory, r
         <PortfolioEmpty roster={roster} cashCents={summary.cashCents} />
       ) : (
         <>
-          <PositionsList positions={summary.positions} onClose={(position) => setClosing(position.person.id)} onOpenPerson={onOpenPosition} />
+          <PositionsList positions={summary.positions} now={now} onClose={(position) => setClosing(position.person.id)} onOpenPerson={onOpenPosition} />
           <TradeHistory initialPage={initialHistory} onOpenPerson={onOpenHistory} endpoint={historyEndpoint} />
         </>
       )}
 
       {closingPosition ? (
+        // The summary carries the quotes and the premium but not the dealer's
+        // book, so the sheet previews flat at the quote and reports the
+        // server's average after the fill (Phase 29).
         <TradeSheet
           key={closingPosition.person.id}
           open
           side="SELL"
           person={{ id: closingPosition.person.id, slug: closingPosition.person.slug, displayName: closingPosition.person.name }}
-          buyCents={closingPosition.buyCents}
-          sellCents={closingPosition.sellCents}
+          book={flatBook(closingPosition.buyCents, closingPosition.sellCents, closingPosition.premiumCents)}
+          marketPrice={closingPosition.marketPrice}
+          availability={tradingAvailability({ tradingMode: closingPosition.tradingMode, haltedUntil: closingPosition.haltedUntil, haltReason: null }, now)}
           balanceCents={summary.cashCents ?? cents(0)}
           position={toPositionSummary(closingPosition)}
           shortingEnabled={shortingEnabled}
           toleranceCents={toleranceCents}
+          minOrderCents={minOrderCents}
           loggingEnabled={loggingEnabled}
           surface={PORTFOLIO_SURFACE}
           onClose={() => setClosing(null)}

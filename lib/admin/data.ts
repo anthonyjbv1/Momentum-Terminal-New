@@ -663,12 +663,14 @@ export async function readLevers(): Promise<Lever[]> {
   if (error) throw new Error(`platform_settings: ${error.message}`);
 
   const levers: Lever[] = [
-    { name: "Shorting", value: data?.shorting_enabled ? "ENABLED" : "disabled", source: "platform_settings.shorting_enabled", note: "Sell-to-open is refused by place_order() and by a trigger while this is false." },
-    { name: "Price tolerance", value: `${data?.price_tolerance_cents ?? "—"}¢`, source: "platform_settings.price_tolerance_cents", note: "How far the server quote may move from the client's before an order is rejected." },
-    { name: "Max units per person", value: (data?.max_units_per_person ?? "—").toLocaleString(), source: "platform_settings.max_units_per_person", note: "Ceiling on one account's open units in one person." },
+    { name: "Shorting", value: data?.shorting_enabled ? "ENABLED" : "disabled", source: "platform_settings.shorting_enabled", note: "Sell-to-open is refused by place_order() and by a trigger while this is false. A tier's shorting_allowed and a per-person override can still say no." },
+    { name: "Price tolerance", value: `${data?.price_tolerance_cents ?? "—"}¢`, source: "platform_settings.price_tolerance_cents", note: "How far the server's AVERAGE fill may sit from the price the client reviewed before an order is refused with the new quote (Phase 29: the average over the whole walk, not the first share)." },
+    { name: "Max units per person", value: (data?.max_units_per_person ?? "—").toLocaleString(), source: "platform_settings.max_units_per_person", note: "Ceiling on one account's open units (thousandths of a share) in one person." },
     { name: "Max open-interest share", value: String(data?.max_open_interest_share ?? "—"), source: "platform_settings.max_open_interest_share", note: "Ceiling on one account's share of a person's open interest. 1 = no limit." },
     { name: "Max daily close", value: `$${(((data?.max_daily_close_cents ?? 0) as number) / 100).toLocaleString()}`, source: "platform_settings.max_daily_close_cents", note: "Ceiling on realised value closed by one account in a day." },
-    { name: "Close cooldown", value: `${data?.close_cooldown_seconds ?? "—"}s`, source: "platform_settings.close_cooldown_seconds", note: "Minimum hold before a position may be closed. Policy floor is one full tick (30 s)." },
+    { name: "Close cooldown", value: `${data?.close_cooldown_seconds ?? "—"}s`, source: "platform_settings.close_cooldown_seconds", note: "Minimum hold before a position may be closed; the longer of this and the tier's min_hold_seconds applies. Policy floor is one full tick (30 s)." },
+    { name: "Minimum order", value: `$${(((data?.min_order_cents ?? 0) as number) / 100).toFixed(2)}`, source: "platform_settings.min_order_cents", note: "Risk lever 5 (Phase 27): the smallest order in either mode, checked against the amount entered in Dollars and the notional in Shares." },
+    { name: "Identity required", value: data?.require_verified_identity ? "REQUIRED" : "not required", source: "platform_settings.require_verified_identity", note: "The identity hook (Phase 29): when on, an account with no users.identity_verified_at cannot place an order (code identity_required). One enforcement point, no vendor." },
     { name: "Notable-move threshold", value: `${HIGH_IMPACT_THRESHOLD} points`, source: "lib/feed/feed-model.ts", note: "A recorded move at or beyond this takes the pinned treatment in the Feed." },
     { name: "Max signal impact per tick", value: `±${DEFAULT_ENGINE_CONFIG.signals.maxAbsImpactPerTick} points`, source: "lib/engine/config.ts", note: "Brake on the Signals force, whatever the volume of evidence." },
     {
@@ -823,6 +825,271 @@ export async function readWaitlist(): Promise<WaitlistReport> {
       source: row.source,
       campaign: row.utm_campaign ?? row.utm_source ?? null,
       referrerHost: hostOf(row.referrer),
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// g) The market: the review queue, the market's state, the settings (Phase 29)
+// ---------------------------------------------------------------------------
+
+export interface AlertRow {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  type: string;
+  severity: string;
+  status: string;
+  personId: string | null;
+  personSlug: string | null;
+  personName: string | null;
+  /** The accounts named, as usernames where known; ids otherwise. */
+  users: Array<{ id: string; username: string | null; frozen: boolean }>;
+  /** Counts, windows and salted hashes only: no address ever reaches this row. */
+  evidence: Record<string, unknown>;
+  resolvedAt: string | null;
+  resolutionNote: string | null;
+}
+
+export interface SurveillanceEventRow {
+  id: number;
+  recordedAt: string;
+  detector: string;
+  severity: string;
+  personSlug: string | null;
+  accounts: number;
+  alertId: string | null;
+  evidence: Record<string, unknown>;
+}
+
+export interface ExcludedPartyRow {
+  id: string;
+  userId: string;
+  username: string | null;
+  personId: string | null;
+  personSlug: string | null;
+  reason: string;
+  createdAt: string;
+}
+
+export interface FrozenAccountRow {
+  id: string;
+  username: string;
+  frozenAt: string;
+  reason: string | null;
+}
+
+export interface MarketPersonRow {
+  id: string;
+  slug: string;
+  displayName: string;
+  tier: string;
+  tradingMode: string;
+  haltedUntil: string | null;
+  haltReason: string | null;
+  score: number;
+  premiumCents: number;
+  marketPrice: number;
+  inventoryUnits: number;
+  overrides: { depthUnits: number | null; halfLifeTicks: number | null; premiumCapCents: number | null; shorting: boolean | null };
+}
+
+export interface TierSettingsRow {
+  tier: string;
+  depthUnits: number | null;
+  halfLifeTicks: number;
+  premiumCapCents: number;
+  minHoldSeconds: number;
+  maxOrderShareOfDepth: number;
+  aggregateExposureCapUnits: number;
+  breakerPremiumCents: number;
+  breakerWindowSeconds: number;
+  breakerHaltSeconds: number;
+  breakerPriceCents: number | null;
+  shortingAllowed: boolean;
+  alertOnHalt: boolean;
+  updatedAt: string;
+}
+
+export interface AuditRow {
+  id: number;
+  performedAt: string;
+  actor: string;
+  action: string;
+  alertId: string | null;
+  targetUser: string | null;
+  targetPersonSlug: string | null;
+  note: string | null;
+  details: Record<string, unknown>;
+}
+
+export interface MarketReport {
+  open: AlertRow[];
+  closed: AlertRow[];
+  events: SurveillanceEventRow[];
+  excluded: ExcludedPartyRow[];
+  frozen: FrozenAccountRow[];
+  people: MarketPersonRow[];
+  tiers: TierSettingsRow[];
+  /** The detectors' thresholds, from platform_settings, name → value. */
+  thresholds: Array<{ name: string; value: string; note: string }>;
+  /** The house book, summed by category, all time and the trailing day. Integer cents; positive is a house gain. */
+  house: Array<{ category: string; allTimeCents: number; dayCents: number; rows: number }>;
+  audit: AuditRow[];
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+/** Every row read into the console, so the operator can act on it: bounded, newest first. */
+const ALERT_LIMIT = 50;
+const HOUSE_ROW_CAP = 20_000;
+
+export async function readMarket(): Promise<MarketReport> {
+  const client = await adminClient();
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const [open, closed, events, excluded, frozen, people, tiers, settings, house, audit] = await Promise.all([
+    client.from("alerts").select("*").in("status", ["open", "reviewing"]).order("created_at", { ascending: false }).limit(ALERT_LIMIT),
+    client.from("alerts").select("*").in("status", ["resolved", "dismissed"]).order("updated_at", { ascending: false }).limit(RECENT_LIMIT),
+    client.from("surveillance_events").select("*").order("recorded_at", { ascending: false }).order("id", { ascending: false }).limit(RECENT_LIMIT),
+    client.from("excluded_parties").select("*").is("removed_at", null).order("created_at", { ascending: false }).limit(ALERT_LIMIT),
+    client.from("users").select("id, username, frozen_at, frozen_reason").not("frozen_at", "is", null).order("frozen_at", { ascending: false }).limit(ALERT_LIMIT),
+    client
+      .from("people")
+      .select("id, slug, display_name, tier, trading_mode, halted_until, halt_reason, current_score, premium_cents, market_price, market_inventory_units, depth_units_override, decay_half_life_ticks_override, premium_cap_cents_override, shorting_override")
+      .eq("is_active", true)
+      .order("slug"),
+    client.from("market_tier_settings").select("*").order("tier"),
+    client.from("platform_settings").select("*").maybeSingle(),
+    client.from("house_ledger").select("category, amount_cents, recorded_at").order("recorded_at", { ascending: false }).limit(HOUSE_ROW_CAP),
+    client.from("admin_audit_log").select("*").order("performed_at", { ascending: false }).order("id", { ascending: false }).limit(RECENT_LIMIT),
+  ]);
+  for (const [label, result] of Object.entries({ open, closed, events, excluded, frozen, people, tiers, settings, house, audit })) {
+    if (result.error) throw new Error(`${label}: ${result.error.message}`);
+  }
+
+  // Names for every account and person the rows mention, in one read each.
+  const userIds = new Set<string>();
+  for (const alert of [...(open.data ?? []), ...(closed.data ?? [])]) for (const id of alert.user_ids ?? []) userIds.add(id);
+  for (const row of excluded.data ?? []) userIds.add(row.user_id);
+  for (const row of audit.data ?? []) {
+    userIds.add(row.actor_id);
+    if (row.target_user_id) userIds.add(row.target_user_id);
+  }
+  const users = userIds.size > 0 ? await client.from("users").select("id, username, frozen_at").in("id", [...userIds]) : { data: [], error: null };
+  if (users.error) throw new Error(`users: ${users.error.message}`);
+  const userById = new Map((users.data ?? []).map((user) => [user.id, user]));
+  const personById = new Map((people.data ?? []).map((person) => [person.id, person]));
+
+  const toAlert = (row: NonNullable<typeof open.data>[number]): AlertRow => ({
+    id: row.id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    type: row.type,
+    severity: row.severity,
+    status: row.status,
+    personId: row.person_id,
+    personSlug: row.person_id ? (personById.get(row.person_id)?.slug ?? null) : null,
+    personName: row.person_id ? (personById.get(row.person_id)?.display_name ?? null) : null,
+    users: (row.user_ids ?? []).map((id) => ({ id, username: userById.get(id)?.username ?? null, frozen: Boolean(userById.get(id)?.frozen_at) })),
+    evidence: toRecord(row.evidence),
+    resolvedAt: row.resolved_at,
+    resolutionNote: row.resolution_note,
+  });
+
+  const houseByCategory = new Map<string, { category: string; allTimeCents: number; dayCents: number; rows: number }>();
+  for (const row of house.data ?? []) {
+    const bucket = houseByCategory.get(row.category) ?? { category: row.category, allTimeCents: 0, dayCents: 0, rows: 0 };
+    bucket.allTimeCents += Number(row.amount_cents);
+    bucket.rows += 1;
+    if (row.recorded_at >= dayAgo) bucket.dayCents += Number(row.amount_cents);
+    houseByCategory.set(row.category, bucket);
+  }
+
+  const s = settings.data;
+  const thresholds = s
+    ? [
+        { name: "Surveillance window", value: `${s.surveillance_window_seconds}s`, note: "The window every detector reads over, ending at the order that triggered the run." },
+        { name: "Clustered buying", value: `${s.clustered_buying_min_accounts} accounts`, note: "Distinct accounts buying one person inside the window raises clustered_buying." },
+        { name: "New-account burst", value: `${s.new_account_burst_min_accounts} accounts under ${s.new_account_age_hours} h`, note: "Accounts younger than the age, trading one person inside the window." },
+        { name: "Shared infrastructure", value: `${s.shared_infra_min_accounts} accounts`, note: "Distinct accounts trading one person from one salted fingerprint hash inside the window. Silent while FINGERPRINT_SALT is unset." },
+        { name: "Wash trading", value: `${s.wash_min_round_trips} round trips in ${s.wash_window_seconds}s`, note: "Buy-then-sell round trips by one account on one person inside its own window." },
+        { name: "Referral spike", value: `${s.referral_spike_min_accounts} accounts`, note: "Accounts sharing one referrer, trading one person inside the window." },
+        { name: "Fingerprint retention", value: `${s.fingerprint_retention_days} days`, note: "How long trade_orders.fingerprint_hash is kept for; the prune is the retention item's, not yet scheduled." },
+      ]
+    : [];
+
+  return {
+    open: (open.data ?? []).map(toAlert),
+    closed: (closed.data ?? []).map(toAlert),
+    events: (events.data ?? []).map((row) => ({
+      id: Number(row.id),
+      recordedAt: row.recorded_at,
+      detector: row.detector,
+      severity: row.severity,
+      personSlug: row.person_id ? (personById.get(row.person_id)?.slug ?? null) : null,
+      accounts: (row.user_ids ?? []).length,
+      alertId: row.alert_id,
+      evidence: toRecord(row.evidence),
+    })),
+    excluded: (excluded.data ?? []).map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      username: userById.get(row.user_id)?.username ?? null,
+      personId: row.person_id,
+      personSlug: row.person_id ? (personById.get(row.person_id)?.slug ?? null) : null,
+      reason: row.reason,
+      createdAt: row.created_at,
+    })),
+    frozen: (frozen.data ?? []).map((row) => ({ id: row.id, username: row.username, frozenAt: row.frozen_at ?? "", reason: row.frozen_reason })),
+    people: (people.data ?? []).map((row) => ({
+      id: row.id,
+      slug: row.slug,
+      displayName: row.display_name,
+      tier: row.tier,
+      tradingMode: row.trading_mode,
+      haltedUntil: row.halted_until && Date.parse(row.halted_until) > Date.now() ? row.halted_until : null,
+      haltReason: row.halted_until && Date.parse(row.halted_until) > Date.now() ? row.halt_reason : null,
+      score: Number(row.current_score),
+      premiumCents: Number(row.premium_cents),
+      marketPrice: Number(row.market_price ?? row.current_score),
+      inventoryUnits: Number(row.market_inventory_units),
+      overrides: {
+        depthUnits: row.depth_units_override === null ? null : Number(row.depth_units_override),
+        halfLifeTicks: row.decay_half_life_ticks_override === null ? null : Number(row.decay_half_life_ticks_override),
+        premiumCapCents: row.premium_cap_cents_override === null ? null : Number(row.premium_cap_cents_override),
+        shorting: row.shorting_override,
+      },
+    })),
+    tiers: (tiers.data ?? []).map((row) => ({
+      tier: row.tier,
+      depthUnits: row.depth_units === null ? null : Number(row.depth_units),
+      halfLifeTicks: Number(row.decay_half_life_ticks),
+      premiumCapCents: Number(row.premium_cap_cents),
+      minHoldSeconds: Number(row.min_hold_seconds),
+      maxOrderShareOfDepth: Number(row.max_order_share_of_depth),
+      aggregateExposureCapUnits: Number(row.aggregate_exposure_cap_units),
+      breakerPremiumCents: Number(row.breaker_premium_cents),
+      breakerWindowSeconds: Number(row.breaker_window_seconds),
+      breakerHaltSeconds: Number(row.breaker_halt_seconds),
+      breakerPriceCents: row.breaker_price_cents === null ? null : Number(row.breaker_price_cents),
+      shortingAllowed: row.shorting_allowed,
+      alertOnHalt: row.alert_on_halt,
+      updatedAt: row.updated_at,
+    })),
+    thresholds,
+    house: [...houseByCategory.values()].sort((a, b) => a.category.localeCompare(b.category)),
+    audit: (audit.data ?? []).map((row) => ({
+      id: Number(row.id),
+      performedAt: row.performed_at,
+      actor: userById.get(row.actor_id)?.username ?? row.actor_id,
+      action: row.action,
+      alertId: row.alert_id,
+      targetUser: row.target_user_id ? (userById.get(row.target_user_id)?.username ?? row.target_user_id) : null,
+      targetPersonSlug: row.target_person_id ? (personById.get(row.target_person_id)?.slug ?? row.target_person_id) : null,
+      note: row.note,
+      details: toRecord(row.details),
     })),
   };
 }

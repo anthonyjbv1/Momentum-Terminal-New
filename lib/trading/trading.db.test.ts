@@ -121,6 +121,10 @@ beforeAll(async () => {
   for (const row of await database.rows<{ id: string; slug: string }>("select id, slug from public.people")) people.set(row.slug, row.id);
   // Inert during these tests unless a case sets it.
   await settings({ close_cooldown_seconds: 0 });
+  // A FLAT MARKET for this suite (Phase 29): a null depth is the premium's
+  // off switch, so every price here is exactly Phase 27's and the cases keep
+  // their literal cents. The curve has its own suite, market.db.test.ts.
+  await database.exec("update public.market_tier_settings set depth_units = null, min_hold_seconds = 0");
 }, 60_000);
 
 afterAll(async () => {
@@ -137,8 +141,14 @@ describe("money is integer cents", () => {
         order by table_name, column_name`,
     );
     expect(monetary.length).toBeGreaterThan(15);
+    // THE ONE NUMERIC (Phase 29): trade_orders.impact_cents records the
+    // order's own impact term u² / (20·D) to nine decimals, for the record. It
+    // is a rational the ledger never moves — the exact identity is the
+    // integer CHECK trade_orders_gross_is_curve — and numeric is not a float.
+    const recordOnly = new Set(["trade_orders.impact_cents"]);
     for (const column of monetary) {
-      expect(`${column.table_name}.${column.column_name}: ${column.data_type}`).toBe(`${column.table_name}.${column.column_name}: bigint`);
+      const name = `${column.table_name}.${column.column_name}`;
+      expect(`${name}: ${column.data_type}`).toBe(`${name}: ${recordOnly.has(name) ? "numeric" : "bigint"}`);
     }
     const floating = await database.rows<{ table_name: string; column_name: string; data_type: string }>(
       `select table_name, column_name, data_type from information_schema.columns
@@ -366,8 +376,8 @@ describe("the shorting gate, both states", () => {
     // Whatever writes the table: a LOW lot larger than the 2 HIGH units held is a net short, and refused.
     await expect(
       database.rows(
-        `insert into public.positions (user_id, person_id, direction, amount_cents, open_cost_cents, entry_score, units, open_units, entry_price_cents)
-         values ($1, $2, 'LOW', 17700, 17700, 59, 3000, 3000, 5900)`,
+        `insert into public.positions (user_id, person_id, direction, amount_cents, open_cost_cents, entry_price_points, units, open_units, entry_price_cents, entry_base_cents, entry_index_cents)
+         values ($1, $2, 'LOW', 17700, 17700, 59, 3000, 3000, 5900, 5900, 5950)`,
         [cara, people.get("elon-musk")],
       ),
     ).rejects.toThrow(/shorting is disabled/);
@@ -504,7 +514,7 @@ describe("atomicity and reconciliation", () => {
     expect(await ledgerNet(fay)).toBe(STARTING_BALANCE_CENTS);
     const [grant] = await database.rows<{ ok: boolean }>("select has_function_privilege('authenticated', 'public.reset_paper_balance(uuid)', 'execute') as ok");
     expect(grant.ok).toBe(false);
-    const [orders] = await database.rows<{ ok: boolean }>("select has_function_privilege('authenticated', 'public.place_order(uuid, text, bigint, bigint, text, bigint, text)', 'execute') as ok");
+    const [orders] = await database.rows<{ ok: boolean }>("select has_function_privilege('authenticated', 'public.place_order(uuid, text, bigint, bigint, text, bigint, text, text)', 'execute') as ok");
     expect(orders.ok).toBe(true);
   });
 });

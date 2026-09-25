@@ -205,6 +205,7 @@ describe("convictionLevel", () => {
     key: "conviction" as const,
     label: "Conviction",
     description: "",
+    role: "market" as const,
     impact,
     direction: "neutral" as const,
     details: concentration === undefined ? null : { concentration },
@@ -278,5 +279,81 @@ describe("slugs and formatting", () => {
     expect(formatSigned(-0.01)).toBe("0.0");
     expect(formatSignedPercent(2.345)).toBe("+2.3%");
     expect(formatSignedPercent(-0.04)).toBe("−0.04%");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE MARKET PRICE (Phase 29)
+// ---------------------------------------------------------------------------
+
+import { convictionLevelFromConcentration, marketLine, readMarketReadings, toProfilePerson, tradingAvailability } from "./profile-model";
+
+describe("the market line", () => {
+  it("speaks the premium at one decimal, above, below or in line with the data", () => {
+    expect(marketLine({ premiumCents: 400 })).toEqual({ relation: "above", points: 4, text: "+4.0 above the data" });
+    expect(marketLine({ premiumCents: -213 })).toEqual({ relation: "below", points: 2.1, text: "−2.1 below the data" });
+    expect(marketLine({ premiumCents: 0 })).toEqual({ relation: "in_line", points: 0, text: "in line with the data" });
+    // Under five hundredths of a point reads as in line; five reads as a tenth.
+    expect(marketLine({ premiumCents: 4 }).relation).toBe("in_line");
+    expect(marketLine({ premiumCents: 5 })).toEqual({ relation: "above", points: 0.1, text: "+0.1 above the data" });
+    expect(marketLine({ premiumCents: -4 }).relation).toBe("in_line");
+  });
+});
+
+describe("trading availability", () => {
+  const now = Date.parse("2026-09-25T12:00:00Z");
+  it("is halted while the halt is in the future, whatever the mode; then the mode decides", () => {
+    expect(tradingAvailability({ tradingMode: "tradeable", haltedUntil: "2026-09-25T12:30:00Z", haltReason: "breaker" }, now)).toEqual({ state: "halted", until: "2026-09-25T12:30:00Z", reason: "breaker" });
+    expect(tradingAvailability({ tradingMode: "display_only", haltedUntil: "2026-09-25T12:30:00Z", haltReason: null }, now)).toEqual({ state: "halted", until: "2026-09-25T12:30:00Z", reason: null });
+    expect(tradingAvailability({ tradingMode: "tradeable", haltedUntil: "2026-09-25T11:59:59Z", haltReason: "old" }, now)).toEqual({ state: "tradeable" });
+    expect(tradingAvailability({ tradingMode: "paused", haltedUntil: null, haltReason: null }, now)).toEqual({ state: "paused" });
+    expect(tradingAvailability({ tradingMode: "display_only", haltedUntil: null, haltReason: null }, now)).toEqual({ state: "display_only" });
+    expect(tradingAvailability({ tradingMode: "tradeable", haltedUntil: null, haltReason: null }, now)).toEqual({ state: "tradeable" });
+  });
+});
+
+describe("the person row", () => {
+  const base = { id: "p", slug: "drake", display_name: "Drake", category: "musician", avatar_url: null, current_score: "50.1234", revert_target: "65", spread: "0.5", buy_price: "54.6534", sell_price: "53.6534", created_at: "2026-09-05T00:00:00Z", last_tick_at: null };
+
+  it("reads the market state and the effective parameters, and a row without them as a flat market at the score", () => {
+    const person = toProfilePerson({ ...base, premium_cents: "403", market_price: "54.1534", market_inventory_units: "1210000", tier: "private_individual", trading_mode: "display_only", halted_until: "2026-09-25T13:00:00Z", halt_reason: "breaker", depth_units: "300000", premium_cap_cents: "800", max_allocation_cents: "9000000" });
+    expect(person).toMatchObject({ premiumCents: 403, marketPrice: 54.1534, inventoryUnits: 1_210_000, tier: "private_individual", tradingMode: "display_only", haltedUntil: "2026-09-25T13:00:00Z", haltReason: "breaker", depthUnits: 300_000, premiumCapCents: 800, maxAllocationCents: 9_000_000 });
+
+    const flat = toProfilePerson(base);
+    expect(flat).toMatchObject({ premiumCents: 0, marketPrice: 50.1234, inventoryUnits: 0, tier: "public_figure", tradingMode: "tradeable", haltedUntil: null, haltReason: null, depthUnits: null, premiumCapCents: null, maxAllocationCents: 0 });
+  });
+
+  it("drops a halt reason when there is no halt", () => {
+    expect(toProfilePerson({ ...base, halted_until: null, halt_reason: "stale" }).haltReason).toBeNull();
+  });
+});
+
+describe("the series with a market line", () => {
+  it("carries the market price beside the score when the row has one, and nothing when it does not", () => {
+    const [point] = toSeries([{ bucket_at: "2026-09-08T10:00:00Z", score: "50.5", open: "50.4", samples: 2, market: "54.53", market_open: "54.40" }]);
+    expect(point).toEqual({ at: "2026-09-08T10:00:00Z", score: 50.5, open: 50.4, samples: 2, market: 54.53, marketOpen: 54.4 });
+    const [plain] = toSeries([{ bucket_at: "2026-09-08T10:00:00Z", score: "50.5", open: null, samples: 1 }]);
+    expect(plain).toEqual({ at: "2026-09-08T10:00:00Z", score: 50.5, open: 50.5, samples: 1 });
+    expect("market" in plain).toBe(false);
+  });
+});
+
+describe("the market readings", () => {
+  it("read the concentration and the net flow, and place Conviction in the Engine's own bands", () => {
+    const readings = readMarketReadings(7_000_000, 9_000_000, [
+      { side: "BUY", amount_cents: "100000" },
+      { side: "SELL", amount_cents: 25000 },
+      { side: "BUY", amount_cents: 5000 },
+    ]);
+    expect(readings.conviction).toEqual({ openCapitalCents: 7_000_000, maxAllocationCents: 9_000_000, concentration: 7 / 9 });
+    expect(readings.tradingActivity).toEqual({ netFlowCents: 80_000, trades: 3, windowMinutes: FORCES_WINDOW_MINUTES });
+    expect(readMarketReadings(100, 0, []).conviction.concentration).toBeNull();
+
+    expect(convictionLevelFromConcentration(null)).toBeNull();
+    expect(convictionLevelFromConcentration(0)).toBe("low");
+    expect(convictionLevelFromConcentration(CONVICTION_BANDS.lowUpTo)).toBe("low");
+    expect(convictionLevelFromConcentration(0.7)).toBe("moderate");
+    expect(convictionLevelFromConcentration(CONVICTION_BANDS.moderateUpTo)).toBe("moderate");
+    expect(convictionLevelFromConcentration(0.9)).toBe("high");
   });
 });

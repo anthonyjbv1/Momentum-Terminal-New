@@ -22,6 +22,43 @@ export const MAX_LIVE_POINTS = 240;
 export interface LiveTick {
   at: string;
   score: number;
+  /** The market price at that tick (Phase 29): score plus the premium as it stood then. */
+  market?: number;
+}
+
+/** One change of the premium as premium_history records it, for placing the market line under the ticks. */
+export interface PremiumChange {
+  at: string;
+  premiumBeforeCents: number;
+  premiumAfterCents: number;
+}
+
+/**
+ * THE MARKET PRICE AT EACH TICK, by the rule premium_cents_at() applies in
+ * SQL: the premium after the latest change at or before the tick; before any
+ * change, the premium before the earliest change after it; with no change on
+ * record at all, the premium as it stands now. `changes` may arrive in any
+ * order and are sorted here. The Engine's decay step and the tick's own
+ * history row carry the same timestamp, so a change AT the tick counts.
+ */
+export function marketAtTicks(ticks: LiveTick[], changes: PremiumChange[], currentPremiumCents: number): LiveTick[] {
+  const sorted = changes
+    .map((change) => ({ ...change, t: Date.parse(change.at) }))
+    .filter((change) => Number.isFinite(change.t))
+    .sort((a, b) => a.t - b.t);
+  return ticks.map((tick) => {
+    const t = Date.parse(tick.at);
+    let premium = currentPremiumCents;
+    if (sorted.length > 0) {
+      let latest: (typeof sorted)[number] | null = null;
+      for (const change of sorted) {
+        if (change.t <= t) latest = change;
+        else break;
+      }
+      premium = latest ? latest.premiumAfterCents : sorted[0].premiumBeforeCents;
+    }
+    return { ...tick, market: Math.round((tick.score + premium / 100) * 10_000) / 10_000 };
+  });
 }
 
 /** Width of one slice of a range, in milliseconds. ALL derives it from the data it holds. */
@@ -60,11 +97,11 @@ export function foldTicks(series: SeriesPoint[], ticks: LiveTick[], range: Range
       if (tick.t <= lastT) continue;
       // Slices wider than a tick absorb ticks that fall inside them.
       if (width > LIVE_TICK_MS && tick.t - lastT < width) {
-        out[out.length - 1] = { ...last, at: tick.at, score: tick.score, samples: last.samples + 1 };
+        out[out.length - 1] = { ...last, at: tick.at, score: tick.score, samples: last.samples + 1, ...(tick.market !== undefined ? { market: tick.market } : {}) };
         continue;
       }
     }
-    out.push({ at: tick.at, score: tick.score, open: tick.score, samples: 1 });
+    out.push({ at: tick.at, score: tick.score, open: tick.score, samples: 1, ...(tick.market !== undefined ? { market: tick.market, marketOpen: tick.market } : {}) });
   }
 
   if (range.windowMs !== null) {

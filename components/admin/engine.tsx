@@ -315,7 +315,7 @@ function VolumeBlock({ volume }: { volume: EngineReport["volume"] }) {
 
 export function LeversSection({ levers }: { levers: Lever[] }) {
   return (
-    <Panel id="levers" title="Risk levers" hint="Current values, read-only." right={<Badge tone="info">read-only in this phase</Badge>}>
+    <Panel id="levers" title="Risk levers" hint="Current values, read-only." right={<Badge tone="info">read-only</Badge>}>
       <Scroll>
         <table className="adm-t">
           <thead>
@@ -339,7 +339,10 @@ export function LeversSection({ levers }: { levers: Lever[] }) {
         </table>
       </Scroll>
       <div className="adm-body" style={{ paddingTop: 0 }}>
-        <p className="adm-note">No editing here by design: this page has no write path of any kind. The database rows are changed by migration.</p>
+        <p className="adm-note">
+          No editing here by design: the levers and the tier settings are changed by migration. The market section below is the one place the console writes, through the
+          audit-logged admin RPCs (freeze, halt, mode, exclusion, alert status) and nothing else.
+        </p>
       </div>
     </Panel>
   );

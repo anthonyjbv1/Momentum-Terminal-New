@@ -14,6 +14,131 @@ export type Database = {
   }
   public: {
     Tables: {
+      admin_audit_log: {
+        Row: {
+          action: string
+          actor_id: string
+          alert_id: string | null
+          details: Json
+          id: number
+          note: string | null
+          performed_at: string
+          target_person_id: string | null
+          target_user_id: string | null
+        }
+        Insert: {
+          action: string
+          actor_id: string
+          alert_id?: string | null
+          details?: Json
+          id?: never
+          note?: string | null
+          performed_at?: string
+          target_person_id?: string | null
+          target_user_id?: string | null
+        }
+        Update: {
+          action?: string
+          actor_id?: string
+          alert_id?: string | null
+          details?: Json
+          id?: never
+          note?: string | null
+          performed_at?: string
+          target_person_id?: string | null
+          target_user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "admin_audit_log_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "admin_audit_log_alert_id_fkey"
+            columns: ["alert_id"]
+            isOneToOne: false
+            referencedRelation: "alerts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "admin_audit_log_target_person_id_fkey"
+            columns: ["target_person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "admin_audit_log_target_user_id_fkey"
+            columns: ["target_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      alerts: {
+        Row: {
+          created_at: string
+          evidence: Json
+          id: string
+          person_id: string | null
+          resolution_note: string | null
+          resolved_at: string | null
+          resolved_by: string | null
+          severity: string
+          status: string
+          type: string
+          updated_at: string
+          user_ids: string[]
+        }
+        Insert: {
+          created_at?: string
+          evidence?: Json
+          id?: string
+          person_id?: string | null
+          resolution_note?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          severity: string
+          status?: string
+          type: string
+          updated_at?: string
+          user_ids?: string[]
+        }
+        Update: {
+          created_at?: string
+          evidence?: Json
+          id?: string
+          person_id?: string | null
+          resolution_note?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          severity?: string
+          status?: string
+          type?: string
+          updated_at?: string
+          user_ids?: string[]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "alerts_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "alerts_resolved_by_fkey"
+            columns: ["resolved_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       behavioral_events: {
         Row: {
           created_at: string
@@ -31,7 +156,7 @@ export type Database = {
           metadata?: Json | null
           person_id?: string | null
           session_id?: string | null
-          user_id: string | null
+          user_id?: string | null
         }
         Update: {
           created_at?: string
@@ -128,6 +253,166 @@ export type Database = {
         }
         Relationships: []
       }
+      excluded_parties: {
+        Row: {
+          added_by: string | null
+          created_at: string
+          id: string
+          person_id: string | null
+          reason: string
+          removal_note: string | null
+          removed_at: string | null
+          removed_by: string | null
+          user_id: string
+        }
+        Insert: {
+          added_by?: string | null
+          created_at?: string
+          id?: string
+          person_id?: string | null
+          reason: string
+          removal_note?: string | null
+          removed_at?: string | null
+          removed_by?: string | null
+          user_id: string
+        }
+        Update: {
+          added_by?: string | null
+          created_at?: string
+          id?: string
+          person_id?: string | null
+          reason?: string
+          removal_note?: string | null
+          removed_at?: string | null
+          removed_by?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "excluded_parties_added_by_fkey"
+            columns: ["added_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "excluded_parties_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "excluded_parties_removed_by_fkey"
+            columns: ["removed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "excluded_parties_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      forecast_votes: {
+        Row: {
+          created_at: string
+          direction: string
+          id: string
+          person_id: string
+          reason: string
+          score_at_vote: number
+          superseded_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          direction: string
+          id?: string
+          person_id: string
+          reason: string
+          score_at_vote: number
+          superseded_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          direction?: string
+          id?: string
+          person_id?: string
+          reason?: string
+          score_at_vote?: number
+          superseded_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "forecast_votes_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      house_ledger: {
+        Row: {
+          amount_cents: number
+          category: string
+          close_id: string | null
+          details: Json
+          id: number
+          order_id: string | null
+          person_id: string
+          recorded_at: string
+          tick_number: number | null
+          user_id: string | null
+        }
+        Insert: {
+          amount_cents: number
+          category: string
+          close_id?: string | null
+          details?: Json
+          id?: never
+          order_id?: string | null
+          person_id: string
+          recorded_at: string
+          tick_number?: number | null
+          user_id?: string | null
+        }
+        Update: {
+          amount_cents?: number
+          category?: string
+          close_id?: string | null
+          details?: Json
+          id?: never
+          order_id?: string | null
+          person_id?: string
+          recorded_at?: string
+          tick_number?: number | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "house_ledger_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "house_ledger_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ingest_runs: {
         Row: {
           blocked_dropped: number
@@ -184,47 +469,6 @@ export type Database = {
           trigger?: string
         }
         Relationships: []
-      }
-      forecast_votes: {
-        Row: {
-          created_at: string
-          direction: string
-          id: string
-          person_id: string
-          reason: string
-          score_at_vote: number
-          superseded_at: string | null
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          direction: string
-          id?: string
-          person_id: string
-          reason: string
-          score_at_vote: number
-          superseded_at?: string | null
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          direction?: string
-          id?: string
-          person_id?: string
-          reason?: string
-          score_at_vote?: number
-          superseded_at?: string | null
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "forecast_votes_person_id_fkey"
-            columns: ["person_id"]
-            isOneToOne: false
-            referencedRelation: "people"
-            referencedColumns: ["id"]
-          },
-        ]
       }
       inverse_pairs: {
         Row: {
@@ -286,7 +530,7 @@ export type Database = {
           clips_window_from?: string | null
           clips_window_to?: string | null
           error?: string | null
-          id?: number
+          id?: never
           latency_ms?: number | null
           sampled_at: string
           session_id: string
@@ -302,7 +546,7 @@ export type Database = {
           clips_window_from?: string | null
           clips_window_to?: string | null
           error?: string | null
-          id?: number
+          id?: never
           latency_ms?: number | null
           sampled_at?: string
           session_id?: string
@@ -427,6 +671,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "live_sessions_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "source_health"
+            referencedColumns: ["data_source_id"]
+          },
+          {
             foreignKeyName: "live_sessions_person_id_fkey"
             columns: ["person_id"]
             isOneToOne: false
@@ -527,6 +778,57 @@ export type Database = {
           },
         ]
       }
+      market_tier_settings: {
+        Row: {
+          aggregate_exposure_cap_units: number
+          alert_on_halt: boolean
+          breaker_halt_seconds: number
+          breaker_premium_cents: number
+          breaker_price_cents: number | null
+          breaker_window_seconds: number
+          decay_half_life_ticks: number
+          depth_units: number | null
+          max_order_share_of_depth: number
+          min_hold_seconds: number
+          premium_cap_cents: number
+          shorting_allowed: boolean
+          tier: string
+          updated_at: string
+        }
+        Insert: {
+          aggregate_exposure_cap_units: number
+          alert_on_halt: boolean
+          breaker_halt_seconds: number
+          breaker_premium_cents: number
+          breaker_price_cents?: number | null
+          breaker_window_seconds: number
+          decay_half_life_ticks: number
+          depth_units?: number | null
+          max_order_share_of_depth: number
+          min_hold_seconds: number
+          premium_cap_cents: number
+          shorting_allowed: boolean
+          tier: string
+          updated_at?: string
+        }
+        Update: {
+          aggregate_exposure_cap_units?: number
+          alert_on_halt?: boolean
+          breaker_halt_seconds?: number
+          breaker_premium_cents?: number
+          breaker_price_cents?: number | null
+          breaker_window_seconds?: number
+          decay_half_life_ticks?: number
+          depth_units?: number | null
+          max_order_share_of_depth?: number
+          min_hold_seconds?: number
+          premium_cap_cents?: number
+          shorting_allowed?: boolean
+          tier?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       narrative_signals: {
         Row: {
           created_at: string
@@ -621,22 +923,33 @@ export type Database = {
           consent_tier: number
           created_at: string
           current_score: number
+          decay_half_life_ticks_override: number | null
+          depth_units_override: number | null
           display_name: string
+          forecast_paused: boolean
           full_name: string | null
+          halt_reason: string | null
+          halted_until: string | null
           id: string
           is_active: boolean
+          is_discoverable: boolean
           last_tick_at: string | null
+          market_inventory_units: number
+          market_price: number | null
           max_allocation_cents: number
           partnership_status: string
+          premium_cap_cents_override: number | null
+          premium_cents: number
           revert_target: number
           sell_price: number | null
+          shorting_override: boolean | null
           slug: string
           spread: number
           target_attention: number | null
           target_direction: number | null
-          forecast_paused: boolean
-          is_discoverable: boolean
           target_offset: number
+          tier: string
+          trading_mode: string
         }
         Insert: {
           avatar_url?: string | null
@@ -647,22 +960,33 @@ export type Database = {
           consent_tier?: number
           created_at?: string
           current_score?: number
+          decay_half_life_ticks_override?: number | null
+          depth_units_override?: number | null
           display_name: string
+          forecast_paused?: boolean
           full_name?: string | null
+          halt_reason?: string | null
+          halted_until?: string | null
           id?: string
           is_active?: boolean
+          is_discoverable?: boolean
           last_tick_at?: string | null
+          market_inventory_units?: number
+          market_price?: number | null
           max_allocation_cents?: number
           partnership_status?: string
+          premium_cap_cents_override?: number | null
+          premium_cents?: number
           revert_target?: number
           sell_price?: number | null
+          shorting_override?: boolean | null
           slug: string
           spread?: number
           target_attention?: number | null
           target_direction?: number | null
-          forecast_paused?: boolean
-          is_discoverable?: boolean
           target_offset?: number
+          tier?: string
+          trading_mode?: string
         }
         Update: {
           avatar_url?: string | null
@@ -673,22 +997,33 @@ export type Database = {
           consent_tier?: number
           created_at?: string
           current_score?: number
+          decay_half_life_ticks_override?: number | null
+          depth_units_override?: number | null
           display_name?: string
+          forecast_paused?: boolean
           full_name?: string | null
+          halt_reason?: string | null
+          halted_until?: string | null
           id?: string
           is_active?: boolean
+          is_discoverable?: boolean
           last_tick_at?: string | null
+          market_inventory_units?: number
+          market_price?: number | null
           max_allocation_cents?: number
           partnership_status?: string
+          premium_cap_cents_override?: number | null
+          premium_cents?: number
           revert_target?: number
           sell_price?: number | null
+          shorting_override?: boolean | null
           slug?: string
           spread?: number
           target_attention?: number | null
           target_direction?: number | null
-          forecast_paused?: boolean
-          is_discoverable?: boolean
           target_offset?: number
+          tier?: string
+          trading_mode?: string
         }
         Relationships: []
       }
@@ -782,36 +1117,66 @@ export type Database = {
       platform_settings: {
         Row: {
           close_cooldown_seconds: number
+          clustered_buying_min_accounts: number
+          fingerprint_retention_days: number
           id: boolean
           max_daily_close_cents: number
           max_open_interest_share: number
           max_units_per_person: number
           min_order_cents: number
+          new_account_age_hours: number
+          new_account_burst_min_accounts: number
           price_tolerance_cents: number
+          referral_spike_min_accounts: number
+          require_verified_identity: boolean
+          shared_infra_min_accounts: number
           shorting_enabled: boolean
+          surveillance_window_seconds: number
           updated_at: string
+          wash_min_round_trips: number
+          wash_window_seconds: number
         }
         Insert: {
           close_cooldown_seconds?: number
+          clustered_buying_min_accounts?: number
+          fingerprint_retention_days?: number
           id?: boolean
           max_daily_close_cents?: number
           max_open_interest_share?: number
           max_units_per_person?: number
           min_order_cents?: number
+          new_account_age_hours?: number
+          new_account_burst_min_accounts?: number
           price_tolerance_cents?: number
+          referral_spike_min_accounts?: number
+          require_verified_identity?: boolean
+          shared_infra_min_accounts?: number
           shorting_enabled?: boolean
+          surveillance_window_seconds?: number
           updated_at?: string
+          wash_min_round_trips?: number
+          wash_window_seconds?: number
         }
         Update: {
           close_cooldown_seconds?: number
+          clustered_buying_min_accounts?: number
+          fingerprint_retention_days?: number
           id?: boolean
           max_daily_close_cents?: number
           max_open_interest_share?: number
           max_units_per_person?: number
           min_order_cents?: number
+          new_account_age_hours?: number
+          new_account_burst_min_accounts?: number
           price_tolerance_cents?: number
+          referral_spike_min_accounts?: number
+          require_verified_identity?: boolean
+          shared_infra_min_accounts?: number
           shorting_enabled?: boolean
+          surveillance_window_seconds?: number
           updated_at?: string
+          wash_min_round_trips?: number
+          wash_window_seconds?: number
         }
         Relationships: []
       }
@@ -870,6 +1235,10 @@ export type Database = {
           cost_cents: number
           direction: string
           entry_price_cents: number
+          exit_base_cents: number
+          exit_index_cents: number
+          exit_inventory_units: number
+          exit_premium_cents: number
           exit_price_cents: number
           id: string
           order_id: string
@@ -885,6 +1254,10 @@ export type Database = {
           cost_cents: number
           direction: string
           entry_price_cents: number
+          exit_base_cents: number
+          exit_index_cents: number
+          exit_inventory_units?: number
+          exit_premium_cents?: number
           exit_price_cents: number
           id?: string
           order_id: string
@@ -900,6 +1273,10 @@ export type Database = {
           cost_cents?: number
           direction?: string
           entry_price_cents?: number
+          exit_base_cents?: number
+          exit_index_cents?: number
+          exit_inventory_units?: number
+          exit_premium_cents?: number
           exit_price_cents?: number
           id?: string
           order_id?: string
@@ -946,12 +1323,17 @@ export type Database = {
           amount_cents: number
           closed_at: string | null
           direction: string
+          entry_base_cents: number
+          entry_depth_units: number | null
+          entry_index_cents: number
+          entry_inventory_units: number
+          entry_premium_cents: number
           entry_price_cents: number
-          entry_score: number
+          entry_price_points: number
           id: string
           is_open: boolean
-          open_units: number
           open_cost_cents: number
+          open_units: number
           opened_at: string
           order_id: string | null
           person_id: string
@@ -962,12 +1344,17 @@ export type Database = {
           amount_cents: number
           closed_at?: string | null
           direction: string
+          entry_base_cents: number
+          entry_depth_units?: number | null
+          entry_index_cents: number
+          entry_inventory_units?: number
+          entry_premium_cents?: number
           entry_price_cents: number
-          entry_score: number
+          entry_price_points: number
           id?: string
           is_open?: boolean
-          open_units: number
           open_cost_cents: number
+          open_units: number
           opened_at?: string
           order_id?: string | null
           person_id: string
@@ -978,12 +1365,17 @@ export type Database = {
           amount_cents?: number
           closed_at?: string | null
           direction?: string
+          entry_base_cents?: number
+          entry_depth_units?: number | null
+          entry_index_cents?: number
+          entry_inventory_units?: number
+          entry_premium_cents?: number
           entry_price_cents?: number
-          entry_score?: number
+          entry_price_points?: number
           id?: string
           is_open?: boolean
-          open_units?: number
           open_cost_cents?: number
+          open_units?: number
           opened_at?: string
           order_id?: string | null
           person_id?: string
@@ -1010,6 +1402,59 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      premium_history: {
+        Row: {
+          cause: string
+          depth_units: number | null
+          id: number
+          inventory_after_units: number
+          inventory_before_units: number
+          order_id: string | null
+          person_id: string
+          premium_after_cents: number
+          premium_before_cents: number
+          recorded_at: string
+          score: number
+          tick_number: number | null
+        }
+        Insert: {
+          cause: string
+          depth_units?: number | null
+          id?: never
+          inventory_after_units: number
+          inventory_before_units: number
+          order_id?: string | null
+          person_id: string
+          premium_after_cents: number
+          premium_before_cents: number
+          recorded_at: string
+          score: number
+          tick_number?: number | null
+        }
+        Update: {
+          cause?: string
+          depth_units?: number | null
+          id?: never
+          inventory_after_units?: number
+          inventory_before_units?: number
+          order_id?: string | null
+          person_id?: string
+          premium_after_cents?: number
+          premium_before_cents?: number
+          recorded_at?: string
+          score?: number
+          tick_number?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "premium_history_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
             referencedColumns: ["id"]
           },
         ]
@@ -1533,6 +1978,54 @@ export type Database = {
           },
         ]
       }
+      surveillance_events: {
+        Row: {
+          alert_id: string | null
+          detector: string
+          evidence: Json
+          id: number
+          person_id: string | null
+          recorded_at: string
+          severity: string
+          user_ids: string[]
+        }
+        Insert: {
+          alert_id?: string | null
+          detector: string
+          evidence?: Json
+          id?: never
+          person_id?: string | null
+          recorded_at?: string
+          severity: string
+          user_ids?: string[]
+        }
+        Update: {
+          alert_id?: string | null
+          detector?: string
+          evidence?: Json
+          id?: never
+          person_id?: string | null
+          recorded_at?: string
+          severity?: string
+          user_ids?: string[]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "surveillance_events_alert_id_fkey"
+            columns: ["alert_id"]
+            isOneToOne: false
+            referencedRelation: "alerts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "surveillance_events_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       trade_events: {
         Row: {
           amount_cents: number
@@ -1578,57 +2071,90 @@ export type Database = {
       trade_orders: {
         Row: {
           balance_after_cents: number | null
+          base_price_cents: number
           closed_units: number
+          cost_cents: number
           created_at: string
+          depth_units: number | null
           fill_price_cents: number
+          fingerprint_hash: string | null
           gross_cents: number
           id: string
+          impact_cents: number
+          inventory_after_units: number
+          inventory_before_units: number
           opened_units: number
           person_id: string
-          quoted_price_cents: number | null
+          premium_after_cents: number
+          premium_before_cents: number
+          proceeds_cents: number
           quantity_scale: string
-          requested_spend_cents: number | null
+          quoted_price_cents: number | null
           realized_pnl_cents: number
+          requested_spend_cents: number | null
           side: string
           surface: string | null
           units: number
           user_id: string
+          worst_fill_cents: number
         }
         Insert: {
           balance_after_cents?: number | null
+          base_price_cents: number
           closed_units?: number
+          cost_cents?: number
           created_at?: string
+          depth_units?: number | null
           fill_price_cents: number
+          fingerprint_hash?: string | null
           gross_cents: number
           id?: string
+          impact_cents?: number
+          inventory_after_units?: number
+          inventory_before_units?: number
           opened_units?: number
           person_id: string
-          quoted_price_cents?: number | null
+          premium_after_cents?: number
+          premium_before_cents?: number
+          proceeds_cents?: number
           quantity_scale?: string
-          requested_spend_cents?: number | null
+          quoted_price_cents?: number | null
           realized_pnl_cents?: number
+          requested_spend_cents?: number | null
           side: string
           surface?: string | null
           units: number
           user_id: string
+          worst_fill_cents: number
         }
         Update: {
           balance_after_cents?: number | null
+          base_price_cents?: number
           closed_units?: number
+          cost_cents?: number
           created_at?: string
+          depth_units?: number | null
           fill_price_cents?: number
+          fingerprint_hash?: string | null
           gross_cents?: number
           id?: string
+          impact_cents?: number
+          inventory_after_units?: number
+          inventory_before_units?: number
           opened_units?: number
           person_id?: string
-          quoted_price_cents?: number | null
+          premium_after_cents?: number
+          premium_before_cents?: number
+          proceeds_cents?: number
           quantity_scale?: string
-          requested_spend_cents?: number | null
+          quoted_price_cents?: number | null
           realized_pnl_cents?: number
+          requested_spend_cents?: number | null
           side?: string
           surface?: string | null
           units?: number
           user_id?: string
+          worst_fill_cents?: number
         }
         Relationships: [
           {
@@ -1706,9 +2232,14 @@ export type Database = {
           created_at: string
           display_name: string
           email: string
+          frozen_at: string | null
+          frozen_reason: string | null
           id: string
+          identity_verified_at: string | null
           is_admin: boolean
+          referred_by: string | null
           username: string
+          verified_identity_key: string | null
           wallet_balance_cents: number
         }
         Insert: {
@@ -1717,9 +2248,14 @@ export type Database = {
           created_at?: string
           display_name: string
           email: string
+          frozen_at?: string | null
+          frozen_reason?: string | null
           id: string
+          identity_verified_at?: string | null
           is_admin?: boolean
+          referred_by?: string | null
           username: string
+          verified_identity_key?: string | null
           wallet_balance_cents?: number
         }
         Update: {
@@ -1728,15 +2264,26 @@ export type Database = {
           created_at?: string
           display_name?: string
           email?: string
+          frozen_at?: string | null
+          frozen_reason?: string | null
           id?: string
+          identity_verified_at?: string | null
           is_admin?: boolean
+          referred_by?: string | null
           username?: string
+          verified_identity_key?: string | null
           wallet_balance_cents?: number
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "users_referred_by_fkey"
+            columns: ["referred_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
       }
-    }
-    Views: {
       waitlist: {
         Row: {
           consent_at: string
@@ -1779,6 +2326,8 @@ export type Database = {
         }
         Relationships: []
       }
+    }
+    Views: {
       llm_cost_per_tick: {
         Row: {
           anomaly_calls: number | null
@@ -1802,17 +2351,6 @@ export type Database = {
         }
         Relationships: []
       }
-      observe_only_snapshots: {
-        Row: {
-          identifier: string | null
-          metric_key: string | null
-          person_slug: string | null
-          recorded_at: string | null
-          source: string | null
-          value: number | null
-        }
-        Relationships: []
-      }
       metric_baseline_progress: {
         Row: {
           first_snapshot_at: string | null
@@ -1831,6 +2369,17 @@ export type Database = {
           span_hours: number | null
           span_progress: number | null
           window_hours: number | null
+        }
+        Relationships: []
+      }
+      observe_only_snapshots: {
+        Row: {
+          identifier: string | null
+          metric_key: string | null
+          person_slug: string | null
+          recorded_at: string | null
+          source: string | null
+          value: number | null
         }
         Relationships: []
       }
@@ -1861,7 +2410,63 @@ export type Database = {
       }
     }
     Functions: {
+      admin_add_excluded_party: {
+        Args: {
+          p_alert_id?: string
+          p_person_id: string
+          p_reason: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
+      admin_freeze_account: {
+        Args: { p_alert_id?: string; p_reason: string; p_user_id: string }
+        Returns: Json
+      }
+      admin_halt_person: {
+        Args: {
+          p_alert_id?: string
+          p_person_id: string
+          p_reason: string
+          p_seconds: number
+        }
+        Returns: Json
+      }
+      admin_lift_halt: {
+        Args: { p_alert_id?: string; p_note: string; p_person_id: string }
+        Returns: Json
+      }
+      admin_remove_excluded_party: {
+        Args: {
+          p_alert_id?: string
+          p_excluded_party_id: string
+          p_note: string
+        }
+        Returns: Json
+      }
+      admin_resolve_alert: {
+        Args: { p_alert_id: string; p_note: string; p_status: string }
+        Returns: Json
+      }
+      admin_set_trading_mode: {
+        Args: {
+          p_alert_id?: string
+          p_mode: string
+          p_person_id: string
+          p_reason: string
+        }
+        Returns: Json
+      }
+      admin_unfreeze_account: {
+        Args: { p_alert_id?: string; p_note: string; p_user_id: string }
+        Returns: Json
+      }
       apply_engine_tick: { Args: { p_tick: Json }; Returns: Json }
+      apply_market_decay: {
+        Args: { p_at: string; p_tick_number: number }
+        Returns: number
+      }
+      assert_admin: { Args: never; Returns: string }
       assert_position_direction: {
         Args: {
           p_amount_cents: number
@@ -1915,10 +2520,18 @@ export type Database = {
           total_duration_ms: number
         }[]
       }
+      cast_forecast_vote: {
+        Args: { p_direction: string; p_person_id: string; p_reason: string }
+        Returns: Json
+      }
       cents_to_dollars_text: { Args: { p_cents: number }; Returns: string }
       credit_paper_balance: {
         Args: { p_amount_cents: number; p_user_id: string }
         Returns: Json
+      }
+      evaluate_price_breakers: {
+        Args: { p_at: string; p_tick_number: number }
+        Returns: number
       }
       feed_entries: {
         Args: { p_before?: string; p_before_id?: string; p_limit?: number }
@@ -1940,6 +2553,25 @@ export type Database = {
           tick_number: number
         }[]
       }
+      forecast_min_votes: { Args: never; Returns: number }
+      forecast_rate_limit_per_hour: { Args: never; Returns: number }
+      forecast_summary: { Args: { p_person_id: string }; Returns: Json }
+      forecast_vote_json: {
+        Args: { v: Database["public"]["Tables"]["forecast_votes"]["Row"] }
+        Returns: Json
+      }
+      halt_person: {
+        Args: {
+          p_at: string
+          p_evidence?: Json
+          p_force_alert?: boolean
+          p_person_id: string
+          p_reason: string
+          p_seconds: number
+          p_source: string
+        }
+        Returns: string
+      }
       home_momentum: {
         Args: { p_points?: number; p_sample?: number; p_window?: string }
         Returns: {
@@ -1949,9 +2581,115 @@ export type Database = {
           sparkline: number[]
         }[]
       }
+      index_cents_at: {
+        Args: { p_at: string; p_person_id: string }
+        Returns: number
+      }
       join_waitlist: {
-        Args: { p_email: string; p_referrer?: string; p_source?: string; p_utm?: Json }
+        Args: {
+          p_email: string
+          p_referrer?: string
+          p_source?: string
+          p_utm?: Json
+        }
         Returns: Json
+      }
+      market_average_cents: {
+        Args: {
+          p_base_cents: number
+          p_depth_units: number
+          p_direction: string
+          p_inventory_units: number
+          p_units: number
+        }
+        Returns: number
+      }
+      market_cap_inventory_units: {
+        Args: { p_cap_cents: number; p_depth_units: number }
+        Returns: number
+      }
+      market_decay_divisor: {
+        Args: { p_half_life_ticks: number }
+        Returns: number
+      }
+      market_decay_step: {
+        Args: { p_divisor: number; p_inventory_units: number }
+        Returns: number
+      }
+      market_impact_cents: {
+        Args: { p_depth_units: number; p_units: number }
+        Returns: number
+      }
+      market_lot_amount_cents: {
+        Args: {
+          p_base_cents: number
+          p_depth_units: number
+          p_direction: string
+          p_inventory_units: number
+          p_units: number
+        }
+        Returns: number
+      }
+      market_marginal_cents: {
+        Args: {
+          p_base_cents: number
+          p_depth_units: number
+          p_inventory_units: number
+          p_rounding: string
+        }
+        Returns: number
+      }
+      market_order_gross_cents: {
+        Args: {
+          p_base_cents: number
+          p_closed_units: number
+          p_depth_units: number
+          p_inventory_before_units: number
+          p_opened_units: number
+          p_side: string
+          p_units: number
+        }
+        Returns: number
+      }
+      market_params_for: {
+        Args: { p_person_id: string }
+        Returns: {
+          aggregate_exposure_cap_units: number
+          alert_on_halt: boolean
+          breaker_halt_seconds: number
+          breaker_premium_cents: number
+          breaker_price_cents: number | null
+          breaker_window_seconds: number
+          decay_half_life_ticks: number
+          depth_units: number | null
+          max_order_share_of_depth: number
+          min_hold_seconds: number
+          premium_cap_cents: number
+          shorting_allowed: boolean
+          tier: string
+          updated_at: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "market_tier_settings"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      market_premium_cents: {
+        Args: { p_depth_units: number; p_inventory_units: number }
+        Returns: number
+      }
+      market_walk_cents: {
+        Args: {
+          p_base_cents: number
+          p_depth_units: number
+          p_direction: string
+          p_inventory_units: number
+          p_rounding: string
+          p_units: number
+        }
+        Returns: number
       }
       my_portfolio: { Args: never; Returns: Json }
       my_portfolio_value_series: {
@@ -1996,6 +2734,17 @@ export type Database = {
         Args: { p_person_id: string; p_user_id: string }
         Returns: number
       }
+      person_market_series: {
+        Args: { p_person_id: string; p_points?: number; p_since?: string }
+        Returns: {
+          bucket_at: string
+          market: number
+          market_open: number
+          open: number
+          samples: number
+          score: number
+        }[]
+      }
       person_score_series: {
         Args: { p_person_id: string; p_points?: number; p_since?: string }
         Returns: {
@@ -2005,13 +2754,6 @@ export type Database = {
           score: number
         }[]
       }
-      cast_forecast_vote: {
-        Args: { p_direction: string; p_person_id: string; p_reason: string }
-        Returns: Json
-      }
-      forecast_min_votes: { Args: never; Returns: number }
-      forecast_rate_limit_per_hour: { Args: never; Returns: number }
-      forecast_summary: { Args: { p_person_id: string }; Returns: Json }
       person_signal_volume: {
         Args: { p_days?: number }
         Returns: {
@@ -2023,6 +2765,7 @@ export type Database = {
       }
       place_order: {
         Args: {
+          p_fingerprint_hash?: string
           p_max_spend_cents?: number
           p_person_id: string
           p_quantity_scale?: string
@@ -2053,6 +2796,10 @@ export type Database = {
         Args: { p_person_id: string; p_user_id: string }
         Returns: Json
       }
+      premium_cents_at: {
+        Args: { p_at: string; p_person_id: string }
+        Returns: number
+      }
       rate_limit_hit: {
         Args: { p_key: string; p_limit: number; p_window_seconds: number }
         Returns: Json
@@ -2065,6 +2812,20 @@ export type Database = {
           p_order_id?: string
           p_tick_number?: number
           p_user_id: string
+        }
+        Returns: number
+      }
+      record_premium_change: {
+        Args: {
+          p_after: number
+          p_at: string
+          p_before: number
+          p_cause: string
+          p_depth: number
+          p_order_id?: string
+          p_person_id: string
+          p_score: number
+          p_tick?: number
         }
         Returns: number
       }
@@ -2083,12 +2844,23 @@ export type Database = {
           reduce_cents: number
         }[]
       }
+      run_surveillance: {
+        Args: {
+          p_at: string
+          p_fingerprint_hash: string
+          p_order_id: string
+          p_person_id: string
+          p_user_id: string
+        }
+        Returns: number
+      }
+      search_key: { Args: { p_text: string }; Returns: string }
       search_people: {
         Args: { p_limit?: number; p_query: string }
         Returns: {
-          avatar_url: string | null
+          avatar_url: string
           category: string
-          change: number | null
+          change: number
           current_score: number
           display_name: string
           id: string
@@ -2096,23 +2868,28 @@ export type Database = {
           slug: string
         }[]
       }
-      search_key: { Args: { p_text: string }; Returns: string }
       search_terms: { Args: { p_text: string }; Returns: string }
-      shorting_enabled: { Args: never; Returns: boolean }
       shares_label: { Args: { p_units: number }; Returns: string }
       shares_text: { Args: { p_units: number }; Returns: string }
+      shorting_enabled: { Args: never; Returns: boolean }
       snapshot_portfolios: {
         Args: { p_at: string; p_tick_number?: number }
         Returns: number
       }
       starting_balance_cents: { Args: never; Returns: number }
-      units_cost_cents: {
-        Args: { p_price_cents: number; p_units: number }
-        Returns: number
-      }
-      units_per_share: { Args: Record<PropertyKey, never>; Returns: number }
-      units_proceeds_cents: {
-        Args: { p_price_cents: number; p_units: number }
+      surveillance_emit: {
+        Args: {
+          p_at: string
+          p_evidence: Json
+          p_observed: number
+          p_order_id: string
+          p_person_id: string
+          p_severity: string
+          p_since: string
+          p_threshold: number
+          p_type: string
+          p_users: string[]
+        }
         Returns: number
       }
       trade_history_for: {
@@ -2154,7 +2931,17 @@ export type Database = {
         }
         Returns: Json
       }
+      units_cost_cents: {
+        Args: { p_price_cents: number; p_units: number }
+        Returns: number
+      }
+      units_per_share: { Args: never; Returns: number }
+      units_proceeds_cents: {
+        Args: { p_price_cents: number; p_units: number }
+        Returns: number
+      }
       username_available: { Args: { p_username: string }; Returns: boolean }
+      wait_text: { Args: { p_seconds: number }; Returns: string }
     }
     Enums: {
       [_ in never]: never

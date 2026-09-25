@@ -76,3 +76,43 @@ describe("live series", () => {
     expect(foldTicksIntoRanges(twice, [], NOW)).toBe(twice);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE MARKET LINE UNDER THE TICKS (Phase 29)
+// ---------------------------------------------------------------------------
+
+import { marketAtTicks } from "./live-series";
+
+describe("marketAtTicks", () => {
+  const t = (offsetMs: number) => iso(NOW + offsetMs);
+  const ticks = [
+    { at: t(0), score: 50 },
+    { at: t(30_000), score: 50.1 },
+    { at: t(60_000), score: 50.2 },
+    { at: t(90_000), score: 50.3 },
+  ];
+
+  it("uses the latest change at or before each tick, the earliest change's before-value ahead of any, and the current premium with no history", () => {
+    const changes = [
+      { at: t(60_000), premiumBeforeCents: 400, premiumAfterCents: 399 },
+      { at: t(30_000), premiumBeforeCents: 0, premiumAfterCents: 400 },
+    ];
+    expect(marketAtTicks(ticks, changes, 399).map((tick) => tick.market)).toEqual([50, 54.1, 54.19, 54.29]);
+    expect(marketAtTicks(ticks, [], 7).map((tick) => tick.market)).toEqual([50.07, 50.17, 50.27, 50.37]);
+  });
+
+  it("counts a change stamped exactly at the tick, the way the decay step and the history row share a timestamp", () => {
+    const [only] = marketAtTicks([{ at: t(0), score: 50 }], [{ at: t(0), premiumBeforeCents: 100, premiumAfterCents: 99 }], 0);
+    expect(only.market).toBe(50.99);
+  });
+
+  it("folds the market price into the series and carries it on absorbed ticks", () => {
+    const series = foldTicks([], [{ at: t(0), score: 50, market: 54 }], range("1h"), NOW);
+    expect(series[0]).toEqual({ at: t(0), score: 50, open: 50, samples: 1, market: 54, marketOpen: 54 });
+    const day = foldTicks(series, [{ at: t(30_000), score: 50.1, market: 54.1 }], range("24h"), NOW + 30_000);
+    expect(day[0]).toEqual({ at: t(30_000), score: 50.1, open: 50, samples: 2, market: 54.1, marketOpen: 54 });
+    // A tick without a market price leaves the slice's market as it was.
+    const kept = foldTicks(series, [{ at: t(30_000), score: 50.1 }], range("24h"), NOW + 30_000);
+    expect(kept[0].market).toBe(54);
+  });
+});

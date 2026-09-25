@@ -33,10 +33,17 @@ import type { Person } from "@/types";
  *     DEADLINE and CALL BUDGET. A signal comes back scored or DEFERRED; a
  *     deferred signal was never attempted and is left out of everything
  *     below, so it stays unprocessed for the next tick
- *  4. first pass, per person: Gravity, Signals, Market Mood, Conviction,
- *     Trading Activity -> clamp(previous + Σ, floor, ceiling)
+ *  4. first pass, per person: Gravity, Signals, Market Mood
+ *     -> clamp(previous + Σ, floor, ceiling). Conviction and Trading
+ *     Activity are computed here too and reported, but SINCE PHASE 29 THEY
+ *     CONTRIBUTE ZERO TO THE SCORE: both read participant activity (open
+ *     capital, the trade tape), and nothing derived from participant
+ *     activity may feed the index. The market price (people.premium_cents,
+ *     written by place_order and decayed by apply_engine_tick) is where
+ *     trading shows.
  *  5. second pass: inverse pairs, re-clamp
- *  6. LMSR spread -> Buy / Sell prices
+ *  6. LMSR spread -> the DATA prices, score ± spread (the market price adds
+ *     the premium on top, in the database)
  *  7. persist atomically (people, score_history, score_events, the scored
  *     signals, engine_ticks) unless dryRun
  *  8. return the tick summary, with what was attempted, deferred and left
@@ -217,7 +224,11 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       }),
     );
 
-    const forces = [p.gravity, p.signals, marketMood, conviction, tradingActivity];
+    // THE SCORE is Gravity + Signals + Market Mood (Phase 29, Option A). The
+    // two participant-derived forces are computed and carried beside it as
+    // market readings; they are not in this sum and never reach score_events.
+    const forces = [p.gravity, p.signals, marketMood];
+    const marketForces = [conviction, tradingActivity];
     const sum = forces.reduce((total, f) => total + f.impact, 0);
     const firstPassScore = round(clamp(p.previousScore + sum, floor, ceiling), decimals);
 
@@ -227,6 +238,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       deltaHours: p.deltaHours,
       concentration: p.concentration,
       forces,
+      marketForces,
       scoredSignals: p.scoredSignals,
       signalsImpact: p.signals.impact,
       target: p.target,
@@ -296,6 +308,10 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     forces: Object.fromEntries(
       r.forces.filter((f) => f.impact !== 0).map((f) => [f.force, round(f.impact, FORCE_DECIMALS)]),
     ) as PersonSummary["forces"],
+    market: {
+      conviction: round(r.marketForces.find((f) => f.force === "conviction")?.impact ?? 0, FORCE_DECIMALS),
+      tradingActivity: round(r.marketForces.find((f) => f.force === "trading_activity")?.impact ?? 0, FORCE_DECIMALS),
+    },
     signalsProcessed: r.scoredSignals.length,
   }));
 

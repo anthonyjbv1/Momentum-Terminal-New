@@ -56,14 +56,18 @@ import { withCookies, type ResolvedSession } from "@/lib/supabase-proxy";
  * a crawler that ignores it falls back to the blanket disallow, which is
  * the safe way round.
  */
-export const ROBOTS_TXT = "User-agent: *\nAllow: /$\nAllow: /privacy$\nAllow: /og$\nDisallow: /\n";
+export const ROBOTS_TXT = "User-agent: *\nAllow: /$\nAllow: /privacy$\nAllow: /how-the-price-works$\nAllow: /og$\nDisallow: /\n";
 
 /** Header set on every response that passes through the proxy, the two indexable pages excepted. */
 export const NOINDEX_HEADER_NAME = "X-Robots-Tag";
 export const NOINDEX_HEADER_VALUE = "noindex, nofollow, noarchive";
 
-/** Reachable signed out. Exact paths; the unauthenticated flows above use nothing else. */
-export const PUBLIC_ROUTES: readonly string[] = ["/login", "/signup", "/auth/callback", "/privacy", "/og"];
+/**
+ * Reachable signed out. Exact paths; the unauthenticated flows above use
+ * nothing else. /how-the-price-works (Phase 29) is the public explainer of
+ * the market price, linked from every profile.
+ */
+export const PUBLIC_ROUTES: readonly string[] = ["/login", "/signup", "/auth/callback", "/privacy", "/how-the-price-works", "/og"];
 
 /** The public API (Phase 28): the featured score and the waitlist. Exact paths, no session, rate-limited on their own. */
 export const PUBLIC_API_ROUTES: readonly string[] = ["/api/public/featured", "/api/waitlist"];
@@ -78,7 +82,7 @@ export const SHARED_SECRET_ROUTES: readonly string[] = ["/api/ingest", "/api/ing
 export const LANDING_ROUTE = "/welcome";
 
 /** The pages a search engine may index and that carry no noindex header. */
-export const INDEXABLE_ROUTES: readonly string[] = ["/", "/privacy"];
+export const INDEXABLE_ROUTES: readonly string[] = ["/", "/privacy", "/how-the-price-works"];
 
 const ROBOTS_PATH = "/robots.txt";
 

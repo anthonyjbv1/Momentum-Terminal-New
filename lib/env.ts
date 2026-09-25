@@ -127,6 +127,21 @@ export function getFinnhubKeyOrNull(): string | null {
 }
 
 /**
+ * THE FINGERPRINT SALT (Phase 29). SERVER ONLY. The order route hashes the
+ * caller's address and user agent with this salt and hands the hash to
+ * place_order(), which stores it on the order (trade_orders.fingerprint_hash)
+ * for the shared-infrastructure detector and nothing else; neither the
+ * address nor the agent string is ever stored. Unset, no hash is computed,
+ * the column stays null and that one detector cannot fire. Rotating the salt
+ * breaks continuity with hashes written before it, on purpose. Generate one
+ * with: openssl rand -hex 32
+ */
+export function getFingerprintSaltOrNull(): string | null {
+  const value = process.env.FINGERPRINT_SALT?.trim();
+  return value ? value : null;
+}
+
+/**
  * Shared secret that authorises calls to /api/ingest. SERVER ONLY.
  * Returns null when unset so the route can fail closed with a clear message.
  */

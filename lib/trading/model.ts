@@ -1,6 +1,8 @@
 import { LIVE_TICK_MS } from "@/lib/person/live-series";
+import type { SubjectTier, TradingMode } from "@/lib/person/profile-model";
 
 import type { OrderSide, PositionDirection } from "./direction";
+import { averageCents, buyCostCents, impactCents as curveImpactCents, largestUnitsWithin, marginalCents, premiumCents as curvePremiumCents, sellProceedsCents, type MarketState } from "./market";
 
 /**
  * The trading flow's shape, on both sides of the server boundary.
@@ -13,9 +15,19 @@ import type { OrderSide, PositionDirection } from "./direction";
  * RPCs and this file say `units` — the seam is deliberate.
  *
  * THE DATABASE IS THE AUTHORITY. Everything here mirrors the constants and
- * arithmetic of migration 20260911200110_trading_flow so the interface can
- * explain an order before it is sent and show the result after; the
- * server never trusts a number from here.
+ * arithmetic of migration 20260911200110_trading_flow and, since Phase 29,
+ * of 20260925012938_phase29_market_price so the interface can explain an
+ * order before it is sent and show the result after; the server never
+ * trusts a number from here.
+ *
+ * THE MARKET PRICE (Phase 29). A person has two numbers: the Momentum
+ * Score, moved by the data alone, and the MARKET PRICE, which is the score
+ * plus a PREMIUM that trading moves and that decays back toward zero every
+ * tick. Buy and Sell quotes sit either side of the market price by the
+ * spread; an order walks a cost curve, so a large order fills at an average
+ * a little past the quote and its last unit at a worse price still. The
+ * curve's arithmetic lives in lib/trading/market.ts; this file applies it
+ * to previews.
  */
 
 export type Cents = number & { readonly __unit: "cents" };
@@ -158,14 +170,39 @@ export function unitsToShares(units: number): number {
 // Quotes
 // ---------------------------------------------------------------------------
 
-export interface TradeQuote {
+/**
+ * THE BOOK a preview is priced on: everything the sheet needs to walk the
+ * cost curve the way place_order() will. `buyCents` and `sellCents` include
+ * the premium; the base prices exclude it and are what the curve starts from.
+ * A null depth is the flat market (Phase 27 pricing, no impact); a null
+ * `inventoryUnits` means the caller does not know the book (the portfolio
+ * page, which reads a summary rather than a quote) and the preview is priced
+ * flat at the quote, with the server's average shown after the fill.
+ */
+export interface TradeBook {
+  buyCents: Cents;
+  sellCents: Cents;
+  /** score + half-spread and score − half-spread, in cents, premium excluded. */
+  baseBuyCents: Cents;
+  baseSellCents: Cents;
+  /** trunc(inventory × 100 / depth): how far the market price sits from the score, in cents per share. */
+  premiumCents: number;
+  inventoryUnits: number | null;
+  depthUnits: number | null;
+  premiumCapCents: number | null;
+}
+
+export interface TradeQuote extends TradeBook {
   personId: string;
   score: Points;
   spread: Points;
-  /** Buy fills at this: score + spread, in cents per unit. */
-  buyCents: Cents;
-  /** Sell fills at this: score − spread, in cents per unit. */
-  sellCents: Cents;
+  /** score + premium, in points. */
+  marketPrice: Points;
+  tier: SubjectTier;
+  tradingMode: TradingMode;
+  /** While in the future, every order is refused. */
+  haltedUntil: string | null;
+  haltReason: string | null;
   toleranceCents: Cents;
   asOf: string | null;
 }
@@ -174,9 +211,27 @@ export function quotePriceFor(quote: Pick<TradeQuote, "buyCents" | "sellCents">,
   return side === "BUY" ? quote.buyCents : quote.sellCents;
 }
 
-/** The Buy and Sell quotes from a score and spread, as the page derives them between ticks. */
-export function quoteFromScore(score: number, spread: number): { buyCents: Cents; sellCents: Cents } {
-  return { buyCents: pointsToCents(score + spread), sellCents: pointsToCents(score - spread) };
+/**
+ * The Buy and Sell quotes from a score, a spread and a premium, as the page
+ * derives them between ticks. The premium is whole cents, so adding it after
+ * the rounding is exactly points_to_cents(score ± spread + premium / 100).
+ */
+export function quoteFromScore(score: number, spread: number, premiumCents = 0): { buyCents: Cents; sellCents: Cents } {
+  const premium = Math.trunc(premiumCents);
+  return { buyCents: cents(pointsToCents(score + spread) + premium), sellCents: cents(pointsToCents(score - spread) + premium) };
+}
+
+/** The side of the book an order walks: its base price, the inventory and the depth. Unknown inventory reads as a flat market at the quote. */
+export function bookSide(book: TradeBook, side: OrderSide): MarketState {
+  if (book.inventoryUnits === null || book.depthUnits === null) {
+    return { baseCents: side === "BUY" ? book.buyCents : book.sellCents, inventoryUnits: 0, depthUnits: null };
+  }
+  return { baseCents: side === "BUY" ? book.baseBuyCents : book.baseSellCents, inventoryUnits: book.inventoryUnits, depthUnits: book.depthUnits };
+}
+
+/** A flat book at two quotes: what a caller that knows only the prices can offer. */
+export function flatBook(buyCents: Cents, sellCents: Cents, premiumCents = 0): TradeBook {
+  return { buyCents, sellCents, baseBuyCents: cents(buyCents - premiumCents), baseSellCents: cents(sellCents - premiumCents), premiumCents, inventoryUnits: null, depthUnits: null, premiumCapCents: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -288,22 +343,48 @@ export function toPositionSummary(value: unknown, personId: string): PositionSum
   };
 }
 
-/** trade_quote() / the quote inside an order result as JSON → TradeQuote. */
+/**
+ * trade_quote() / the quote inside an order result as JSON → TradeQuote.
+ * A quote from before Phase 29 carries no premium and no book: it reads as
+ * a flat market at the score, which is exactly what it was.
+ */
 export function toTradeQuote(value: unknown, personId: string): TradeQuote | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
   const buy = toNullableInt(record.buy_cents);
   const sell = toNullableInt(record.sell_cents);
   if (buy === null || sell === null) return null;
+  const premium = toInt(record.premium_cents, 0);
+  const score = toNumber(record.score);
+  const depth = toNullableInt(record.depth_units);
+  const inventory = toNullableInt(record.inventory_units);
+  const haltedUntil = typeof record.halted_until === "string" ? record.halted_until : null;
   return {
     personId: typeof record.person_id === "string" ? record.person_id : personId,
-    score: points(toNumber(record.score)),
+    score: points(score),
     spread: points(toNumber(record.spread)),
+    marketPrice: points(toNullableNumber(record.market_price) ?? score + premium / POINT_CENTS),
     buyCents: cents(buy),
     sellCents: cents(sell),
+    baseBuyCents: cents(toInt(record.base_buy_cents, buy - premium)),
+    baseSellCents: cents(toInt(record.base_sell_cents, sell - premium)),
+    premiumCents: premium,
+    inventoryUnits: depth === null ? null : (inventory ?? 0),
+    depthUnits: depth,
+    premiumCapCents: toNullableInt(record.premium_cap_cents),
+    tier: record.tier === "private_individual" ? "private_individual" : "public_figure",
+    tradingMode: record.trading_mode === "display_only" || record.trading_mode === "paused" ? record.trading_mode : "tradeable",
+    haltedUntil,
+    haltReason: haltedUntil && typeof record.halt_reason === "string" ? record.halt_reason : null,
     toleranceCents: cents(toInt(record.tolerance_cents, PRICE_TOLERANCE_CENTS_DEFAULT)),
     asOf: typeof record.as_of === "string" ? record.as_of : null,
   };
+}
+
+function toNullableNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +405,25 @@ export const ORDER_REJECTION_CODES = [
   // The order is smaller than platform_settings.min_order_cents, in whichever
   // mode it was entered: the amount in Dollars, the notional in Shares.
   "below_minimum",
+  // THE MARKET'S OWN REFUSALS (Phase 29), in the order place_order() checks them.
+  // The account is frozen while a review is open.
+  "frozen",
+  // platform_settings.require_verified_identity is on and the account has not verified.
+  "identity_required",
+  // The account is an excluded party for this market, or for every market.
+  "excluded",
+  // A circuit breaker or an operator has halted the person; `extra.halted_until` says until when.
+  "halted",
+  // trading_mode = 'paused': nothing can be placed.
+  "paused",
+  // trading_mode = 'display_only': the score is shown, nothing new is opened; what is held can be closed.
+  "display_only",
+  // One order may not exceed the tier's share of depth; `extra.max_units` is the most.
+  "order_too_large",
+  // The platform's net book on the person would pass the tier's cap; `extra.max_units` is what still fits.
+  "exposure_cap",
+  // The market price may not leave the premium band around the data; `extra.max_units` is what still fits.
+  "premium_cap",
   // Raised by the route rather than the database.
   "unauthenticated",
   "invalid",
@@ -344,6 +444,7 @@ export interface FilledOrder {
   personId: string;
   side: OrderSide;
   units: number;
+  /** The AVERAGE fill, cents per share: the whole walk over the quantity, rounded to the nearest cent. */
   fillPriceCents: Cents;
   grossCents: Cents;
   openedUnits: number;
@@ -355,6 +456,17 @@ export interface FilledOrder {
   realizedPnlCents: Cents;
   fills: OrderFill[];
   createdAt: string | null;
+  /**
+   * THE WALK (Phase 29). The base price the curve started from (the quote
+   * without the premium), the worst fill (the marginal price where the walk
+   * ended), the order's own impact term in cents, and the premium either side.
+   * On a flat market the worst fill is the base and the impact is 0.
+   */
+  baseCents: Cents;
+  worstFillCents: Cents;
+  impactCents: number;
+  premiumBeforeCents: number;
+  premiumAfterCents: number;
 }
 
 export type OrderResult =
@@ -417,6 +529,12 @@ export function toOrderResult(value: unknown, personId: string): OrderResult {
       realizedPnlCents: cents(toInt(order.realized_pnl_cents)),
       fills,
       createdAt: typeof order.created_at === "string" ? order.created_at : null,
+      // An order from before Phase 29 walked nothing: its base and worst fill are its price.
+      baseCents: cents(toInt(order.base_price_cents, toInt(order.fill_price_cents))),
+      worstFillCents: cents(toInt(order.worst_fill_cents, toInt(order.fill_price_cents))),
+      impactCents: toNumber(order.impact_cents, 0),
+      premiumBeforeCents: toInt(order.premium_before_cents, 0),
+      premiumAfterCents: toInt(order.premium_after_cents, 0),
     },
     balanceCents: cents(toInt(record.balance_cents)),
     position: toPositionSummary(record.position, personId),
@@ -460,68 +578,122 @@ export interface OrderPreview {
   shares: number;
   /** The same quantity in whole units: what actually goes on the wire. */
   units: number;
+  /**
+   * THE AVERAGE FILL, cents per share: what the order pays or receives per
+   * share over the whole walk, rounded to the nearest cent. This is the price
+   * the sheet displays, the price it sends as `quotedPriceCents`, and the
+   * price the server's tolerance band is checked against. On a flat market
+   * it is the quote.
+   */
   priceCents: Cents;
+  /** The marginal price at the START of the walk: the quote, premium included. */
+  quoteCents: Cents;
+  /** THE WORST FILL: the marginal price where the walk ends. The last thousandth of a share fills here. */
+  worstCents: Cents;
+  /** The order's own impact term, u² / (20·D), in cents: how much of the gross is the curve rather than the quote. 0 on a flat market. */
+  impactCents: number;
+  /** The premium after the order, in cents per share, and how far it moves the market price. */
+  premiumAfterCents: number;
   /** What the server will charge for a Buy, or return for a Sell — through the rounding rule, to the cent. */
   grossCents: Cents;
   /** The balance after, before any realized P&L on a Sell is known. */
   balanceAfterCents: Cents;
-  /** Shares the balance can cover at this price (Buy). */
+  /** Shares the balance can cover along this curve (Buy). */
   affordableShares: number;
   /** True when the order is worth less than the platform minimum and the server would refuse it. */
   belowMinimum: boolean;
 }
 
 /**
- * What a Shares-mode order will do, priced the way the server prices it.
- * previewOrder does not round a quantity: the sheet decides what the user
- * asked for and this says what it costs.
+ * THE SHAPE OF A WALK (Phase 29): the gross, the average, the worst fill and
+ * the premium after, for a quantity on one side of a book. Every figure is
+ * the integer the server will compute, through the same functions
+ * (lib/trading/market.ts mirrors the SQL and a test holds them together).
  */
-export function previewOrder(side: OrderSide, shares: number, priceCents: Cents, balanceCents: Cents): OrderPreview {
+export function walkPreview(side: OrderSide, units: number, book: TradeBook): Pick<OrderPreview, "priceCents" | "quoteCents" | "worstCents" | "impactCents" | "premiumAfterCents" | "grossCents"> {
+  const state = bookSide(book, side);
+  const direction = side === "BUY" ? "up" : "down";
+  const rounding = side === "BUY" ? "ceil" : "floor";
+  const gross = side === "BUY" ? buyCostCents(units, state) : sellProceedsCents(units, state);
+  const after = { ...state, inventoryUnits: state.depthUnits === null ? 0 : state.inventoryUnits + (side === "BUY" ? units : -units) };
+  const premiumAfter = state.depthUnits === null ? book.premiumCents : curvePremiumCents(after.inventoryUnits, state.depthUnits);
+  return {
+    priceCents: cents(units > 0 ? averageCents(units, state, direction) : marginalCents(state, rounding)),
+    quoteCents: cents(marginalCents(state, rounding)),
+    worstCents: cents(marginalCents(after, rounding)),
+    impactCents: curveImpactCents(units, state.depthUnits),
+    premiumAfterCents: premiumAfter,
+    grossCents: cents(gross),
+  };
+}
+
+/** The most units a balance covers along the curve, by the same search place_order() runs. */
+export function affordableUnitsOnCurve(spendCents: Cents | number, book: TradeBook, side: OrderSide): number {
+  return largestUnitsWithin(spendCents, bookSide(book, side), side === "BUY" ? "up" : "down", side === "BUY" ? "ceil" : "floor");
+}
+
+/**
+ * What a Shares-mode order will do, priced the way the server prices it.
+ * previewMarketOrder does not round a quantity: the sheet decides what the
+ * user asked for and this says what it costs.
+ */
+export function previewMarketOrder(side: OrderSide, shares: number, book: TradeBook, balanceCents: Cents, minOrderCents: Cents = MIN_ORDER_CENTS): OrderPreview {
   const units = shares > 0 ? sharesToUnits(shares) : 0;
-  const gross = side === "BUY" ? unitsCostCents(units, priceCents) : unitsProceedsCents(units, priceCents);
-  const balanceAfter = cents(side === "BUY" ? balanceCents - gross : balanceCents + gross);
+  const walk = walkPreview(side, units, book);
+  const balanceAfter = cents(side === "BUY" ? balanceCents - walk.grossCents : balanceCents + walk.grossCents);
   return {
     side,
     shares: units / UNITS_PER_SHARE,
     units,
-    priceCents,
-    grossCents: gross,
+    ...walk,
     balanceAfterCents: balanceAfter,
-    affordableShares: priceCents > 0 ? affordableUnits(balanceCents, priceCents) / UNITS_PER_SHARE : 0,
-    belowMinimum: units > 0 && gross < MIN_ORDER_CENTS,
+    affordableShares: walk.quoteCents > 0 ? affordableUnitsOnCurve(balanceCents, book, "BUY") / UNITS_PER_SHARE : 0,
+    belowMinimum: units > 0 && walk.grossCents < minOrderCents,
   };
 }
 
 /**
- * DOLLARS MODE, mirroring place_order()'s inversion. The largest quantity
- * whose rounded-UP cost still fits inside the amount asked for. Because
- * ceil(x) <= S is exactly x <= S for an integer S, that quantity is
- * floor(S × 1000 / price) — no search, no float, and the charge that comes
- * back is at most the amount entered, never more.
+ * DOLLARS MODE, mirroring place_order()'s inversion: the largest quantity
+ * whose walk stays within the amount asked for. The walk is monotone in the
+ * quantity, so it is a binary search over integers, and the charge that
+ * comes back is at most the amount entered, never more.
+ */
+export function previewMarketSpend(side: OrderSide, spendCents: Cents, book: TradeBook, balanceCents: Cents, minOrderCents: Cents = MIN_ORDER_CENTS): OrderPreview {
+  const units = affordableUnitsOnCurve(spendCents, book, side);
+  const walk = walkPreview(side, units, book);
+  const balanceAfter = cents(side === "BUY" ? balanceCents - walk.grossCents : balanceCents + walk.grossCents);
+  return {
+    side,
+    shares: units / UNITS_PER_SHARE,
+    units,
+    ...walk,
+    balanceAfterCents: balanceAfter,
+    affordableShares: affordableUnitsOnCurve(balanceCents, book, "BUY") / UNITS_PER_SHARE,
+    // In Dollars mode the minimum is checked against what the user entered,
+    // so that typing exactly $1.00 is never perversely refused for landing a
+    // cent under it once the quantity is resolved.
+    belowMinimum: spendCents < minOrderCents || units <= 0,
+  };
+}
+
+/** A Shares-mode preview on a FLAT market at one price: Phase 27's rule exactly, kept for callers that know only a price. */
+export function previewOrder(side: OrderSide, shares: number, priceCents: Cents, balanceCents: Cents): OrderPreview {
+  return previewMarketOrder(side, shares, flatBook(priceCents, priceCents), balanceCents);
+}
+
+/**
+ * The flat-market inversion: the largest quantity whose rounded-UP cost
+ * still fits inside the amount. Because ceil(x) <= S is exactly x <= S for
+ * an integer S, that quantity is floor(S × 1000 / price) — no search.
  */
 export function affordableUnits(spendCents: Cents | number, priceCents: Cents | number): number {
   if (priceCents <= 0) return 0;
   return Math.floor((spendCents * UNITS_PER_SHARE) / priceCents);
 }
 
-/** What a Dollars-mode order will actually buy and actually cost. */
+/** A Dollars-mode preview on a FLAT market at one price. */
 export function previewSpend(side: OrderSide, spendCents: Cents, priceCents: Cents, balanceCents: Cents): OrderPreview {
-  const units = affordableUnits(spendCents, priceCents);
-  const gross = side === "BUY" ? unitsCostCents(units, priceCents) : unitsProceedsCents(units, priceCents);
-  const balanceAfter = cents(side === "BUY" ? balanceCents - gross : balanceCents + gross);
-  return {
-    side,
-    shares: units / UNITS_PER_SHARE,
-    units,
-    priceCents,
-    grossCents: gross,
-    balanceAfterCents: balanceAfter,
-    affordableShares: affordableUnits(balanceCents, priceCents) / UNITS_PER_SHARE,
-    // In Dollars mode the minimum is checked against what the user entered,
-    // so that typing exactly $1.00 is never perversely refused for landing a
-    // cent under it once the quantity is resolved.
-    belowMinimum: spendCents < MIN_ORDER_CENTS || units <= 0,
-  };
+  return previewMarketSpend(side, spendCents, flatBook(priceCents, priceCents), balanceCents);
 }
 
 /**

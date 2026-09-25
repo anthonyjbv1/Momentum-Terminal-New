@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { requireUser } from "@/lib/auth";
 import { getFeedRoster } from "@/lib/feed/feed";
 import { getFirstTradeHistoryPage, getMyPortfolio, getMyValueSeries } from "@/lib/portfolio/server";
+import { getRenderedAt } from "@/lib/render-time";
 import { getPlatformSettings } from "@/lib/trading/settings";
 import { PortfolioView } from "@/components/portfolio/portfolio-view";
 import { Card } from "@/components/ui/card";
@@ -44,7 +45,7 @@ export default async function PortfolioPage() {
 
   return (
     <div className="flex flex-col gap-10">
-      <PageHeader title="Portfolio" description="What you hold, how it is doing, and every trade you have made. Paper money, marked at the Sell quote." />
+      <PageHeader title="Portfolio" description="What you hold, how it is doing, and every trade you have made. Paper money, marked at the Sell side of the market price." />
 
       {summary ? (
         <PortfolioView
@@ -54,6 +55,8 @@ export default async function PortfolioPage() {
           roster={roster}
           shortingEnabled={settings.shortingEnabled}
           toleranceCents={settings.priceToleranceCents}
+          minOrderCents={settings.minOrderCents}
+          renderedAt={getRenderedAt()}
           loggingEnabled
         />
       ) : (

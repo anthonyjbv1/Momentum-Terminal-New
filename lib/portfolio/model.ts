@@ -1,4 +1,4 @@
-import { RANGES, type SeriesByRange, type SeriesPoint } from "@/lib/person/profile-model";
+import { RANGES, type SeriesByRange, type SeriesPoint, type TradingMode } from "@/lib/person/profile-model";
 import type { OrderSide, PositionDirection } from "@/lib/trading/direction";
 import { EMPTY_POSITION, cents, payloadUnitsPerShare, toShares, type Cents, type PositionSummary } from "@/lib/trading/model";
 
@@ -42,8 +42,15 @@ export interface PortfolioPosition {
   newestOpenedAt: string | null;
   score: number;
   spread: number;
+  /** Buy and Sell sides of the MARKET PRICE (Phase 29): score ± spread, plus the premium. */
   buyCents: Cents;
   sellCents: Cents;
+  /** The premium in cents per share, and the market price in points. 0 and the score on a row from before Phase 29. */
+  premiumCents: number;
+  marketPrice: number;
+  tradingMode: TradingMode;
+  /** While in the future, every order on the person is refused. */
+  haltedUntil: string | null;
   /** Which quote the position is marked at: SELL for a HIGH position, BUY for a LOW one. */
   markSide: OrderSide;
   markPriceCents: Cents;
@@ -137,6 +144,10 @@ export function toPortfolioPosition(value: unknown, unitsPerShare = 1): Portfoli
     spread: toNullableNumber(record.spread) ?? 0,
     buyCents: cents(toInt(record.buy_cents)),
     sellCents: cents(toInt(record.sell_cents)),
+    premiumCents: toInt(record.premium_cents, 0),
+    marketPrice: toNullableNumber(record.market_price) ?? (toNullableNumber(record.score) ?? 0) + toInt(record.premium_cents, 0) / 100,
+    tradingMode: record.trading_mode === "display_only" || record.trading_mode === "paused" ? record.trading_mode : "tradeable",
+    haltedUntil: toText(record.halted_until),
     markSide: record.mark_side === "BUY" ? "BUY" : "SELL",
     markPriceCents: cents(toInt(record.mark_price_cents)),
     valueCents: cents(toInt(record.value_cents)),

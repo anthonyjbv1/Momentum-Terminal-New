@@ -28,6 +28,18 @@ export function makePerson(overrides: Partial<Person> = {}): Person {
     last_tick_at: null,
     buy_price: 50.5,
     sell_price: 49.5,
+    // Phase 29: the market price's state, at rest.
+    tier: "public_figure",
+    trading_mode: "tradeable",
+    market_inventory_units: 0,
+    premium_cents: 0,
+    market_price: 50,
+    depth_units_override: null,
+    decay_half_life_ticks_override: null,
+    premium_cap_cents_override: null,
+    shorting_override: null,
+    halted_until: null,
+    halt_reason: null,
     ...overrides,
   };
 }

@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/cn";
 import { formatCents } from "@/lib/money";
+import { marketLine } from "@/lib/person/profile-model";
 import type { Cents, PositionSummary } from "@/lib/trading/model";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -21,23 +22,32 @@ import { Money } from "./money";
  * quote, twice, in two units. Phase 26 dropped the figure from the hint
  * rather than converting it, since the line below already states it to the
  * cent; the hint now says only which side the position is marked at.
+ *
+ * THE MARK INCLUDES THE PREMIUM (Phase 29). A HIGH position is marked at
+ * the Sell side of the MARKET PRICE, a LOW one at its Buy side, so the mark
+ * carries whatever premium trading has put on the person right now. The
+ * footnote says where the market price sits relative to the data, because a
+ * premium is the part of the mark that decays back toward zero on its own.
  */
 export interface PositionCardProps {
   position: PositionSummary;
-  /** Live quotes from the score panel, cents per unit. */
+  /** Live quotes from the score panel, cents per unit, premium included. */
   buyCents: Cents;
   sellCents: Cents;
+  /** The premium in cents per share, for the footnote. 0 on a flat market. */
+  premiumCents?: number;
   className?: string;
 }
 
-export function PositionCard({ position, buyCents, sellCents, className }: PositionCardProps) {
+export function PositionCard({ position, buyCents, sellCents, premiumCents = 0, className }: PositionCardProps) {
   if (position.openUnits <= 0 || !position.direction) return null;
 
-  // A HIGH position closes at the Sell quote, a LOW one at the Buy quote.
+  // A HIGH position closes at the Sell side of the market price, a LOW one at the Buy side.
   const mark = position.direction === "HIGH" ? sellCents : buyCents;
   const value = position.openUnits * mark;
   const unrealized = position.direction === "HIGH" ? value - position.costCents : position.costCents - value;
   const unrealizedPct = position.costCents > 0 ? (unrealized / position.costCents) * 100 : 0;
+  const market = marketLine({ premiumCents });
 
   return (
     <section aria-labelledby="position-heading" className={cn("flex flex-col gap-4", className)}>
@@ -63,7 +73,7 @@ export function PositionCard({ position, buyCents, sellCents, className }: Posit
           <Money cents={position.avgEntryCents ?? 0} className="text-2xl font-semibold tracking-tight text-fg" />
           <span className="text-sm text-fg-muted">cost {formatCents(position.costCents)}</span>
         </Stat>
-        <Stat label="Value" hint={`at the ${position.direction === "HIGH" ? "Sell" : "Buy"} quote`}>
+        <Stat label="Value" hint={`at the ${position.direction === "HIGH" ? "Sell" : "Buy"} side of the market price`}>
           <Money cents={value} className="text-2xl font-semibold tracking-tight text-fg" />
           <span className="text-sm text-fg-muted">{formatCents(mark)} per share</span>
         </Stat>
@@ -77,6 +87,12 @@ export function PositionCard({ position, buyCents, sellCents, className }: Posit
         <p className="col-span-2 text-xs text-fg-faint sm:col-span-4">
           Realized on this person so far: <Money cents={position.realizedPnlCents} signed className="text-xs" />. Closes settle FIFO, oldest lot first, across{" "}
           {position.lots === 1 ? "one lot" : `${position.lots} lots`}; the average entry is for reading, not for settling.
+          {market.relation !== "in_line" ? (
+            <>
+              {" "}
+              The market price is <span className="num text-fg-muted">{market.text}</span> right now; that part of the mark drifts back toward the score on its own.
+            </>
+          ) : null}
         </p>
       </Card>
     </section>

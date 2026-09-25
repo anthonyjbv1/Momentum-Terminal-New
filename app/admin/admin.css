@@ -416,3 +416,114 @@ table.adm-t tfoot td {
   overflow: hidden;
   text-align: center;
 }
+
+/* --- the market's forms (Phase 29): plain HTML, one Server Action ---------- */
+
+.adm-notice {
+  margin: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--adm-line);
+  background: var(--adm-panel-alt);
+  font-size: 12px;
+}
+.adm-notice[data-tone="ok"] {
+  color: var(--adm-ok);
+}
+.adm-notice[data-tone="warn"] {
+  color: var(--adm-warn);
+}
+
+.adm-form {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+}
+.adm-form input:not([type="hidden"]),
+.adm-form select {
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--adm-line);
+  border-radius: 3px;
+  background: var(--adm-panel);
+  color: var(--adm-ink);
+  font: inherit;
+  font-size: 11px;
+}
+.adm-form input::placeholder {
+  color: var(--adm-ink-3);
+}
+.adm-btn {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--adm-line);
+  border-radius: 3px;
+  background: var(--adm-panel-alt);
+  color: var(--adm-ink);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.adm-btn:hover {
+  background: var(--color-surface-raised);
+}
+.adm-btn[data-tone="bad"] {
+  border-color: var(--adm-bad);
+  color: var(--adm-bad);
+}
+.adm-btn[data-tone="ok"] {
+  border-color: var(--adm-ok);
+  color: var(--adm-ok);
+}
+
+.adm-alert {
+  margin-bottom: 8px;
+  border: 1px solid var(--adm-line);
+  border-radius: 4px;
+  background: var(--adm-panel);
+}
+.adm-alert[data-severity="high"],
+.adm-alert[data-severity="critical"] {
+  border-color: var(--adm-warn);
+}
+.adm-alert-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--adm-line-soft);
+  background: var(--adm-panel-alt);
+  font-size: 11px;
+}
+.adm-alert-body {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  padding: 10px;
+  font-size: 12px;
+}
+.adm-alert-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--adm-line-soft);
+}
+.adm-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.adm-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}

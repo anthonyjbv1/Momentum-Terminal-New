@@ -93,9 +93,10 @@ async function ProfileBody({ slug, personId, personName }: { slug: string; perso
         shortingEnabled={settings.shortingEnabled}
         viewer={viewer}
         toleranceCents={settings.priceToleranceCents}
+        minOrderCents={settings.minOrderCents}
       />
 
-      <ForcesPanel forces={profile.forces} latestTick={profile.latestTick} />
+      <ForcesPanel forces={profile.forces} market={profile.market} latestTick={profile.latestTick} />
 
       {/* The crowd's read on the trajectory, below the five forces. Hidden entirely while the person's forecast_paused flag is set. */}
       <ForecastPanel
