@@ -94,7 +94,7 @@ export default async function HowThePriceWorksPage() {
               put on the price is undone when you sell the same shares back.
             </p>
             <p>
-              Each quote is the price of the <em>first</em> share. A larger order moves along the price as it fills, so it pays an average a little past the quote and its
+              Each quote is the price <em>before your order</em>. An order moves along the price as it fills, so it pays an average a little past the quote and its
               last share a little past that. Both figures are shown before you confirm, the average is the price you confirm, and the server refuses the order rather than
               filling it if that average has moved by more than {dollars(params.priceToleranceCents)} a share by the time it reads it.
             </p>

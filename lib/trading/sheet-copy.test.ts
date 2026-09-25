@@ -281,9 +281,13 @@ describe("the rendered sheet says the same", () => {
     expect(html).not.toContain("Market price");
   });
 
-  it("no sentence in the sheet's source calls a quote the first share's price", () => {
-    const source = readFileSync(join(__dirname, "..", "..", "components", "trade", "trade-sheet.tsx"), "utf8");
-    expect(source).not.toMatch(/first share[’']s price|First share \{/);
-    expect(source).not.toMatch(/Last share fills at/);
+  it("neither the sheet nor the public explainer calls a quote the first share's price", () => {
+    const root = join(__dirname, "..", "..");
+    const sheet = readFileSync(join(root, "components", "trade", "trade-sheet.tsx"), "utf8");
+    expect(sheet).not.toMatch(/first share[’']s price|First share \{/);
+    expect(sheet).not.toMatch(/Last share fills at/);
+    const explainer = readFileSync(join(root, "app", "(public)", "how-the-price-works", "page.tsx"), "utf8");
+    expect(explainer).not.toMatch(/price of the (<em>)?first(<\/em>)? share/);
+    expect(explainer).toMatch(/Each quote is the price <em>before your order<\/em>/);
   });
 });
