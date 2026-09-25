@@ -6,7 +6,6 @@ import {
   COMPANY_NEWS_VOLUME_METRIC,
   DAILY_CLOSE_METRIC,
   INSIDER_DETAIL_KEY,
-  INSIDER_PROBE_DETAIL_KEY,
   PRICE_DERIVED_METRICS,
   accountInsiderFilings,
   countArticles,
@@ -415,76 +414,18 @@ describe("insider filings under their own symbol (after Phase 29e)", () => {
   });
 
   it("reads Form 4s under config.insider_symbol, and company news under the ticker, always", async () => {
-    expect(readInsiderSymbol({ insider_symbol: " brk.a " }, "BRK.B")).toBe("BRK.A");
+    expect(readInsiderSymbol({ insider_symbol: " brk-b " }, "BRK.B")).toBe("BRK-B");
     expect(readInsiderSymbol({}, "BRK.B")).toBe("BRK.B");
     expect(readInsiderSymbol({ insider_symbol: "" }, "BRK.B")).toBe("BRK.B");
 
     const fetch = finnhubFetch({ insiders: [line({ name: "Buffett Warren E" })] });
-    const ctx = context(fetch, { personConfig: { insider_names: ["Buffett Warren"], insider_symbol: "BRK.A" } });
+    const ctx = context(fetch, { personConfig: { insider_names: ["Buffett Warren"], insider_symbol: "BRK-B" } });
     const buffett = makePerson({ slug: "warren-buffett", display_name: "Warren Buffett", category: "executive" });
     const events = await finnhubConnector.fetchForPerson(buffett, "BRK.B", ctx);
     await finnhubConnector.fetchMetrics?.(buffett, "BRK.B", ctx);
-    expect(fetch.urls("/stock/insider-transactions")[0]).toContain("symbol=BRK.A");
+    expect(fetch.urls("/stock/insider-transactions")[0]).toContain("symbol=BRK-B");
     expect(fetch.urls("/company-news")[0]).toContain("symbol=BRK.B");
-    expect(events[0].headline).toContain("BRK.A shares");
-    expect((ctx.details[INSIDER_DETAIL_KEY] as Record<string, unknown>).symbol).toBe("BRK.A");
-  });
-});
-
-/**
- * TEMPORARY, removed with the probe in lib/connectors/finnhub.ts: the one-off
- * insider-symbol probe records two counts per symbol and nothing else.
- */
-describe("the insider-symbol probe (temporary)", () => {
-  const saved = process.env.FINNHUB_API_KEY;
-  beforeEach(() => {
-    process.env.FINNHUB_API_KEY = "test-key";
-  });
-  afterEach(() => {
-    if (saved === undefined) delete process.env.FINNHUB_API_KEY;
-    else process.env.FINNHUB_API_KEY = saved;
-  });
-
-  const buffett = makePerson({ slug: "warren-buffett", display_name: "Warren Buffett", category: "executive" });
-  const bySymbol: Record<string, Array<Record<string, unknown>>> = {
-    "BRK.B": [],
-    "BRK.A": [line({ name: "BUFFETT WARREN E", transactionCode: "G" }), line({ name: "BUFFETT WARREN E", transactionCode: "C" }), line({ name: "Abel Gregory" })],
-    "BRK-B": [line({ name: "Buffett Warren E" })],
-  };
-  const probeFetch = () => {
-    const urls: string[] = [];
-    const impl: typeof fetch = async (input) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      urls.push(url);
-      const symbol = new URL(url).searchParams.get("symbol") ?? "";
-      if (symbol === "BRK-A") return Response.json({}, { status: 403 });
-      return Response.json({ data: bySymbol[symbol] ?? [], symbol });
-    };
-    return Object.assign(impl, { urls });
-  };
-
-  it("records, per symbol, the lines returned and the lines naming the person, over a year, and makes no signal of them", async () => {
-    const fetch = probeFetch();
-    const ctx = context(fetch, { personConfig: { insider_names: ["Buffett Warren"], insider_symbol_probe: ["BRK.A", "BRK-A", "BRK-B"] } });
-    const events = await finnhubConnector.fetchForPerson(buffett, "BRK.B", ctx);
-    expect(events).toEqual([]);
-    expect(ctx.details[INSIDER_PROBE_DETAIL_KEY]).toEqual({
-      from: "2025-09-18",
-      to: "2026-09-18",
-      results: { "BRK.A": { total: 3, naming: 2 }, "BRK-A": { error: "Finnhub responded 403 for /stock/insider-transactions" }, "BRK-B": { total: 1, naming: 1 } },
-    });
-    // Counts only: no name, share count or price from the probed lines.
-    const written = JSON.stringify(ctx.details[INSIDER_PROBE_DETAIL_KEY]);
-    expect(written).not.toMatch(/Abel|BUFFETT|price|411000000/i);
-    // The production read is untouched: BRK.B over the usual 45 days, then the three probes.
-    expect(fetch.urls.map((url) => new URL(url).searchParams.get("symbol"))).toEqual(["BRK.B", "BRK.A", "BRK-A", "BRK-B"]);
-  });
-
-  it("costs nothing on a mapping without the probe", async () => {
-    const fetch = probeFetch();
-    const ctx = context(fetch, { personConfig: { insider_names: ["Buffett Warren"] } });
-    await finnhubConnector.fetchForPerson(buffett, "BRK.B", ctx);
-    expect(fetch.urls).toHaveLength(1);
-    expect(ctx.details[INSIDER_PROBE_DETAIL_KEY]).toBeUndefined();
+    expect(events[0].headline).toContain("BRK-B shares");
+    expect((ctx.details[INSIDER_DETAIL_KEY] as Record<string, unknown>).symbol).toBe("BRK-B");
   });
 });

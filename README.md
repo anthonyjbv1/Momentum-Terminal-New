@@ -3147,7 +3147,16 @@ Three changes:
 
 **The worst case.** A catalogue that starts with 0.1 s of budget left and has every feed hang to its timeout ends at 40.9 s. Sixteen people, four at a time, then take the run to 45 s at 1 s each, or 47 s at 3 s each (with eight deferred at the grace). Before, the worst case was about 56 s. `runner.feeds.test.ts` plays this through on a clock with four lanes; `cron.test.ts` holds the arithmetic.
 
-**Buffett's insider filings.** Finnhub returns no insider lines at all for BRK.B, his company-news ticker. A Finnhub mapping can now name `config.insider_symbol`, the symbol Form 4s are read under; company news and the observe-only close stay on the ticker. A temporary probe (`config.insider_symbol_probe`) reads candidate symbols over a year and records only two counts per symbol on the poll row: lines returned, and lines naming the person. It is removed once read.
+**Buffett's insider filings.** Finnhub returns no insider lines at all for BRK.B, his company-news ticker. A Finnhub mapping can now name `config.insider_symbol`, the symbol Form 4s are read under; company news and the observe-only close stay on the ticker. A one-off probe on his 2026-09-25 19:00 UTC poll read four symbols over a year and recorded only line counts:
+
+| Symbol | Berkshire lines | Lines naming Buffett |
+|---|---|---|
+| BRK.B (control, the ticker) | 0 | 0 |
+| BRK-A | 0 | 0 |
+| BRK.A | 13 | 6 |
+| BRK-B | 39 | 12 |
+
+His mapping now reads insider filings under **BRK-B**: the most complete, and the same share class as his ticker in Finnhub's hyphen form. The probe was then removed, code and config. Only open-market purchases and sales become signals; every other line of his is recorded on the poll row's `insider_filings` account with the reason it was not scored.
 
 ### Reversing Phase 29
 
@@ -3177,7 +3186,7 @@ Three ways back, in the order to reach for them.
 
 ## Scope so far
 
-- **After 29e**: publisher_rss overruns no longer defer the same twelve people. A shared catalogue read is finished for everyone, inside a 10-second grace that keeps the run under the 60-second kill (worst case about 47 s, from 56 s). A run that missed anyone keeps the feeds' old caching markers, and people are polled longest-wait first. Finnhub insider filings can be read under their own symbol (`config.insider_symbol`), with a temporary probe to find Buffett's. Operator resets are recorded as an open item for a policy before real money.
+- **After 29e**: publisher_rss overruns no longer defer the same twelve people. A shared catalogue read is finished for everyone, inside a 10-second grace that keeps the run under the 60-second kill (worst case about 47 s, from 56 s). A run that missed anyone keeps the feeds' old caching markers, and people are polled longest-wait first. Finnhub insider filings can be read under their own symbol (`config.insider_symbol`); a one-off probe found Buffett's is BRK-B. Operator resets are recorded as an open item for a policy before real money.
 - **Phase 29e**: back-to-back orders at MrBeast's demo depth no longer refuse themselves. Every fill and refusal hands the page the book the server read, the sheet reads the live book as it opens, and a "price moved" refusal offers one action in the pinned footer, "Buy at $X", the server's own average, in one tap. On a wide screen the trade sheet is two columns under one footer and fits a 1278×604 window with no scrolling. The phone layout is unchanged to the pixel.
 - **Phase 29d**: the explainer made true — Market Mood "the tide across everyone we track", Conviction as the code does it (it tightens the spread), a round trip "the spread, plus at most a cent of rounding" with the bound pinned by a test, its own link preview and the arithmetic behind a toggle; a person's own market settings on their profile (MrBeast's depth now); signals unique per source, person and key, so Page and Brin both keep the GOOGL series and a shared article, filing or game reaches everyone it concerns; and every Finnhub insider line accounted for on the poll row.
 - **Phase 29c**: the chart's legend says "in line with the data" while the market price sits within a cent of the score across the window; "baseline" for the revert target everywhere a reader sees it; the five forces in two groups, "Moving the score" and "Moving the market", with Trading Activity read as the hour's split and volume and Conviction described as what the code does with it — it tightens the spread — and every claim held to the code by a test; the forecast sentence in the sentence face; and a temporary depth demo on MrBeast (20 shares per point).
