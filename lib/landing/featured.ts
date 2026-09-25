@@ -59,7 +59,7 @@ async function readFeaturedUncached(now: number): Promise<FeaturedPayload | null
     supabase.from("score_history").select("tick_number, recorded_at").eq("person_id", person.id).order("recorded_at", { ascending: false }).order("tick_number", { ascending: false }).limit(1).maybeSingle(),
     supabase.from("score_events").select("force, impact").eq("person_id", person.id).gte("created_at", windowStart).limit(1_000),
     supabase.from("score_events").select("force, impact, tick_number, details").eq("person_id", person.id).order("tick_number", { ascending: false }).order("id").limit(12),
-    getPersonSignals(person.id, person.displayName),
+    getPersonSignals({ id: person.id, displayName: person.displayName, category: person.category }),
   ]);
 
   for (const [label, result] of Object.entries({ h1, h24, d7, latestTick, forceWindow, latestEvents })) {

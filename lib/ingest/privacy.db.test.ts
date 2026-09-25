@@ -580,8 +580,16 @@ describe("the application", () => {
     // What makes it safe is the layer beneath: signals_enforce_metric_privacy
     // allow-lists a metric payload's keys, so "the payload" is already the
     // safe subset, and the two tests below hold that shut.
+    //
+    // Phase 30 adds two server-only readers: lib/feed/enrich.ts, which reads
+    // the payload for the signals on a Feed page and projects it to the
+    // outlet, the link, the kind and a comment digest's lean, title and
+    // sample count before anything leaves the server (the digest's comment
+    // texts are never read into the projection), and lib/home/board.ts, which
+    // does the same for the rail through the same projection. Both go
+    // through the service-role client; neither is a page or a component.
     const root = join(__dirname, "..", "..");
-    const allowed = ["lib/person/profile-model.ts", "lib/person/profile.ts"];
+    const allowed = ["lib/feed/enrich.ts", "lib/home/board.ts", "lib/person/profile-model.ts", "lib/person/profile.ts"];
     const selectors = sourceFiles(root)
       .filter((file) => /^(app|components|lib\/(feed|person|home|portfolio))\//.test(relative(root, file)))
       .filter((file) => /raw_payload|rawPayload/.test(readFileSync(file, "utf8")))

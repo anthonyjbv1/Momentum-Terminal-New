@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown } from "lucide-react";
+import { ArrowUpRight, ChevronDown } from "lucide-react";
 import { useState } from "react";
 
 import { cn } from "@/lib/cn";
@@ -161,6 +161,14 @@ function SignalItem({ item, personId, loggingEnabled, renderedAt }: { item: Prof
           {item.detail.map((line) => (
             <Detail key={line.label} label={line.label} value={line.value} />
           ))}
+          {item.link ? (
+            <Detail label="Article">
+              <a href={item.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-fg-secondary underline-offset-4 hover:underline">
+                Read the article
+                <ArrowUpRight className="size-3" aria-hidden />
+              </a>
+            </Detail>
+          ) : null}
         </dl>
       ) : null}
     </article>

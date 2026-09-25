@@ -69,7 +69,14 @@ function FeedRow({ item }: { item: FeedPreviewItem }) {
         </time>
       </div>
 
-      <p className="text-sm leading-relaxed text-fg-secondary">{item.text}</p>
+      {item.label ? <p className="text-label text-fg-muted">{item.label}</p> : null}
+      {item.link ? (
+        <a href={item.link} target="_blank" rel="noopener noreferrer" className="text-sm leading-relaxed text-fg-secondary underline-offset-4 hover:underline">
+          {item.text}
+        </a>
+      ) : (
+        <p className="text-sm leading-relaxed text-fg-secondary">{item.text}</p>
+      )}
 
       {item.source ? <p className="text-xs text-fg-faint">{item.source}</p> : null}
     </article>

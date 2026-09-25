@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CREATOR_CATEGORIES,
+  CREATOR_ONLY_NOUNS,
   METRIC_VOICE,
+  NEUTRAL_VOICE,
   REGISTER_BANDS,
+  categoryGroup,
   comparisonPhrase,
   countWords,
   fallbackVoice,
@@ -11,6 +15,7 @@ import {
   registerFor,
   spanWords,
   variantIndex,
+  voiceFor,
   type MetricSentenceInput,
   type MetricVoice,
 } from "./metric-language";
@@ -286,8 +291,15 @@ describe("every metric says what it observed", () => {
     for (const metric of registered) expect(METRIC_VOICE[metric], metric).toBeDefined();
 
     // No two metrics share a sentence: one template across every metric is
-    // what this phase set out to remove.
-    const lines = Object.values(METRIC_VOICE).flatMap((voice) => [...voice.spiking, ...voice.concrete, ...voice.elevated, ...voice.quiet]);
+    // what this phase set out to remove. A metric's general-group lines count too.
+    const lines = Object.values(METRIC_VOICE).flatMap((voice) => [
+      ...voice.spiking,
+      ...voice.concrete,
+      ...voice.elevated,
+      ...voice.quiet,
+      ...(voice.general ? [...voice.general.spiking, ...voice.general.concrete, ...voice.general.elevated, ...voice.general.quiet] : []),
+      ...(voice.withoutCompany ? [...voice.withoutCompany.spiking, ...voice.withoutCompany.concrete, ...voice.withoutCompany.elevated, ...voice.withoutCompany.quiet] : []),
+    ]);
     expect(new Set(lines).size).toBe(lines.length);
   });
 
@@ -320,15 +332,42 @@ describe("every metric says what it observed", () => {
 });
 
 describe("the comparison stays to the person themselves", () => {
-  it("names the person, or their possessive, in every sentence", () => {
+  it("names the person, or their possessive, in every sentence about them", () => {
     for (const name of ["Drake", "Jensen Huang", "Patrick Mahomes"]) {
-      for (const metric of Object.keys(METRIC_VOICE)) {
-        for (const sigma of [-3, 2.2, 2.8, 4.1]) {
-          const sentence = metricSentence({ ...BASE, name, metric, label: metric, sigma });
-          expect(sentence, `${name} ${metric} ${sigma}`).toContain(name);
+      for (const [metric, voice] of Object.entries(METRIC_VOICE)) {
+        // A company metric is about the company (Phase 30): it names Tesla, not the person.
+        if (voice.subject === "company") continue;
+        for (const category of ["creator", "executive", "athlete", undefined]) {
+          for (const sigma of [-3, 2.2, 2.8, 4.1]) {
+            const sentence = metricSentence({ ...BASE, name, metric, label: metric, sigma, category });
+            expect(sentence, `${name} ${metric} ${sigma} ${category}`).toContain(name);
+          }
         }
       }
     }
+  });
+
+  it("a company metric names the company and compares it to its own pace, never the person's (Phase 30)", () => {
+    const withCompany = { ...BASE, metric: "company_news_volume_24h", label: "company news volume", name: "Elon Musk", company: "Tesla", category: "executive" };
+    for (const sigma of [-3, 2.2, 2.8, 4.1]) {
+      for (const day of ["2026-09-19", "2026-09-20", "2026-09-21"]) {
+        const sentence = metricSentence({ ...withCompany, sigma, day });
+        expect(sentence, sentence).toContain("Tesla");
+        expect(sentence, sentence).not.toMatch(/Musk|company\b|their/);
+      }
+    }
+    expect(metricSentence({ ...withCompany, sigma: 2.95, observed: 61, baseline: 28.81, day: "2026-09-25" })).toMatch(/61 stories about Tesla today — 2x its usual pace|Coverage of Tesla is running at 2x its usual pace/);
+    // Without a company to name, the reading speaks of "their company" exactly
+    // as it did before Phase 30 (the ingestion writer stores that line), and
+    // never invents one. Readers never meet it: every surface passes the company.
+    const without = metricSentence({ ...withCompany, company: null, sigma: 2.2, day: "2026-09-19" });
+    expect(without).toMatch(/^Elon Musk's company is in the news more than usual$|^Busy stretch for Elon Musk's company$/);
+    expect(without).not.toContain("Tesla");
+    // The expand follows: the pace is the company's.
+    const detail = metricDetail({ ...withCompany, sigma: 2.95, observed: 61, baseline: 28.81, samples: 234 });
+    expect(detail.map((line) => line.label)).toContain("Tesla's usual pace");
+    expect(detail.map((line) => line.value)).toContain("Tesla's own fortnight");
+    expect(detail.map((line) => line.value).join(" ")).not.toMatch(/their/);
   });
 
   it("says 'their usual', never 'his' or 'her' — the roster stores no pronouns and a name does not imply any", () => {
@@ -393,6 +432,53 @@ describe("a count never becomes a raw level in a headline", () => {
         }
       }
     }
+  });
+});
+
+describe("nouns follow the category as well as the metric (Phase 30)", () => {
+  const categories = ["athlete", "creator", "executive", "founder", "musician", undefined, "something_new"];
+  const sigmas = [-4, -2.1, 2.0, 2.2, 2.8, 3.5, 12];
+  const counts = [[12, 4], [3, 19], [0, 4], [null, null]] as const;
+
+  it("never says clips, moments or streams of anyone outside the creator group, in any band, for any metric", () => {
+    for (const metric of Object.keys(METRIC_VOICE)) {
+      for (const category of categories) {
+        if (categoryGroup(category) === "creator") continue;
+        for (const sigma of sigmas) {
+          for (const [observed, baseline] of counts) {
+            for (const day of ["2026-09-19", "2026-09-20", "2026-09-21"]) {
+              const sentence = metricSentence({ ...BASE, metric, label: metric.replace(/_/g, " "), name: "Jensen Huang", sigma, observed, baseline, day, category });
+              expect(sentence, `${metric} ${category} ${sigma}`).not.toMatch(CREATOR_ONLY_NOUNS);
+              expect(sentence, `${metric} ${category} ${sigma}`).toContain("Jensen Huang");
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("keeps the creator nouns for creators and musicians", () => {
+    for (const category of ["creator", "musician"]) {
+      const spoken = sigmas.flatMap((sigma) => ["2026-09-19", "2026-09-20", "2026-09-21"].map((day) => metricSentence({ ...BASE, metric: "viral_moment_rate", label: "viral-moment frequency", name: "MrBeast", sigma, day, category })));
+      expect(spoken.some((sentence) => CREATOR_ONLY_NOUNS.test(sentence)), category).toBe(true);
+    }
+    expect(categoryGroup("creator")).toBe("creator");
+    expect(categoryGroup("musician")).toBe("creator");
+    expect(categoryGroup("executive")).toBe("general");
+    expect(categoryGroup(undefined)).toBe("general");
+    expect(CREATOR_CATEGORIES).toEqual(["creator", "musician"]);
+  });
+
+  it("gives the general group its own words for the one shared metric, and no nouns at all for a creator-platform metric", () => {
+    const executive = metricSentence({ ...BASE, metric: "viral_moment_rate", label: "viral-moment frequency", name: "Larry Page", sigma: 26.41, observed: 68, baseline: 0.13, category: "executive" });
+    expect(executive).toMatch(/stories|written about|coverage/i);
+    const stream = metricSentence({ ...BASE, metric: "stream_hours_7d", label: "hours live this week", name: "Larry Page", sigma: -3, category: "executive" });
+    expect(stream).toBe("Larry Page is less active than usual");
+    expect(voiceFor("stream_hours_7d", "hours live this week", "executive")).toBe(NEUTRAL_VOICE);
+    expect(voiceFor("stream_hours_7d", "hours live this week", "creator")).toBe(METRIC_VOICE.stream_hours_7d);
+    // The general unit calls the count what it is: readings above threshold, not stories.
+    const lines = metricDetail({ ...BASE, metric: "viral_moment_rate", label: "viral-moment frequency", name: "Larry Page", sigma: 26.41, observed: 68, baseline: 0.13, category: "executive", samples: 712 });
+    expect(lines.find((line) => line.label === "Observed")?.value).toBe("68 spikes");
   });
 });
 

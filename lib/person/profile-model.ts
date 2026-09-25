@@ -1,4 +1,5 @@
-import { detailForPayload, sentenceForPayload, type MetricDetailLine } from "@/lib/signals/metric-language";
+import { narrativeCard, projectSignalDetail, signalCard, signalDetailLines, type CardEvidenceInput, type CardSubject } from "@/lib/feed/card-copy";
+import type { MetricDetailLine } from "@/lib/signals/metric-language";
 import { directionAtPrecision, directionOf, type Direction } from "@/components/ui/direction-indicator";
 
 /** Decimals a force's contribution is shown to, everywhere it is shown. Its colour follows the same rounding. */
@@ -673,9 +674,19 @@ export function readMarketReadings(openCapitalCents: number, maxAllocationCents:
 export interface ProfileSignal {
   id: string;
   kind: "signal" | "narrative";
-  /** Where it came from: the data source's display name, or "The Engine" for a narrative. */
+  /**
+   * Where it came from, as a card says it (Phase 30): the outlet for an
+   * article, the source noun for anything else, "The Engine" and its sources
+   * for a narrative. Never a data source's own name for itself.
+   */
   source: string;
+  /** The outlet, shown above an article's title. Null for the Engine's own sentences. */
+  label: string | null;
   headline: string;
+  /** The article, when the headline is its title. */
+  link: string | null;
+  /** The card's one line: what it was and how far it moved the score. */
+  line: string;
   occurredAt: string;
   /** Score impact, when one was recorded: the signal's impact_score, or the narrative's before → after move. */
   impact: number | null;
@@ -686,9 +697,9 @@ export interface ProfileSignal {
   /** Signals only: whether the Engine has scored it yet. */
   processed: boolean | null;
   /**
-   * For a METRIC signal, the lines the expand shows: what was observed, the
-   * person's own pace, how they compare, and the window and sample behind it
-   * (Phase 21+). Empty for everything else.
+   * The lines the expand shows: where the signal came from, and for a METRIC
+   * what was observed, the person's own pace, how they compare, and the
+   * window and sample behind it (Phase 21+). Empty for a narrative.
    */
   detail: MetricDetailLine[];
 }
@@ -702,8 +713,26 @@ export interface SignalRow {
   sentiment_confidence: number | string | null;
   processed: boolean | null;
   data_sources: { display_name: string } | null;
-  /** The signal's payload. For a METRIC it is what the headline and the expand are rendered from (Phase 21+). */
+  /**
+   * The signal's payload. For a METRIC it is what the headline and the expand
+   * are rendered from (Phase 21+); for an article it carries the outlet and
+   * the link (Phase 30). Read on the server; only the projection leaves it.
+   */
   raw_payload?: unknown;
+}
+
+/** A signal the Engine linked to a narrative, as the nested select returns it. */
+export interface NarrativeEvidenceRow {
+  relation: string | null;
+  signals: {
+    id: string;
+    headline: string;
+    occurred_at: string;
+    impact_score: number | string | null;
+    raw_payload?: unknown;
+    data_sources: { display_name: string } | null;
+    people?: { display_name: string } | null;
+  } | null;
 }
 
 export interface NarrativeRow {
@@ -712,42 +741,94 @@ export interface NarrativeRow {
   created_at: string;
   score_before: number | string;
   score_after: number | string;
+  /** The evidence behind the sentence (Phase 30), so a template narrative can be un-nested exactly as the Feed does. */
+  narrative_signals?: NarrativeEvidenceRow[] | null;
 }
 
 export const ENGINE_SOURCE_LABEL = "The Engine";
 
+/** The subject the list is rendered for; a bare name is accepted for callers with nothing else to hand. */
+function toSubject(subject: CardSubject | string | undefined): CardSubject {
+  if (!subject) return { name: "", category: null, company: null };
+  if (typeof subject === "string") return { name: subject, category: null, company: null };
+  return subject;
+}
+
 /**
- * `personName` renders a metric signal's headline and its expand from the
- * PAYLOAD rather than from the stored string, exactly as the Feed does — so a
- * signal stored in sigma reads as plain language here too. Absent (a caller
- * that has no person to hand), stored headlines are shown as they are.
+ * Every item is rendered through the shared card copy (Phase 30), exactly as
+ * the Feed renders it: a metric from its payload, an article by its title and
+ * outlet, a template narrative un-nested. `subject` carries the person's name,
+ * category and company; absent, stored headlines are shown as they are and
+ * no one is named in a line.
  */
-export function mergeSignals(signals: SignalRow[], narratives: NarrativeRow[], limit = 30, personName?: string): ProfileSignal[] {
+export function mergeSignals(signals: SignalRow[], narratives: NarrativeRow[], limit = 30, subject?: CardSubject | string): ProfileSignal[] {
+  const about = toSubject(subject);
   const items: ProfileSignal[] = [
-    ...signals.map((row) => ({
-      id: `signal:${row.id}`,
-      kind: "signal" as const,
-      source: row.data_sources?.display_name ?? "Unknown source",
-      headline: (personName ? sentenceForPayload(row.raw_payload, personName, row.occurred_at) : null) ?? row.headline,
-      detail: personName ? detailForPayload(row.raw_payload, personName) : [],
-      occurredAt: row.occurred_at,
-      impact: toNullableNumber(row.impact_score),
-      sentiment: row.sentiment_label ? { label: row.sentiment_label, confidence: toNullableNumber(row.sentiment_confidence) } : null,
-      scoreBefore: null,
-      scoreAfter: null,
-      processed: row.processed ?? null,
-    })),
+    ...signals.map((row) => {
+      const detail = projectSignalDetail(row.raw_payload);
+      const input = {
+        subject: about,
+        headline: row.headline,
+        sourceName: row.data_sources?.display_name ?? null,
+        impact: toNullableNumber(row.impact_score),
+        processed: row.processed ?? null,
+        sentiment: row.sentiment_label,
+        occurredAt: row.occurred_at,
+        payload: row.raw_payload ?? null,
+        detail,
+      };
+      const copy = signalCard(input);
+      return {
+        id: `signal:${row.id}`,
+        kind: "signal" as const,
+        source: copy.attribution,
+        label: copy.label,
+        headline: copy.headline,
+        link: copy.link,
+        line: copy.line,
+        detail: signalDetailLines(input),
+        occurredAt: row.occurred_at,
+        impact: input.impact,
+        sentiment: row.sentiment_label ? { label: row.sentiment_label, confidence: toNullableNumber(row.sentiment_confidence) } : null,
+        scoreBefore: null,
+        scoreAfter: null,
+        processed: row.processed ?? null,
+      };
+    }),
     ...narratives.map((row) => {
       const before = toNumber(row.score_before);
       const after = toNumber(row.score_after);
+      // Scores carry one decimal; keep the move free of float noise.
+      const impact = Math.round((after - before) * 1000) / 1000;
+      const evidence: CardEvidenceInput[] = (row.narrative_signals ?? []).flatMap((link) => {
+        const signal = link.signals;
+        if (!signal) return [];
+        const relation = link.relation === "inverse_pair" ? ("inverse_pair" as const) : ("direct" as const);
+        return [
+          {
+            id: signal.id,
+            headline: signal.headline,
+            sourceName: signal.data_sources?.display_name ?? null,
+            impact: toNullableNumber(signal.impact_score),
+            occurredAt: signal.occurred_at,
+            payload: signal.raw_payload ?? null,
+            detail: projectSignalDetail(signal.raw_payload),
+            relation,
+            personName: relation === "inverse_pair" ? (signal.people?.display_name ?? null) : null,
+          },
+        ];
+      });
+      const copy = narrativeCard({ subject: about, text: row.text, impact, evidence });
       return {
         id: `narrative:${row.id}`,
         kind: "narrative" as const,
-        source: ENGINE_SOURCE_LABEL,
-        headline: row.text,
+        source: copy.attribution,
+        label: copy.label,
+        headline: copy.headline,
+        link: copy.link,
+        line: copy.line,
         occurredAt: row.created_at,
-        // Scores carry one decimal; keep the move free of float noise.
-        impact: Math.round((after - before) * 1000) / 1000,
+        impact,
         sentiment: null,
         scoreBefore: before,
         scoreAfter: after,

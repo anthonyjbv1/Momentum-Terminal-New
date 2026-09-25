@@ -2,6 +2,7 @@ import "server-only";
 
 import { cache } from "react";
 
+import { loadCompaniesByPerson } from "@/lib/feed/enrich";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 import {
@@ -193,31 +194,40 @@ export const getPersonProfile = cache(async (slug: string): Promise<PersonProfil
   };
 });
 
+/** The person a Signals list is rendered for: the name carries the sentences, the category the nouns, the id the company lookup. */
+export interface SignalsSubject {
+  id: string;
+  displayName: string;
+  category: string;
+}
+
 /**
- * The person's newest signals and Engine narratives, merged newest first.
- *
- * `personName` is what a metric signal's sentence is rendered WITH: the list
- * shows plain language built from the payload rather than the stored headline,
- * which is how a signal written before Phase 21+ reads without its sigma.
+ * The person's newest signals and Engine narratives, merged newest first,
+ * rendered through the shared card copy (Phase 30) exactly as the Feed
+ * renders them: a metric from its payload rather than the stored headline
+ * (Phase 21+), an article by its title and outlet, a template narrative
+ * un-nested. The company behind a company-news metric comes from the
+ * person's Finnhub mapping.
  */
-export const getPersonSignals = cache(async (personId: string, personName: string): Promise<ProfileSignal[]> => {
+export const getPersonSignals = cache(async (person: SignalsSubject): Promise<ProfileSignal[]> => {
   const supabase = createSupabaseAdminClient();
 
-  const [signals, narratives] = await Promise.all([
+  const [signals, narratives, companies] = await Promise.all([
     supabase
       .from("signals")
       .select("id, headline, occurred_at, impact_score, sentiment_label, sentiment_confidence, processed, raw_payload, data_sources(display_name)")
-      .eq("person_id", personId)
+      .eq("person_id", person.id)
       .order("occurred_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(SIGNAL_LIMIT),
     supabase
       .from("narratives")
-      .select("id, text, created_at, score_before, score_after")
-      .eq("person_id", personId)
+      .select("id, text, created_at, score_before, score_after, narrative_signals(relation, signals(id, headline, occurred_at, impact_score, raw_payload, data_sources(display_name), people(display_name)))")
+      .eq("person_id", person.id)
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(SIGNAL_LIMIT),
+    loadCompaniesByPerson(),
   ]);
 
   if (signals.error) console.warn("[person] signals read failed:", signals.error.message);
@@ -227,6 +237,6 @@ export const getPersonSignals = cache(async (personId: string, personName: strin
     (signals.data ?? []) as unknown as SignalRow[],
     (narratives.data ?? []) as unknown as NarrativeRow[],
     SIGNAL_LIMIT,
-    personName,
+    { name: person.displayName, category: person.category, company: companies.get(person.id) ?? null },
   );
 });

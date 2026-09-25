@@ -630,7 +630,13 @@ export function describeWindow(hours: number): string {
  * payload; absent, neither does. See MetricConfig.publishObserved.
  */
 export function metricSignal(input: {
-  person: { display_name: string };
+  /**
+   * The person's name and category. The category picks the nouns of the
+   * stored headline (Phase 30), so a creator's reading keeps its creator
+   * nouns exactly as before; the stored string is a denormalised copy that
+   * every surface re-renders from the payload anyway.
+   */
+  person: { display_name: string; category?: string | null };
   sourceName: string;
   externalIdentifier: string;
   observation: MetricObservation;
@@ -653,6 +659,7 @@ export function metricSignal(input: {
 
   const headline = metricSentence({
     name: person.display_name,
+    category: person.category ?? null,
     metric: config.metricKey,
     label: config.label,
     sigma,

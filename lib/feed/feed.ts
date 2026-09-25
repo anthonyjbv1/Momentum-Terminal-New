@@ -4,7 +4,8 @@ import { cache } from "react";
 
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
-import { FEED_PAGE_SIZE, cursorAfter, feedCategoryOptions, toFeedEntry, type FeedCursor, type FeedPage, type FeedRow } from "./feed-model";
+import { loadCompaniesByPerson, loadSignalDetails } from "./enrich";
+import { FEED_PAGE_SIZE, feedCategoryOptions, pageFromRows, signalIdsOf, type FeedCursor, type FeedPage, type FeedRow } from "./feed-model";
 
 /**
  * The Feed's server-side reads.
@@ -12,6 +13,12 @@ import { FEED_PAGE_SIZE, cursorAfter, feedCategoryOptions, toFeedEntry, type Fee
  * Like Home and the profile, these go through the service-role client: the
  * Feed is a public page and anon has no RLS policies. Every read is bounded
  * (one page of entries, the people roster) and read-only.
+ *
+ * Phase 30: a page is the RPC's rows plus two small reads — the outlet, link
+ * and kind of every signal on the page, and the company behind every person
+ * with a Finnhub mapping — rendered into card copy before it leaves the
+ * server. Cards whose move prints as zero are dropped after the cursor is
+ * taken, so paging is unaffected by how many are hidden.
  */
 
 export async function getFeedPage(cursor: FeedCursor | null = null, limit = FEED_PAGE_SIZE): Promise<FeedPage> {
@@ -23,8 +30,9 @@ export async function getFeedPage(cursor: FeedCursor | null = null, limit = FEED
   });
   if (error) throw new Error(`Could not load the feed: ${error.message}`);
 
-  const entries = ((data ?? []) as unknown as FeedRow[]).map(toFeedEntry).filter((entry) => entry !== null);
-  return { entries, nextCursor: cursorAfter(entries, limit) };
+  const rows = (data ?? []) as unknown as FeedRow[];
+  const [details, companies] = await Promise.all([loadSignalDetails(signalIdsOf(rows)), loadCompaniesByPerson()]);
+  return pageFromRows(rows, limit, { details, companies });
 }
 
 /** The first page, memoised per request. */

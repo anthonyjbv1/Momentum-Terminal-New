@@ -76,7 +76,47 @@ export interface MetricSentenceInput extends MetricReadingText {
    * a stored headline and a re-render of it identical forever.
    */
   day: string;
+  /**
+   * The person's category (Phase 30), which picks the NOUNS: clips, moments
+   * and streams belong to the creator group and never reach an executive.
+   * Absent, the general voice is used, which is the safe side of the rule.
+   */
+  category?: string | null;
+  /**
+   * The person's company (Phase 30), for a metric whose subject is the
+   * company rather than the person: "Tesla is in the news more than usual",
+   * never "Elon Musk's company". Absent, the company templates cannot fill
+   * and the reading falls back to its label.
+   */
+  company?: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Who a metric may describe (Phase 30)
+// ---------------------------------------------------------------------------
+
+/**
+ * The two noun groups. Creators and musicians share the creator nouns (clips,
+ * moments, streams, uploads); everyone else — executives, athletes, the
+ * founder, anyone not yet categorised — gets the general voice, which speaks
+ * of stories and coverage. The rule reads: a noun is chosen by the person's
+ * category as well as by the metric.
+ */
+export type CategoryGroup = "creator" | "general";
+
+export const CREATOR_CATEGORIES: readonly string[] = ["creator", "musician"];
+
+export function categoryGroup(category: string | null | undefined): CategoryGroup {
+  return category && CREATOR_CATEGORIES.includes(category) ? "creator" : "general";
+}
+
+/**
+ * The nouns that belong to the creator group and must never be said of an
+ * executive, an athlete or the founder. `metric-language.test.ts` renders
+ * every metric in every band for every category on the board and holds the
+ * general group to this.
+ */
+export const CREATOR_ONLY_NOUNS = /\b(clips?|clipped|viral|moments?|streams?|streamed|streaming|streamer)\b/i;
 
 // ---------------------------------------------------------------------------
 // Bands
@@ -141,7 +181,7 @@ export interface Comparison {
   ratio: number;
 }
 
-export function comparisonPhrase(observed: number | null | undefined, baseline: number | null | undefined): Comparison | null {
+export function comparisonPhrase(observed: number | null | undefined, baseline: number | null | undefined, possessive: "their" | "its" = "their"): Comparison | null {
   if (typeof observed !== "number" || typeof baseline !== "number") return null;
   if (!Number.isFinite(observed) || !Number.isFinite(baseline)) return null;
   // A ratio against a pace of nothing is either infinite or meaningless.
@@ -149,6 +189,11 @@ export function comparisonPhrase(observed: number | null | undefined, baseline: 
 
   const ratio = observed / baseline;
   if (!Number.isFinite(ratio)) return null;
+
+  // "their usual pace" for a person, "its usual pace" for a company (Phase
+  // 30): the comparison is still to the subject's own history, whichever
+  // the subject is.
+  const own = `${possessive} usual pace`;
 
   // EVERY BOUNDARY IS DECIDED ON THE DISPLAYED FIGURE, NEVER THE RAW ONE
   // (Phase 24). The first live game put these two lines fifteen minutes
@@ -178,23 +223,23 @@ export function comparisonPhrase(observed: number | null | undefined, baseline: 
     // same reason as above: 99.8x rounds to "100x", so it belongs with the
     // hundreds and not with the exact figures.
     const rounded = Math.round(ratio * 2) / 2;
-    if (rounded >= 100) return { standalone: "over 100x their usual pace", running: "at over 100x their usual pace", ratio };
-    const multiple = `${formatMultiple(rounded)}x their usual pace`;
+    if (rounded >= 100) return { standalone: `over 100x ${own}`, running: `at over 100x ${own}`, ratio };
+    const multiple = `${formatMultiple(rounded)}x ${own}`;
     // "at" so the phrase survives any progressive verb — "is running at 3x
     // their usual pace", "has been live at 2x their usual pace".
     return { standalone: multiple, running: `at ${multiple}`, ratio };
   }
   if (ratio > 1) {
-    if (percent < 1) return { standalone: "barely above their usual pace", running: "barely above their usual pace", ratio };
-    return { standalone: `up ${percent}% on their usual pace`, running: `${percent}% above their usual pace`, ratio };
+    if (percent < 1) return { standalone: `barely above ${own}`, running: `barely above ${own}`, ratio };
+    return { standalone: `up ${percent}% on ${own}`, running: `${percent}% above ${own}`, ratio };
   }
-  if (ratio === 1) return { standalone: "level with their usual pace", running: "level with their usual pace", ratio };
+  if (ratio === 1) return { standalone: `level with ${own}`, running: `level with ${own}`, ratio };
 
   // Nothing at all is not "down 100%". A percentage describes a shortfall from
   // something; zero is the absence of the thing, and the first live signal
   // after Phase 21+ shipped was exactly this — Larry Ellison, no stories
   // against a usual pace of 5.3. About 1.5% of emitted readings are zero.
-  if (ratio === 0) return { standalone: "nothing at all against their usual pace", running: "nowhere near their usual pace", ratio };
+  if (ratio === 0) return { standalone: `nothing at all against ${own}`, running: `nowhere near ${own}`, ratio };
 
   // Below pace, and the same rule again: the fraction owns exactly the
   // shortfalls that would PRINT as its own percentage, so the two forms can
@@ -202,14 +247,14 @@ export function comparisonPhrase(observed: number | null | undefined, baseline: 
   // rather than off the denominator is what closed the last hole in this —
   // a ratio of 0.195 printed "down 80%" while 0.1953 printed "a fifth".
   const down = Math.round((1 - ratio) * 100);
-  if (down < 1) return { standalone: "just below their usual pace", running: "just below their usual pace", ratio };
+  if (down < 1) return { standalone: `just below ${own}`, running: `just below ${own}`, ratio };
   // A shortfall that rounds to the whole thing is not the whole thing: a
   // reading of 0.004 against a pace of 1 is not "down 100%", which claims the
   // absence that the ratio === 0 branch above is for.
-  if (down >= 100) return { standalone: "next to nothing against their usual pace", running: "nowhere near their usual pace", ratio };
+  if (down >= 100) return { standalone: `next to nothing against ${own}`, running: `nowhere near ${own}`, ratio };
   const fraction = FRACTION_WORDS[down];
-  if (fraction) return { standalone: `${fraction} of their usual pace`, running: `at ${fraction} of their usual pace`, ratio };
-  return { standalone: `down ${down}% on their usual pace`, running: `${down}% below their usual pace`, ratio };
+  if (fraction) return { standalone: `${fraction} of ${own}`, running: `at ${fraction} of ${own}`, ratio };
+  return { standalone: `down ${down}% on ${own}`, running: `${down}% below ${own}`, ratio };
 }
 
 /**
@@ -266,9 +311,7 @@ export interface MetricUnit {
   many: string;
 }
 
-export interface MetricVoice {
-  /** What the count counts, for `{count}` and for the expand. Absent when the metric publishes no counts. */
-  unit?: MetricUnit;
+export interface MetricVoiceBands {
   /** 3.5σ and above: momentum-native, because something is genuinely happening. */
   spiking: string[];
   /** 2.5–3.5σ: concrete, because the number carries itself. */
@@ -277,6 +320,37 @@ export interface MetricVoice {
   elevated: string[];
   /** Below their own pace, at any magnitude: terminal throughout, and never a concrete count. */
   quiet: string[];
+}
+
+export interface MetricVoice extends MetricVoiceBands {
+  /** What the count counts, for `{count}` and for the expand. Absent when the metric publishes no counts. */
+  unit?: MetricUnit;
+  /**
+   * Who the metric can describe (Phase 30). "creator": a creator-platform
+   * activity metric — a channel, a stream, uploads — whose nouns belong to
+   * the creator group. Such a metric is only ever declared on creator and
+   * musician mappings; rendered for anyone else it speaks NEUTRAL_VOICE, which
+   * has no nouns at all. Absent: the metric can describe anyone.
+   */
+  audience?: "creator";
+  /**
+   * What the sentence is about (Phase 30). "company": the person's company,
+   * named through `{company}`, with the comparison to the company's own pace.
+   */
+  subject?: "company";
+  /**
+   * The lines for the general group (executive, athlete, founder) when the
+   * default lines use creator nouns. A metric that speaks the same way to
+   * everyone has none.
+   */
+  general?: MetricVoiceBands & { unit?: MetricUnit };
+  /**
+   * For a company metric, the lines used when no company name is to hand:
+   * the ingestion writer, which stores a denormalised headline without the
+   * mapping's company, and any caller that has only the person. Every
+   * surface a reader sees resolves the company and never reaches these.
+   */
+  withoutCompany?: MetricVoiceBands;
 }
 
 export const METRIC_VOICE: Record<string, MetricVoice> = {
@@ -291,35 +365,63 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
   company_news_volume_24h: {
     // Deliberately about the company and never the person: this counts
     // articles about the business, and conflating the two would credit
-    // someone with their employer's news.
-    unit: { one: "company story", many: "company stories" },
-    spiking: ["{their} company is all over the news", "News about {their} company just accelerated"],
-    concrete: ["{count} about {their} company — {comparison}", "Coverage of {their} company is running {running}"],
-    elevated: ["{their} company is in the news more than usual", "Busy stretch for {their} company"],
-    quiet: ["Quiet stretch for {their} company", "Coverage of {their} company has cooled off"],
+    // someone with their employer's news. Phase 30 names the company — Tesla,
+    // Oracle, Berkshire Hathaway — from the person's Finnhub mapping; the
+    // comparison is to the company's own pace, "its", not the person's.
+    subject: "company",
+    unit: { one: "story", many: "stories" },
+    spiking: ["{company} is all over the news", "News about {company} just accelerated"],
+    concrete: ["{count} about {company} today — {comparison}", "Coverage of {company} is running {running}"],
+    elevated: ["{company} is in the news more than usual", "Busy stretch for {company}"],
+    quiet: ["Quiet stretch for {company}", "Coverage of {company} has cooled off"],
+    // The Phase 21+ lines, kept word for word for the stored headline the
+    // ingestion writer keeps writing (it has no company to hand); a reader
+    // never meets them, because every surface re-renders with the company.
+    withoutCompany: {
+      spiking: ["{their} company is all over the news", "News about {their} company just accelerated"],
+      concrete: ["{count} about {their} company — {comparison}", "Coverage of {their} company is running {running}"],
+      elevated: ["{their} company is in the news more than usual", "Busy stretch for {their} company"],
+      quiet: ["Quiet stretch for {their} company", "Coverage of {their} company has cooled off"],
+    },
   },
   viral_moment_rate: {
+    // Switched off on the rss row on 2026-09-25; the voice stays for the 868
+    // signals it emitted, which still render. Clips and moments are creator
+    // nouns; an executive's reading speaks of stories being picked up, which
+    // is what the metric counted for them. Its count is a count of readings
+    // above threshold, so the general unit calls them spikes rather than
+    // dressing them as stories.
     unit: { one: "viral moment", many: "viral moments" },
     spiking: ["{name} is everywhere right now", "{their} clips are spreading fast", "People cannot stop sharing {their} moments"],
     concrete: ["{count} from {name} spreading — {comparison}", "People are sharing {their} moments {running}", "{their} moments are spreading {running}"],
     elevated: ["People are sharing {their} moments more than usual", "{their} clips are travelling further than usual"],
     quiet: ["{their} moments are spreading less than usual", "Fewer {name} clips are travelling than usual"],
+    general: {
+      unit: { one: "spike", many: "spikes" },
+      spiking: ["Stories about {name} are spreading unusually fast", "{name} is being written about far more widely than usual"],
+      concrete: ["Stories about {name} are being picked up {running}", "Coverage of {name} is travelling {running}"],
+      elevated: ["Stories about {name} are travelling further than usual", "{name} is being picked up more widely than usual"],
+      quiet: ["Stories about {name} are travelling less than usual", "{name} is being picked up less widely than usual"],
+    },
   },
 
   // --- YouTube -------------------------------------------------------------
   subscriber_count: {
+    audience: "creator",
     spiking: ["{name} is gaining subscribers fast", "Subscribers are piling onto {their} channel"],
     concrete: ["{name} is gaining subscribers {running}", "Subscriber growth on {their} channel is running {running}"],
     elevated: ["{name} is picking up subscribers faster than usual", "Subscriber growth is running ahead of usual for {name}"],
     quiet: ["Subscriber growth has slowed for {name}", "{name} is gaining subscribers more slowly than usual"],
   },
   view_count: {
+    audience: "creator",
     spiking: ["Views on {their} channel are surging", "{their} channel is pulling views fast"],
     concrete: ["{their} channel is pulling views {running}", "Views on {their} channel are running {running}"],
     elevated: ["{their} channel is pulling views faster than usual", "View growth is running ahead of usual for {name}"],
     quiet: ["Views on {their} channel have slowed", "{their} channel is pulling views more slowly than usual"],
   },
   recent_video_views: {
+    audience: "creator",
     spiking: ["{their} newest uploads are taking off", "{their} latest videos are moving fast"],
     concrete: ["{their} newest uploads are moving {running}", "Views on {their} latest videos are running {running}"],
     elevated: ["{their} newest uploads are moving faster than usual", "{their} latest videos are outpacing their usual"],
@@ -333,6 +435,7 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
     quiet: ["YouTube has gone quieter on {name}", "Fewer creators are covering {name} than usual"],
   },
   upload_rate: {
+    audience: "creator",
     unit: { one: "upload a day", many: "uploads a day" },
     spiking: ["{name} is uploading at a tear", "{their} upload schedule has gone into overdrive"],
     concrete: ["{name} is uploading {running}", "{their} upload cadence is running {running}"],
@@ -343,6 +446,7 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
     // Observe-only since Phase 21 (a sum over a changing basket of uploads),
     // so it emits nothing today. Written for the day the connector gives it a
     // basket-stable definition.
+    audience: "creator",
     unit: { one: "comment", many: "comments" },
     spiking: ["{their} comment sections have erupted", "Viewers are flooding {their} comments"],
     concrete: ["{their} comment sections are running {running}", "Comments on {their} videos are running {running}"],
@@ -352,12 +456,14 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
 
   // --- Twitch --------------------------------------------------------------
   follower_count: {
+    audience: "creator",
     spiking: ["{name} is gaining followers fast", "Followers are piling onto {their} channel"],
     concrete: ["{name} is gaining followers {running}", "Follower growth for {name} is running {running}"],
     elevated: ["{name} is picking up followers faster than usual", "Follower growth is running ahead of usual for {name}"],
     quiet: ["Follower growth has slowed for {name}", "{name} is gaining followers more slowly than usual"],
   },
   stream_hours_7d: {
+    audience: "creator",
     unit: { one: "hour", many: "hours" },
     spiking: ["{name} has barely been offline", "{name} is living on stream this week"],
     concrete: ["{name} streamed {count} this week — {comparison}", "{name} has been live {running}"],
@@ -365,6 +471,7 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
     quiet: ["{name} has been live less than usual", "Shorter week on stream than usual for {name}"],
   },
   stream_days_7d: {
+    audience: "creator",
     unit: { one: "day", many: "days" },
     spiking: ["{name} has streamed almost every day", "{name} is on a streaming run"],
     concrete: ["{name} was live on {count} this week — {comparison}", "{name} is streaming {running}"],
@@ -372,6 +479,7 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
     quiet: ["{name} is streaming on fewer days than usual", "{name} has been on less often than usual"],
   },
   clips_per_stream_hour: {
+    audience: "creator",
     unit: { one: "clip an hour", many: "clips an hour" },
     spiking: ["{their} stream is getting clipped constantly", "Clips are pouring off {their} stream"],
     concrete: ["{count} off {their} stream — {comparison}", "{their} stream is getting clipped {running}"],
@@ -382,6 +490,7 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
     // No unit: peak concurrent audience is an audience size, and the Phase 7
     // boundary keeps those out of a payload. The register still carries the
     // reading; the number does not appear.
+    audience: "creator",
     spiking: ["{their} stream drew a huge crowd", "{name} packed the stream out"],
     concrete: ["{their} stream peaked well above their usual", "{name} drew a bigger crowd than usual"],
     elevated: ["{their} stream peaked above their usual", "Bigger crowd than usual on {their} stream"],
@@ -426,8 +535,43 @@ export function fallbackVoice(label: string): MetricVoice {
   };
 }
 
-export function voiceFor(metric: string, label: string): MetricVoice {
-  return METRIC_VOICE[metric] ?? fallbackVoice(label);
+/**
+ * What a creator-platform metric says of someone outside the creator group
+ * (Phase 30). It cannot happen on the board — those metrics are declared on
+ * creator and musician mappings only, and `metric-language.test.ts` reads the
+ * seeded mappings to hold that — but the renderer still has to answer, and
+ * the answer has no nouns in it.
+ */
+export const NEUTRAL_VOICE: MetricVoice = {
+  spiking: ["{name} is far more active than usual"],
+  concrete: ["{name} is more active than usual"],
+  elevated: ["{name} is a little more active than usual"],
+  quiet: ["{name} is less active than usual"],
+};
+
+/**
+ * The voice for a metric, resolved for the person's category (Phase 30): the
+ * creator group gets the default lines; the general group gets the metric's
+ * `general` lines where it has them, NEUTRAL_VOICE where the metric is a
+ * creator-platform one, and the default lines otherwise (they carry no
+ * creator noun, and the test proves it).
+ */
+export function voiceFor(metric: string, label: string, category?: string | null, company?: string | null): MetricVoice {
+  const voice = METRIC_VOICE[metric] ?? fallbackVoice(label);
+  // A company metric with no company to name speaks of "their company", as it
+  // did before Phase 30; with one, of the company itself, for everyone.
+  if (voice.subject === "company") {
+    if (company?.trim()) return voice;
+    const { withoutCompany, ...rest } = voice;
+    return withoutCompany ? { ...rest, ...withoutCompany } : voice;
+  }
+  if (categoryGroup(category) === "creator") return voice;
+  if (voice.general) {
+    const { general, ...rest } = voice;
+    return { ...rest, ...general, unit: general.unit ?? rest.unit };
+  }
+  if (voice.audience === "creator") return NEUTRAL_VOICE;
+  return voice;
 }
 
 // ---------------------------------------------------------------------------
@@ -474,14 +618,15 @@ export function countWords(value: number, unit: MetricUnit): string {
  * re-render of itself.
  */
 export function metricSentence(input: MetricSentenceInput): string {
-  const { name, sigma, metric, label, windowHours, observed, baseline, day } = input;
-  const voice = voiceFor(metric, label);
+  const { name, sigma, metric, label, windowHours, observed, baseline, day, category, company } = input;
+  const voice = voiceFor(metric, label, category, company);
   const register = registerFor(sigma);
-  const comparison = comparisonPhrase(observed, baseline);
+  const comparison = comparisonPhrase(observed, baseline, voice.subject === "company" && company?.trim() ? "its" : "their");
 
   const values: Record<string, string | null> = {
     name,
     their: possessive(name),
+    company: company?.trim() || null,
     span: spanWords(windowHours),
     count: voice.unit && typeof observed === "number" && Number.isFinite(observed) ? countWords(observed, voice.unit) : null,
     // A count below the person's own pace is never printed: stated plainly it
@@ -500,8 +645,14 @@ export function metricSentence(input: MetricSentenceInput): string {
   // and metric-language.test.ts fails if that stops being true.
   const own = fits(register);
   const usable = own.length > 0 ? own : register === "concrete" ? fits("elevated") : [];
-  const templates = usable.length > 0 ? usable : [`{their} ${label} is running ${sigma < 0 ? "below" : "above"} their usual`];
+  const templates = usable.length > 0 ? usable : [`{their} ${humanLabel(label)} is running ${sigma < 0 ? "below" : "above"} their usual`];
   return fill(templates[variantIndex(name, day, metric, templates.length)], values);
+}
+
+/** A declared label as a reader would say it: "company_news_volume_24h" → "company news volume". A key's window suffix is not a word. */
+function humanLabel(label: string): string {
+  const words = label.replace(/_/g, " ").trim().replace(/\s+\d+[hdw]\b/gi, "");
+  return words.trim() || "activity";
 }
 
 function placeholders(template: string): string[] {
@@ -532,24 +683,28 @@ export interface MetricDetailLine {
  * from. A metric that publishes no counts still explains itself — the window
  * and the sample are the part that makes the comparison fair.
  */
-export function metricDetail(input: MetricReadingText & { name: string; samples?: number | null }): MetricDetailLine[] {
-  const voice = voiceFor(input.metric, input.label);
+export function metricDetail(input: MetricReadingText & { name: string; samples?: number | null; category?: string | null; company?: string | null }): MetricDetailLine[] {
+  const voice = voiceFor(input.metric, input.label, input.category, input.company);
   const lines: MetricDetailLine[] = [];
   const unit = voice.unit;
+  // A company metric is measured against the company's own history (Phase
+  // 30): the lines say so, by name when the company is known.
+  const company = voice.subject === "company" ? input.company?.trim() || null : null;
+  const subject = company ? possessive(company) : possessive(input.name);
 
   if (unit && typeof input.observed === "number" && Number.isFinite(input.observed)) {
     lines.push({ label: "Observed", value: countLine(input.observed, unit) });
   }
   if (unit && typeof input.baseline === "number" && Number.isFinite(input.baseline)) {
-    lines.push({ label: "Their usual pace", value: countLine(input.baseline, unit) });
+    lines.push({ label: company ? `${subject} usual pace` : "Their usual pace", value: countLine(input.baseline, unit) });
   }
 
-  const comparison = comparisonPhrase(input.observed, input.baseline);
-  if (comparison) lines.push({ label: "Against their own pace", value: capitalise(comparison.standalone) });
+  const comparison = comparisonPhrase(input.observed, input.baseline, company ? "its" : "their");
+  if (comparison) lines.push({ label: company ? `Against ${subject} own pace` : "Against their own pace", value: capitalise(comparison.standalone) });
 
-  // The comparison is to the person themselves, and this line is where that
-  // is stated outright rather than implied.
-  lines.push({ label: "Measured against", value: `${possessive(input.name)} own ${spanWords(input.windowHours)}` });
+  // The comparison is to the subject itself, and this line is where that is
+  // stated outright rather than implied.
+  lines.push({ label: "Measured against", value: `${subject} own ${spanWords(input.windowHours)}` });
   if (typeof input.samples === "number" && Number.isFinite(input.samples)) {
     lines.push({ label: "Readings in that window", value: String(Math.round(input.samples)) });
   }
@@ -630,19 +785,25 @@ export function dayOf(occurredAt: string): string {
   return Number.isNaN(date.getTime()) ? "1970-01-01" : date.toISOString().slice(0, 10);
 }
 
+/** Who a stored signal is rendered for: the category picks the nouns, the company the subject of a company metric (Phase 30). */
+export interface MetricSubject {
+  category?: string | null;
+  company?: string | null;
+}
+
 /**
  * The sentence for a stored metric signal, or null when the payload is not a
  * metric's. `name` is the person the signal is ABOUT, which for an
  * inverse-pair evidence row is the paired person rather than the entry's.
  */
-export function sentenceForPayload(payload: unknown, name: string, occurredAt: string): string | null {
+export function sentenceForPayload(payload: unknown, name: string, occurredAt: string, subject: MetricSubject = {}): string | null {
   const reading = readMetricPayload(payload);
   if (!reading) return null;
-  return metricSentence({ ...reading, name, day: dayOf(occurredAt) });
+  return metricSentence({ ...reading, name, day: dayOf(occurredAt), category: subject.category, company: subject.company });
 }
 
 /** The expand's lines for a stored metric signal, or an empty list when it is not one. */
-export function detailForPayload(payload: unknown, name: string): MetricDetailLine[] {
+export function detailForPayload(payload: unknown, name: string, subject: MetricSubject = {}): MetricDetailLine[] {
   const reading = readMetricPayload(payload);
-  return reading ? metricDetail({ ...reading, name }) : [];
+  return reading ? metricDetail({ ...reading, name, category: subject.category, company: subject.company }) : [];
 }

@@ -421,12 +421,13 @@ describe("metricSignal", () => {
     // the score. A polarity -1 metric rising is a fall, and the words still
     // say it rose.
     const inverse = observeMetric({ metricKey: "subscriber_count", config: { ...SUBSCRIBERS, polarity: -1 }, history, current: { value: history[47].value + 5_000, recordedAt: hour(48) } });
-    const signal = metricSignal({ person: { display_name: "Drake" }, sourceName: "youtube", externalIdentifier: "x", observation: inverse });
+    // A creator-platform metric on a musician: the stored headline keeps the creator nouns (Phase 30).
+    const signal = metricSignal({ person: { display_name: "Drake", category: "musician" }, sourceName: "youtube", externalIdentifier: "x", observation: inverse });
     expect(signal.rawPayload).toMatchObject({ direction: -1, polarity: -1 });
     expect(signal.headline).toMatch(/gaining subscribers|piling onto/);
 
     const fall = observeMetric({ metricKey: "subscriber_count", config: SUBSCRIBERS, history, current: { value: history[47].value - 5_000, recordedAt: hour(48) } });
-    const falling = metricSignal({ person: { display_name: "James" }, sourceName: "youtube", externalIdentifier: "x", observation: fall });
+    const falling = metricSignal({ person: { display_name: "James", category: "creator" }, sourceName: "youtube", externalIdentifier: "x", observation: fall });
     expect(falling.rawPayload).toMatchObject({ direction: -1, polarity: 1 });
     expect(falling.headline).toMatch(/slowed|more slowly/);
     // The possessive follows one rule for the whole app.

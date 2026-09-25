@@ -1,19 +1,29 @@
-import { sentenceForPayload } from "@/lib/signals/metric-language";
+import { detailForPayload, type MetricDetailLine } from "@/lib/signals/metric-language";
 import { directionAtPrecision, type Direction } from "@/components/ui/direction-indicator";
 import { categoryLabel, categoryOptions, type CategoryOption } from "@/lib/home/board-model";
-import { formatSigned } from "@/lib/person/profile-model";
+
+import {
+  CARD_MOVE_DECIMALS,
+  detailSourceLines,
+  evidenceSentence,
+  narrativeCard,
+  showsAsCard,
+  signalCard,
+  signalDetailLines,
+  type CardCopy,
+  type CardEvidenceInput,
+  type CardSubject,
+  type SignalDetail,
+} from "./card-copy";
 
 /**
- * The Feed's shape and the pure logic behind it: the entry, the Engine's
- * framing for a raw signal, the high-impact selection, category filtering,
- * paging and the cursor. No I/O here, so every rule is testable on its own.
+ * The Feed's shape and the pure logic behind it: the entry, the high-impact
+ * selection, category filtering, paging and the cursor. No I/O here, so every
+ * rule is testable on its own.
  *
- * VOICE. The Feed is one narrator: the Engine describing what it observes.
- * A narrative entry is the Engine's own sentence, stored as written. A
- * signal entry is a raw observation that no narrative explains yet, so the
- * Engine frames it here, in presentation only (`frameSignal`), and the
- * headline it observed is carried as a quotation beneath. Stored text is
- * never rewritten.
+ * VOICE (Phase 30). Every word on a card comes from `./card-copy`, shared with
+ * the profile, the landing page and the Home rail: the entry carries the
+ * rendered `copy` beside the stored `text`. Stored text is never rewritten.
  */
 
 // ---------------------------------------------------------------------------
@@ -22,10 +32,10 @@ import { formatSigned } from "@/lib/person/profile-model";
 
 /**
  * Decimals the Feed shows an entry's impact to (the DirectionIndicator beside
- * it, and the Engine's framing sentence). An entry's direction is read at the
- * same precision, so a move that rounds to zero carries no colour (Phase 19+).
+ * it, and the card's line). An entry's direction is read at the same
+ * precision, so a move that rounds to zero carries no colour (Phase 19+).
  */
-export const FEED_IMPACT_DECIMALS = 1;
+export const FEED_IMPACT_DECIMALS = CARD_MOVE_DECIMALS;
 
 /**
  * THE HIGH-IMPACT THRESHOLD, in score points. An entry whose recorded score
@@ -71,6 +81,8 @@ export interface FeedPerson {
   name: string;
   category: string;
   avatarUrl: string | null;
+  /** The company behind the person's company-news signals, from their Finnhub mapping; null for everyone else. */
+  company: string | null;
 }
 
 export type FeedEvidenceRelation = "direct" | "inverse_pair";
@@ -83,6 +95,7 @@ export type FeedEvidenceRelation = "direct" | "inverse_pair";
 export interface FeedEvidence {
   id: string;
   headline: string;
+  /** The data source's display name, as the database returns it. Rendered through card-copy, never shown raw. */
   source: string | null;
   impact: number | null;
   occurredAt: string;
@@ -100,16 +113,18 @@ export interface FeedEvidence {
    * plain language without rewriting it.
    */
   payload: unknown;
+  /** What the server added (Phase 30): the outlet, the link, the payload kind, a digest's shape. Null when it could not. */
+  detail: SignalDetail | null;
 }
 
 export interface FeedEntry {
   id: string;
   kind: FeedEntryKind;
   person: FeedPerson;
-  /** The hero text: the Engine's sentence, or its framing of a raw signal. */
+  /** The stored text: the Engine's sentence, or the signal's headline. Kept for the behavioural log; the card shows `copy`. */
   text: string;
-  /** For a signal entry, the headline as observed, shown as a quotation beneath the framing. */
-  quote: string | null;
+  /** Every word on the card (Phase 30). */
+  copy: CardCopy;
   /** Recorded score impact: a narrative's move, or a signal's impact_score. Null when nothing was recorded. */
   impact: number | null;
   direction: Direction;
@@ -117,9 +132,11 @@ export interface FeedEntry {
   scoreAfter: number | null;
   tickNumber: number | null;
   occurredAt: string;
-  /** Short source names, for the recessive attribution line. */
+  /** The data sources behind the entry, display names as stored. */
   sources: string[];
   evidence: FeedEvidence[];
+  /** A signal card's detail lines: the source, then a metric's arithmetic. Empty for a narrative. */
+  detailLines: MetricDetailLine[];
 }
 
 /** A row of feed_entries() as the database returns it. */
@@ -141,20 +158,28 @@ export interface FeedRow {
   evidence: unknown;
 }
 
+/** What the server read alongside a page (Phase 30): signal detail by signal id, company by person id. */
+export interface FeedRowContext {
+  details: ReadonlyMap<string, SignalDetail>;
+  companies: ReadonlyMap<string, string>;
+}
+
+export const EMPTY_CONTEXT: FeedRowContext = { details: new Map(), companies: new Map() };
+
 function toNullableNumber(value: unknown): number | null {
   if (value === null || value === undefined) return null;
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-/** "RSS (per-person news feed)" → "RSS". Attribution is a name, not a description. */
+/** "RSS (per-person news feed)" → "RSS". A short handle for a source, for logs and tests; never shown to a reader. */
 export function shortSource(name: string | null | undefined): string | null {
   if (!name) return null;
   const short = name.replace(/\s*\(.*\)\s*$/, "").trim();
   return short.length > 0 ? short : null;
 }
 
-function toEvidence(value: unknown): FeedEvidence[] {
+function toEvidence(value: unknown, details: ReadonlyMap<string, SignalDetail>): FeedEvidence[] {
   if (!Array.isArray(value)) return [];
   const out: FeedEvidence[] = [];
   for (const item of value) {
@@ -167,7 +192,7 @@ function toEvidence(value: unknown): FeedEvidence[] {
     out.push({
       id: record.id,
       headline: record.headline,
-      source: shortSource(typeof record.source === "string" ? record.source : null),
+      source: typeof record.source === "string" ? record.source : null,
       impact: toNullableNumber(record.impact),
       occurredAt: typeof record.occurred_at === "string" ? record.occurred_at : "",
       sentiment: typeof record.sentiment === "string" ? record.sentiment : null,
@@ -176,86 +201,51 @@ function toEvidence(value: unknown): FeedEvidence[] {
       relation,
       person: relation === "inverse_pair" && personName ? { name: personName, slug: personSlug } : null,
       payload: record.payload ?? null,
+      detail: details.get(record.id) ?? null,
     });
   }
   return out;
 }
 
-/**
- * A metric signal's headline as a reader should meet it, re-rendered from its
- * PAYLOAD rather than read from storage (Phase 21+).
- *
- * The payload is the source of truth for display, and the stored string is a
- * denormalised copy. That ordering is what carries the ~1,950 headlines
- * written in sigma before this phase: they re-render as plain language with no
- * stored row rewritten. For a signal written since, the two agree exactly —
- * the same function, the same inputs, the reading's own day.
- */
-export function evidenceHeadline(item: FeedEvidence, fallbackName: string): string {
-  const name = item.person?.name ?? fallbackName;
-  return sentenceForPayload(item.payload, name, item.occurredAt) ?? item.headline;
+export function subjectOf(person: Pick<FeedPerson, "name" | "category" | "company">): CardSubject {
+  return { name: person.name, category: person.category, company: person.company };
+}
+
+function toEvidenceInput(item: FeedEvidence): CardEvidenceInput {
+  return {
+    id: item.id,
+    headline: item.headline,
+    sourceName: item.source,
+    impact: item.impact,
+    occurredAt: item.occurredAt,
+    payload: item.payload,
+    detail: item.detail,
+    relation: item.relation,
+    personName: item.person?.name ?? null,
+  };
 }
 
 /**
- * A narrative's sentence with any metric headline it QUOTED replaced by that
- * headline's plain-language rendering.
- *
- * The Engine's template narratives quote the signal verbatim — 'X's momentum
- * slipped on "X's news volume is running -4.5σ below their own trailing
- * fortnight"' — so 58 of the 88 narratives on the board carry σ inside text
- * nothing can re-derive. But the quoted string is an exact substring and the
- * signal that produced it is linked, so swapping one for the other is a
- * faithful substitution rather than a rewrite: the Engine still said what it
- * said, in words the reader can use.
+ * A piece of evidence as a reader should meet it: a metric from its payload
+ * (Phase 21+), a comment digest from its shape, an article as titled. The
+ * paired person's evidence is rendered for them.
  */
-export function narrativeText(text: string, evidence: FeedEvidence[], fallbackName: string): string {
-  let out = text;
-  for (const item of evidence) {
-    const rendered = evidenceHeadline(item, fallbackName);
-    if (rendered !== item.headline && item.headline.length > 0 && out.includes(item.headline)) {
-      out = out.split(item.headline).join(rendered);
-    }
-  }
-  return out;
+export function evidenceHeadline(item: FeedEvidence, subject: CardSubject): string {
+  return evidenceSentence(toEvidenceInput(item), subject).headline;
 }
 
-/**
- * The Engine's framing of a raw signal, in its own register: what it
- * observed, on whom, and what it made of it. Presentation only; the
- * headline itself is quoted beneath, untouched.
- */
-/**
- * "A YouTube signal" but "An RSS signal": an initialism is read letter by
- * letter, so its article follows the sound of the first letter's name, not
- * whether the letter is a vowel. Letter names that open on a vowel sound:
- * A E F H I L M N O R S X.
- */
-export function indefiniteArticle(word: string): "A" | "An" {
-  const first = word.charAt(0);
-  if (!first) return "A";
-  const initialism = /^[A-Z](?:[A-Z0-9]|$)/.test(word);
-  const vowelSound = initialism ? /[AEFHILMNORSX]/.test(first) : /[aeiouAEIOU]/.test(first);
-  return vowelSound ? "An" : "A";
+/** The detail lines for one piece of evidence: where it came from, then a metric's arithmetic. */
+export function evidenceDetailLines(item: FeedEvidence, subject: CardSubject): MetricDetailLine[] {
+  const about: CardSubject = item.person ? { name: item.person.name, category: null, company: null } : subject;
+  return [...detailSourceLines({ sourceName: item.source, payload: item.payload, detail: item.detail }), ...detailForPayload(item.payload, about.name, { category: about.category, company: about.company })];
 }
 
-export function frameSignal(personName: string, source: string | null, impact: number | null, processed: boolean | null): string {
-  const what = source ? `${indefiniteArticle(source)} ${source} signal` : "A signal";
-  if (processed === false || (processed === null && impact === null)) {
-    // The placeholder, for a signal the Engine has not read. The source is
-    // named once per entry, in the attribution line beneath; not here too.
-    return `Something new on ${personName}, waiting for the Engine's next read.`;
-  }
-  if (impact === null) return `${what} on ${personName} has been read.`;
-  if (Math.abs(impact) < 0.05) return `${what} on ${personName} read as neutral.`;
-  return `${what} on ${personName} read ${formatSigned(impact, FEED_IMPACT_DECIMALS)}.`;
-}
-
-export function toFeedEntry(row: FeedRow): FeedEntry | null {
+export function toFeedEntry(row: FeedRow, context: FeedRowContext = EMPTY_CONTEXT): FeedEntry | null {
   const kind: FeedEntryKind | null = row.kind === "narrative" ? "narrative" : row.kind === "signal" ? "signal" : null;
   if (!kind || !row.id || !row.person_id || !row.occurred_at) return null;
 
-  const evidence = toEvidence(row.evidence);
-  const sources = [...new Set((row.sources ?? []).map(shortSource).filter((name): name is string => name !== null))];
+  const evidence = toEvidence(row.evidence, context.details);
+  const sources = [...new Set((row.sources ?? []).filter((name): name is string => typeof name === "string" && name.length > 0))];
   const impact = toNullableNumber(row.impact);
   const person: FeedPerson = {
     id: row.person_id,
@@ -263,17 +253,29 @@ export function toFeedEntry(row: FeedRow): FeedEntry | null {
     name: row.person_name,
     category: row.person_category,
     avatarUrl: row.person_avatar ?? null,
+    company: context.companies.get(row.person_id) ?? null,
   };
+  const subject = subjectOf(person);
 
   if (kind === "signal") {
     const own = evidence[0];
-    const processed = own?.processed ?? null;
+    const input = {
+      subject,
+      headline: own?.headline ?? row.text,
+      sourceName: own?.source ?? sources[0] ?? null,
+      impact,
+      processed: own?.processed ?? null,
+      sentiment: own?.sentiment ?? null,
+      occurredAt: row.occurred_at,
+      payload: own?.payload ?? null,
+      detail: own?.detail ?? null,
+    };
     return {
       id: row.id,
       kind,
       person,
-      text: frameSignal(person.name, sources[0] ?? null, impact, processed),
-      quote: own ? evidenceHeadline(own, person.name) : row.text,
+      text: row.text,
+      copy: signalCard(input),
       impact,
       direction: directionAtPrecision(impact, FEED_IMPACT_DECIMALS, 0),
       scoreBefore: null,
@@ -282,6 +284,7 @@ export function toFeedEntry(row: FeedRow): FeedEntry | null {
       occurredAt: row.occurred_at,
       sources,
       evidence,
+      detailLines: signalDetailLines(input),
     };
   }
 
@@ -289,8 +292,8 @@ export function toFeedEntry(row: FeedRow): FeedEntry | null {
     id: row.id,
     kind,
     person,
-    text: narrativeText(row.text, evidence, person.name),
-    quote: null,
+    text: row.text,
+    copy: narrativeCard({ subject, text: row.text, impact, evidence: evidence.map(toEvidenceInput) }),
     impact,
     direction: directionAtPrecision(impact, FEED_IMPACT_DECIMALS, 0),
     scoreBefore: toNullableNumber(row.score_before),
@@ -299,7 +302,30 @@ export function toFeedEntry(row: FeedRow): FeedEntry | null {
     occurredAt: row.occurred_at,
     sources,
     evidence,
+    detailLines: [],
   };
+}
+
+/**
+ * Whether an entry is a card (Phase 30, rule 6): a narrative always (it is
+ * written only for a move of 0.5 or more); a signal only once the Engine has
+ * read it and only when its move prints as something other than zero.
+ */
+export function isCard(entry: FeedEntry): boolean {
+  if (entry.kind === "narrative") return true;
+  return showsAsCard(entry.impact, entry.evidence[0]?.processed ?? null);
+}
+
+/** Every signal id a page's rows refer to, for the server's detail read. */
+export function signalIdsOf(rows: FeedRow[]): string[] {
+  const ids: string[] = [];
+  for (const row of rows) {
+    if (!Array.isArray(row.evidence)) continue;
+    for (const item of row.evidence) {
+      if (typeof item === "object" && item !== null && typeof (item as { id?: unknown }).id === "string") ids.push((item as { id: string }).id);
+    }
+  }
+  return ids;
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +347,18 @@ export function cursorAfter(entries: FeedEntry[], pageSize: number): FeedCursor 
   if (entries.length < pageSize) return null;
   const last = entries[entries.length - 1];
   return { before: last.occurredAt, beforeId: last.id };
+}
+
+/**
+ * A page from the database's rows: the cursor is taken from the LAST ROW,
+ * before any hiding, so a page that hides half its cards still points at the
+ * right place; the entries are the cards that remain.
+ */
+export function pageFromRows(rows: FeedRow[], limit: number, context: FeedRowContext = EMPTY_CONTEXT): FeedPage {
+  const all = rows.map((row) => toFeedEntry(row, context)).filter((entry): entry is FeedEntry => entry !== null);
+  const last = rows[rows.length - 1];
+  const nextCursor = rows.length >= limit && last && last.occurred_at && last.id ? { before: last.occurred_at, beforeId: last.id } : null;
+  return { entries: all.filter(isCard), nextCursor };
 }
 
 /** Appends a page, dropping anything already loaded and never growing past the cap. */

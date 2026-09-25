@@ -128,7 +128,7 @@ export function FeedStream({ initialPage, categories, roster, loggingEnabled, re
     logFeedEvent(loggingEnabled, {
       eventType: "expand_signal",
       personId: entry.person.id,
-      metadata: { ...(signalId ? { signal_id: signalId } : {}), headline: entry.text.slice(0, 200), kind: entry.kind, entry_id: entry.id, surface: FEED_SURFACE },
+      metadata: { ...(signalId ? { signal_id: signalId } : {}), headline: entry.copy.headline.slice(0, 200), kind: entry.kind, entry_id: entry.id, surface: FEED_SURFACE },
     });
   };
 
