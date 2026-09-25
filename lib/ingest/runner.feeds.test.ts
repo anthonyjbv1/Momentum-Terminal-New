@@ -219,3 +219,223 @@ describe("the run budget", () => {
     expect(store.polls.slice(2).map((p) => p.dataSourceId)).toEqual(["src-slow", "src-fast"]);
   });
 });
+
+/**
+ * THE PUBLISHER CATALOGUE AND THE BUDGET (after Phase 29e). Overruns deferred
+ * the same twelve people every time: people were polled alphabetically, four
+ * at a time; all four waited on the one shared catalogue read; when it
+ * returned the budget was gone, so the rest were skipped, AFTER the expensive
+ * part had been paid for. And the run saved the feeds' new caching markers
+ * though twelve people never read what they marked, so an unchanged feed
+ * answered 304 at the next fire and handed them nothing until it next changed.
+ */
+describe("a shared read, the budget, and who waits", () => {
+  const people = ["Adin Ross", "Drake", "Elon Musk", "Jeff Bezos", "Mark Zuckerberg", "Warren Buffett"].map((name, index) => ({
+    person: makePerson({ id: `00000000-0000-4000-8000-00000000000${index}`, slug: name.toLowerCase().replace(/ /g, "-"), display_name: name }),
+    externalIdentifier: name,
+  }));
+  const source = makeSource({ id: "src-pub", name: "publisher_rss", tier: 3, is_active: true, poll_interval_minutes: 10 });
+  const okPoll = (personId: string, finishedAt: Date) => ({
+    runId: "earlier",
+    dataSourceId: "src-pub",
+    personId,
+    status: "ok" as const,
+    reason: null,
+    latencyMs: 1,
+    signalsCreated: 0,
+    snapshotsRecorded: 0,
+    observations: 0,
+    blockedDropped: 0,
+    duplicatesCollapsed: 0,
+    excludedFiltered: 0,
+    startedAt: finishedAt,
+    finishedAt,
+  });
+
+  /**
+   * A publisher-like connector on an injected clock: the first person's poll
+   * starts the shared read, which costs `sharedMs`; every person then costs
+   * `perPersonMs` of matching and writes. It records what the runner told it
+   * about the remaining budget, and reports one feed with a new caching marker.
+   */
+  function sharedConnector(clock: { now: number }, options: { sharedMs: number; perPersonMs: number; shared?: boolean; failFor?: string }) {
+    let read: Promise<void> | null = null;
+    const remaining: Array<number | null> = [];
+    const connector: DataConnector = {
+      name: "publisher_rss",
+      storyFamily: "news",
+      sharedFetch: options.shared ?? true,
+      async fetchForPerson(person, identifier, context) {
+        remaining.push(context.remainingBudgetMs?.() ?? null);
+        read ??= (async () => {
+          await context.feeds?.list();
+          clock.now += options.sharedMs;
+          context.feeds?.report({ id: "f1", fetchedAt: context.now, status: "ok", httpStatus: 200, error: null, itemCount: 5, datedCount: 5, describedCount: 5, newestPublishedAt: NOW, discoveredUrl: null, etag: '"new"', lastModified: "Thu, 25 Sep 2026 17:00:00 GMT" });
+        })();
+        await read;
+        clock.now += options.perPersonMs;
+        if (identifier === options.failFor) throw new Error("database hiccup");
+        return [];
+      },
+    };
+    return { connector, remaining };
+  }
+  const feed: FeedCatalogEntry = { id: "f1", domain: "espn.com", url: "https://www.espn.com/espn/rss/news", section: "All", topics: [], mode: "feed", etag: '"old"', lastModified: "Wed, 24 Sep 2026 17:00:00 GMT", lastFetchedAt: hour(-0.25), lastStatus: "ok", consecutiveFailures: 0 };
+
+  it("polls the person who has waited longest first, not the alphabet", async () => {
+    const store = createMemoryIngestStore({
+      sources: [source],
+      mappings: { "src-pub": people },
+      polls: [
+        okPoll(people[0].person.id, hour(-0.25)), // Adin Ross: served a quarter of an hour ago
+        okPoll(people[1].person.id, hour(-0.5)), // Drake: half an hour ago
+        okPoll(people[2].person.id, hour(-0.25)), // Elon Musk: a quarter of an hour ago
+        okPoll(people[3].person.id, hour(-1)), // Jeff Bezos: an hour ago
+        okPoll(people[5].person.id, hour(-8)), // Warren Buffett: outside the window, so as good as never
+        // Mark Zuckerberg: never
+      ],
+    });
+    const clock = { now: NOW.getTime() };
+    const { connector } = sharedConnector(clock, { sharedMs: 0, perPersonMs: 0 });
+    await runIngestion({ store, now: NOW, registry: buildRegistry([connector]), force: true, log: quiet, clock: () => clock.now, pollConcurrency: 1 });
+    const order = store.polls.filter((poll) => poll.runId !== "earlier").map((poll) => people.find((p) => p.person.id === poll.personId)?.externalIdentifier);
+    expect(order).toEqual(["Mark Zuckerberg", "Warren Buffett", "Jeff Bezos", "Drake", "Adin Ross", "Elon Musk"]);
+  });
+
+  it("finishes every person once the shared read is paid for, where a per-person source still skips", async () => {
+    // The read returns at 38 s, past the 35 s budget; each person is then a second.
+    for (const shared of [true, false]) {
+      const clock = { now: NOW.getTime() };
+      const store = createMemoryIngestStore({ sources: [source], mappings: { "src-pub": people }, feeds: [feed] });
+      const { connector } = sharedConnector(clock, { sharedMs: 38_000, perPersonMs: 1_000, shared });
+      const summary = await runIngestion({ store, now: NOW, registry: buildRegistry([connector]), force: true, log: quiet, clock: () => clock.now, budgetMs: 35_000, pollConcurrency: 1 });
+      expect(summary.budget.exhausted).toBe(true);
+      expect(store.polls.map((poll) => poll.status)).toEqual(shared ? ["ok", "ok", "ok", "ok", "ok", "ok"] : ["ok", "skipped", "skipped", "skipped", "skipped", "skipped"]);
+    }
+  });
+
+  it("stops even a shared-read source at the grace, so a slow database cannot reach the platform's kill", async () => {
+    const clock = { now: NOW.getTime() };
+    const store = createMemoryIngestStore({ sources: [source], mappings: { "src-pub": people }, feeds: [feed] });
+    // The read ends at 28 s; each person then takes 5 s, starting at 0, 33, 38 and 43 s — the last inside 35 + 10 — and the fifth would start at 48 s.
+    const { connector } = sharedConnector(clock, { sharedMs: 28_000, perPersonMs: 5_000 });
+    const summary = await runIngestion({ store, now: NOW, registry: buildRegistry([connector]), force: true, log: quiet, clock: () => clock.now, budgetMs: 35_000, sharedFetchGraceMs: 10_000, pollConcurrency: 1 });
+    expect(store.polls.map((poll) => poll.status)).toEqual(["ok", "ok", "ok", "ok", "skipped", "skipped"]);
+    expect(summary.durationMs).toBe(48_000);
+    // Someone missed the feed, so its old markers stay: the next fire downloads it whole.
+    expect(store.feeds.find((row) => row.id === "f1")).toMatchObject({ etag: '"old"', lastModified: "Wed, 24 Sep 2026 17:00:00 GMT", lastFetchedAt: NOW, lastStatus: "ok" });
+  });
+
+  it("tells the connector what is left of the budget, and nothing when there is none", async () => {
+    const clock = { now: NOW.getTime() };
+    const bounded = sharedConnector(clock, { sharedMs: 20_000, perPersonMs: 1_000 });
+    await runIngestion({ store: createMemoryIngestStore({ sources: [source], mappings: { "src-pub": people.slice(0, 2) }, feeds: [feed] }), now: NOW, registry: buildRegistry([bounded.connector]), force: true, log: quiet, clock: () => clock.now, budgetMs: 35_000, pollConcurrency: 1 });
+    // The first person asked at 0 s (35 s left); the second after the read and one person, at 21 s (14 s left).
+    expect(bounded.remaining).toEqual([35_000, 14_000]);
+    const unbounded = sharedConnector(clock, { sharedMs: 0, perPersonMs: 0 });
+    await runIngestion({ store: createMemoryIngestStore({ sources: [source], mappings: { "src-pub": people.slice(0, 1) }, feeds: [feed] }), now: NOW, registry: buildRegistry([unbounded.connector]), force: true, log: quiet, clock: () => clock.now, pollConcurrency: 1 });
+    expect(unbounded.remaining).toEqual([null]);
+  });
+
+  it("saves the new caching markers when everyone was served, and keeps the old ones when anyone was skipped or failed", async () => {
+    const served = createMemoryIngestStore({ sources: [source], mappings: { "src-pub": people }, feeds: [{ ...feed }] });
+    const clock = { now: NOW.getTime() };
+    await runIngestion({ store: served, now: NOW, registry: buildRegistry([sharedConnector(clock, { sharedMs: 1_000, perPersonMs: 100 }).connector]), force: true, log: quiet, clock: () => clock.now, budgetMs: 35_000 });
+    expect(served.feeds[0]).toMatchObject({ etag: '"new"', lastModified: "Thu, 25 Sep 2026 17:00:00 GMT" });
+
+    const lines: IngestLogLine[] = [];
+    const failed = createMemoryIngestStore({ sources: [source], mappings: { "src-pub": people }, feeds: [{ ...feed }] });
+    await runIngestion({ store: failed, now: NOW, registry: buildRegistry([sharedConnector(clock, { sharedMs: 1_000, perPersonMs: 100, failFor: "Drake" }).connector]), force: true, log: (line) => lines.push(line), clock: () => clock.now, budgetMs: 35_000 });
+    expect(failed.polls.filter((poll) => poll.status === "error")).toHaveLength(1);
+    expect(failed.feeds[0]).toMatchObject({ etag: '"old"', lastModified: "Wed, 24 Sep 2026 17:00:00 GMT" });
+    expect(lines.find((line) => line.event === "feed_markers_kept")).toMatchObject({ source: "publisher_rss", missedPeople: 1, feeds: 1 });
+  });
+
+  /**
+   * A virtual clock with sleepers, so four people polled at once cost the
+   * time of one: every lane registers its sleep before the clock moves to the
+   * earliest wake-up (the in-memory store resolves in microtasks, which all
+   * run before the next macrotask).
+   */
+  function virtualClock(start: number) {
+    const state = { now: start };
+    const sleepers: Array<{ at: number; resolve: () => void }> = [];
+    let pumping = false;
+    const pump = () => {
+      if (pumping) return;
+      pumping = true;
+      setTimeout(() => {
+        pumping = false;
+        sleepers.sort((a, b) => a.at - b.at);
+        const next = sleepers.shift();
+        if (!next) return;
+        state.now = Math.max(state.now, next.at);
+        next.resolve();
+        if (sleepers.length > 0) pump();
+      }, 0);
+    };
+    const sleep = (ms: number) =>
+      new Promise<void>((resolve) => {
+        sleepers.push({ at: state.now + ms, resolve });
+        pump();
+      });
+    return { state, sleep };
+  }
+
+  it("THE WORST CASE, against the 60-second kill: the catalogue starts at the budget's last moment, every feed hangs to its timeout, sixteen people four at a time", async () => {
+    // Production's numbers: a 35 s budget, the 10 s grace, the catalogue's 6 s
+    // feed timeout, four people at once. An earlier source takes the run to
+    // 34.9 s; the catalogue then starts with 0.1 s of budget left, which is
+    // all it gets to START feeds, so the last feed it starts ends at 40.9 s.
+    // Each person is then 1 s of matching and writes (production's average
+    // poll is under a second; its p90 of 3 s includes waiting on the read),
+    // and a second run takes 3 s a person for a slow database.
+    for (const [perPersonMs, expected] of [
+      [1_000, { skipped: 0, endedByMs: 45_000 }],
+      [3_000, { skipped: 8, endedByMs: 47_000 }],
+    ] as const) {
+      const clock = virtualClock(NOW.getTime());
+      const sixteen = Array.from({ length: 16 }, (_, index) => ({
+        person: makePerson({ id: `00000000-0000-4000-8000-0000000000${String(index).padStart(2, "0")}`, slug: `p${index}`, display_name: `Person ${index}` }),
+        externalIdentifier: `Person ${String(index).padStart(2, "0")}`,
+      }));
+      const earlier: DataConnector = {
+        name: "a_hourly",
+        async fetchForPerson() {
+          await clock.sleep(34_900);
+          return [];
+        },
+      };
+      let read: Promise<void> | null = null;
+      const startedAt: number[] = [];
+      const publisher: DataConnector = {
+        name: "publisher_rss",
+        sharedFetch: true,
+        async fetchForPerson(_person, _identifier, context) {
+          startedAt.push(clock.state.now - NOW.getTime());
+          read ??= (async () => {
+            const left = context.remainingBudgetMs?.();
+            // What the real catalogue does with it: start feeds only inside what is left; each started feed may then hang to its 6 s timeout.
+            expect(left).toBe(100);
+            await clock.sleep(6_000);
+          })();
+          await read;
+          await clock.sleep(perPersonMs);
+          return [];
+        },
+      };
+      const store = createMemoryIngestStore({
+        sources: [makeSource({ id: "src-a", name: "a_hourly", is_active: true }), source],
+        mappings: { "src-a": [{ person: people[0].person, externalIdentifier: "one" }], "src-pub": sixteen },
+        feeds: [feed],
+      });
+      const summary = await runIngestion({ store, now: NOW, registry: buildRegistry([earlier, publisher]), force: true, log: quiet, clock: () => clock.state.now, budgetMs: 35_000, pollConcurrency: 4 });
+      const skipped = store.polls.filter((poll) => poll.dataSourceId === "src-pub" && poll.status === "skipped").length;
+      expect(skipped).toBe(expected.skipped);
+      // Nobody started after budget + grace.
+      expect(Math.max(...startedAt)).toBeLessThan(45_000);
+      expect(summary.durationMs).toBeLessThanOrEqual(expected.endedByMs);
+      expect(summary.durationMs).toBeLessThan(60_000);
+    }
+  });
+});

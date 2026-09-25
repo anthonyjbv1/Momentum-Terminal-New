@@ -3133,6 +3133,22 @@ The tests:
 
 Measured at 1278×604 (Buy and Sell, Dollars and 4 shares): compose, confirm, refused and filled all fit with no scrolling, and the spread note is on one line. The layout was also checked from 1024×768 to 1920×1080. The one exception is 1024×600, where the Sell steps scroll by 17px with the footer still pinned. Below `lg` nothing changed: the 375px screenshots of compose and confirm, Buy and Sell, are byte-identical before and after. `components/ui/sheet.test.ts` holds that the wide variant adds only `lg:` classes. It also holds that the width limit is not Tailwind's own `max-w-*` for a spacing token of the same name, the collision that first made the dialog run edge to edge at 1024.
 
+### After 29e: ingestion overruns, and Buffett's insider symbol
+
+**The overruns.** 17–50 publisher_rss person-polls a day hit the scheduled run's 35-second budget. Nothing was lost: every skipped person was polled again at the next fire, and the catch-up re-read the feeds' last 72 hours. But the same twelve people waited every time, the skip saved nothing, and one gap could delay items further:
+- **The same twelve every time.** People were polled alphabetically, four at a time. All four waited on the one shared catalogue read (up to 15 s, plus a 6 s feed timeout), and when it returned the budget was spent, so everyone after the first four was skipped.
+- **The skip saved nothing.** The expensive read had already been paid for; each skipped person needed only about a second of matching and writes.
+- **A 304 gap.** The run saved the feeds' new caching markers (etag / last-modified) even though twelve people never read that content. So a feed unchanged at the next fire answered 304 and gave them nothing until it next changed: a delay, not a loss, unless the feed then stayed unchanged for the rest of the item's 72 hours.
+
+Three changes:
+- **A shared read is finished, inside a grace.** A connector that declares `sharedFetch` (the publisher catalogue) has all its people finished once it has started, instead of skipping those left when the budget runs out. They may start until the budget plus `sharedFetchGraceMs` (10 s); past that even they are skipped, so a slow database cannot carry the run into the 60-second kill. The catalogue itself now starts feeds only inside what is left of the run's budget (`context.remainingBudgetMs()`), so its last feed ends within one feed timeout of the budget. Feeds it does not reach are the longest-unfetched next time, as before.
+- **Old markers after a miss.** A run in which anyone was skipped or failed keeps each feed's old caching markers, so the next fire downloads the feed whole and the people who missed it get it then. It costs one full download, and is logged as `feed_markers_kept`.
+- **Longest wait first.** Inside every source, people are polled by their last successful poll (a six-hour window; anyone not served in it goes first), not alphabetically. Any deferral that remains falls on a different tail each time.
+
+**The worst case.** A catalogue that starts with 0.1 s of budget left and has every feed hang to its timeout ends at 40.9 s. Sixteen people, four at a time, then take the run to 45 s at 1 s each, or 47 s at 3 s each (with eight deferred at the grace). Before, the worst case was about 56 s. `runner.feeds.test.ts` plays this through on a clock with four lanes; `cron.test.ts` holds the arithmetic.
+
+**Buffett's insider filings.** Finnhub returns no insider lines at all for BRK.B, his company-news ticker. A Finnhub mapping can now name `config.insider_symbol`, the symbol Form 4s are read under; company news and the observe-only close stay on the ticker. A temporary probe (`config.insider_symbol_probe`) reads candidate symbols over a year and records only two counts per symbol on the poll row: lines returned, and lines naming the person. It is removed once read.
+
 ### Reversing Phase 29
 
 Three ways back, in the order to reach for them.
@@ -3151,8 +3167,17 @@ Three ways back, in the order to reach for them.
 
 **3. A restore — the last resort, and not available today.** The project's organisation is on Supabase's **Free** plan, which has neither point-in-time recovery nor downloadable daily backups, so as things stand there is no restore to fall back on and option 2 is the real floor. On a paid plan a daily backup (Pro) or PITR (an add-on) could put the whole database back to before 2026-09-25 01:29 UTC, when Phase 29 was applied — losing **everything** written since (every order, signal, tick, score and waitlist entry, not just Phase 29's data) and still needing the Vercel promote in step 2. Until then the only full copy is one we take ourselves: `pg_dump` of the database before any schema rollback.
 
+## Open items
+
+- **A policy for operator resets, before real money.** An operator reset of a person's market (the flat-for-one-tick procedure that ended MrBeast's depth demo on 2026-09-25) takes the premium to zero at once, so every holder's position value changes by the premium times their shares, with no house-book entry at reset time. `apply_market_decay()` writes the `reset` row to `premium_history` and nothing to `house_ledger`. On paper this is a display change; with real money it is a transfer. Before real money there must be a written policy, for counsel, covering:
+  - when a reset is allowed, and by whom;
+  - how it is disclosed, to holders beforehand and on the profile afterwards;
+  - who bears the cost: the house book or the holders, and how it is recorded.
+- **Compare like days in the company-news baseline** (Phase 29d): weekdays against weekdays, weekends against weekends, after the ~09-28 weight-wave analysis. Prefer this to lowering the threshold.
+
 ## Scope so far
 
+- **After 29e**: publisher_rss overruns no longer defer the same twelve people. A shared catalogue read is finished for everyone, inside a 10-second grace that keeps the run under the 60-second kill (worst case about 47 s, from 56 s). A run that missed anyone keeps the feeds' old caching markers, and people are polled longest-wait first. Finnhub insider filings can be read under their own symbol (`config.insider_symbol`), with a temporary probe to find Buffett's. Operator resets are recorded as an open item for a policy before real money.
 - **Phase 29e**: back-to-back orders at MrBeast's demo depth no longer refuse themselves. Every fill and refusal hands the page the book the server read, the sheet reads the live book as it opens, and a "price moved" refusal offers one action in the pinned footer, "Buy at $X", the server's own average, in one tap. On a wide screen the trade sheet is two columns under one footer and fits a 1278×604 window with no scrolling. The phone layout is unchanged to the pixel.
 - **Phase 29d**: the explainer made true — Market Mood "the tide across everyone we track", Conviction as the code does it (it tightens the spread), a round trip "the spread, plus at most a cent of rounding" with the bound pinned by a test, its own link preview and the arithmetic behind a toggle; a person's own market settings on their profile (MrBeast's depth now); signals unique per source, person and key, so Page and Brin both keep the GOOGL series and a shared article, filing or game reaches everyone it concerns; and every Finnhub insider line accounted for on the poll row.
 - **Phase 29c**: the chart's legend says "in line with the data" while the market price sits within a cent of the score across the window; "baseline" for the revert target everywhere a reader sees it; the five forces in two groups, "Moving the score" and "Moving the market", with Trading Activity read as the hour's split and volume and Conviction described as what the code does with it — it tightens the spread — and every claim held to the code by a test; the forecast sentence in the sentence face; and a temporary depth demo on MrBeast (20 shares per point).

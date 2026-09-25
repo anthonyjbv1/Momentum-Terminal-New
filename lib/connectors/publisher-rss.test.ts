@@ -276,6 +276,20 @@ describe("reading the catalogue", () => {
     await expect(publisherRssConnector.fetchForPerson(mahomes, "Mahomes", withoutCatalogue)).rejects.toThrow(/not supplied/);
   });
 
+  it("starts feeds only inside what is left of the run's budget (after Phase 29e): none with nothing left, all when unbounded", async () => {
+    const feeds = [entry({ url: "https://a.example/feed", topics: ["nfl"] }), entry({ url: "https://b.example/feed", topics: ["nfl"] })];
+    const spent = feedFetch({ "https://a.example/feed": NFL_FEED, "https://b.example/feed": NFL_FEED });
+    const none = await publisherRssConnector.fetchForPerson(mahomes, "Mahomes", { ...harness(spent, feeds).context({ topics: ["nfl"] }), remainingBudgetMs: () => 0 });
+    expect(spent.calls).toEqual([]);
+    expect(none).toEqual([]);
+
+    resetPublisherFeedCache();
+    const open = feedFetch({ "https://a.example/feed": NFL_FEED, "https://b.example/feed": NFL_FEED });
+    await publisherRssConnector.fetchForPerson(mahomes, "Mahomes", { ...harness(open, feeds).context({ topics: ["nfl"] }), remainingBudgetMs: () => null });
+    expect(open.calls).toHaveLength(2);
+    expect(publisherRssConnector.sharedFetch).toBe(true);
+  });
+
   it("caps what one person stores per poll and never stores the same item twice from two feeds", async () => {
     const fetch = feedFetch({ "https://a.example/feed": NFL_FEED, "https://b.example/feed": NFL_FEED });
     const feeds = [entry({ url: "https://a.example/feed", topics: ["nfl"] }), entry({ url: "https://b.example/feed", topics: ["nfl"] })];

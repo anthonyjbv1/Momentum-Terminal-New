@@ -189,6 +189,13 @@ export interface IngestStore {
   /** When the source was last polled successfully for anyone, or null. */
   lastSuccessfulPollAt(dataSourceId: string): Promise<Date | null>;
   /**
+   * When each person was last polled successfully for this source, among the
+   * polls that finished at or after `since`, keyed by person id (after Phase
+   * 29e). A person absent from the map has waited longer than the window, so
+   * the runner puts them first.
+   */
+  lastSuccessfulPollsByPerson(dataSourceId: string, since: Date): Promise<Map<string, Date>>;
+  /**
    * A run that was opened at or after `since` and never closed: the overlap
    * guard for the scheduled job. Older unfinished rows are presumed dead (a
    * crashed invocation never closes its row) and are not returned.
@@ -537,6 +544,25 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
       return data ? new Date(data.finished_at) : null;
     },
 
+    async lastSuccessfulPollsByPerson(dataSourceId, since) {
+      // Newest first inside the window (source_polls_source_finished_idx), so the first row seen per person is their latest.
+      const { data, error } = await client
+        .from("source_polls")
+        .select("person_id, finished_at")
+        .eq("data_source_id", dataSourceId)
+        .eq("status", "ok")
+        .not("person_id", "is", null)
+        .gte("finished_at", since.toISOString())
+        .order("finished_at", { ascending: false })
+        .limit(1000);
+      if (error) throw new Error(`Failed to read the people's last polls: ${error.message}`);
+      const latest = new Map<string, Date>();
+      for (const row of data) {
+        if (row.person_id && !latest.has(row.person_id)) latest.set(row.person_id, new Date(row.finished_at));
+      }
+      return latest;
+    },
+
     async openRunStartedSince(since) {
       const { data, error } = await client
         .from("ingest_runs")
@@ -734,6 +760,16 @@ export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): Memor
         .filter((p) => p.dataSourceId === dataSourceId && p.status === "ok")
         .sort((a, b) => b.finishedAt.getTime() - a.finishedAt.getTime())[0];
       return last ? last.finishedAt : null;
+    },
+
+    async lastSuccessfulPollsByPerson(dataSourceId, since) {
+      const latest = new Map<string, Date>();
+      for (const poll of polls) {
+        if (poll.dataSourceId !== dataSourceId || poll.status !== "ok" || !poll.personId || poll.finishedAt.getTime() < since.getTime()) continue;
+        const seen = latest.get(poll.personId);
+        if (!seen || poll.finishedAt.getTime() > seen.getTime()) latest.set(poll.personId, poll.finishedAt);
+      }
+      return latest;
     },
 
     async openRunStartedSince(since) {

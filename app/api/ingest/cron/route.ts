@@ -48,7 +48,14 @@ export async function GET(request: NextRequest) {
     const result = await runScheduledIngestion({
       enabled: true,
       openRun: await store.openRunStartedSince(since),
-      run: () => runIngestion({ store, trigger: "cron", budgetMs: INGEST_CRON_DEFAULTS.runBudgetMs, timeoutMs: INGEST_CRON_DEFAULTS.fetchTimeoutMs }),
+      run: () =>
+        runIngestion({
+          store,
+          trigger: "cron",
+          budgetMs: INGEST_CRON_DEFAULTS.runBudgetMs,
+          timeoutMs: INGEST_CRON_DEFAULTS.fetchTimeoutMs,
+          sharedFetchGraceMs: INGEST_CRON_DEFAULTS.sharedFetchGraceMs,
+        }),
     });
     return NextResponse.json(result, { status: result.error ? 500 : 200 });
   } catch (error) {

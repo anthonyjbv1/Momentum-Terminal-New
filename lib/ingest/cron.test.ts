@@ -4,6 +4,7 @@ import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { INGEST_CRON_DEFAULTS, authorizeIngestCronRequest, runScheduledIngestion } from "./cron";
+import { SHARED_FETCH_GRACE_MS } from "./runner";
 import type { IngestSummary } from "./runner";
 
 const summary = (): IngestSummary => ({
@@ -81,13 +82,19 @@ describe("runScheduledIngestion", () => {
     expect(INGEST_CRON_DEFAULTS.staleAfterMinutes).toBeLessThan(15);
   });
 
-  it("closes the run inside the platform's 60-second kill: the budget plus the longest poll it can still start fits", () => {
-    // The poll in flight when the budget runs out may take one connector
-    // timeout, or the publisher catalogue's fetch budget (15 s) plus one feed
-    // timeout (6 s), whichever is longer; the close still has to happen after.
-    const longestPollMs = Math.max(INGEST_CRON_DEFAULTS.fetchTimeoutMs, 15_000 + 6_000);
-    expect(INGEST_CRON_DEFAULTS.runBudgetMs + longestPollMs).toBeLessThan(58_000);
+  it("closes the run inside the platform's 60-second kill: the budget plus the longest thing it can still start fits", () => {
+    // After the budget: a poll in flight may take one connector timeout; the
+    // publisher catalogue starts feeds only inside the budget, so its last feed
+    // ends within one feed timeout (6 s); and its people may start until the
+    // grace ends, each then a few seconds of writes at worst (3 s allowed here,
+    // three times production's average poll). The close still has to follow.
+    // runner.feeds.test.ts plays the catalogue's case through on a clock.
+    const FEED_TIMEOUT_MS = 6_000;
+    const SLOW_PERSON_MS = 3_000;
+    const longestAfterBudget = Math.max(INGEST_CRON_DEFAULTS.fetchTimeoutMs, FEED_TIMEOUT_MS, INGEST_CRON_DEFAULTS.sharedFetchGraceMs + SLOW_PERSON_MS);
+    expect(INGEST_CRON_DEFAULTS.runBudgetMs + longestAfterBudget).toBeLessThan(58_000);
     expect(INGEST_CRON_DEFAULTS.runBudgetMs).toBeGreaterThanOrEqual(30_000);
+    expect(INGEST_CRON_DEFAULTS.sharedFetchGraceMs).toBe(SHARED_FETCH_GRACE_MS);
   });
 });
 

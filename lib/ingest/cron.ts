@@ -41,11 +41,17 @@ export const INGEST_CRON_DEFAULTS = {
    * source not yet polled — which happened on the first slow minute after the
    * fifteen-minute schedule went on. Past this budget the runner records what
    * remains as skipped and closes the run. The poll in flight when the budget
-   * runs out may still take one connector timeout (below), or the publisher
-   * catalogue's fetch budget plus one feed timeout (15 s + 6 s), so the worst
-   * case is about 56 s: inside the kill, with the close still to come.
+   * runs out may still take one connector timeout (below). The publisher
+   * catalogue starts feeds only inside what is left of this budget (after
+   * Phase 29e), so the last feed it starts ends within one feed timeout (6 s)
+   * of it, and its people, whose work after the shared read is a second of
+   * matching and writes, are finished inside the grace below rather than
+   * skipped. Worst case about 47 s (budget, grace, one person's writes, the
+   * close); before Phase 29e it was 56 s.
    */
   runBudgetMs: 35_000,
+  /** How far past the budget a shared-read source (the publisher catalogue) may keep starting its people. */
+  sharedFetchGraceMs: 10_000,
   /** Per-request timeout handed to connectors on the scheduled path. The manual endpoint keeps the runner's 20 s. */
   fetchTimeoutMs: 12_000,
 };

@@ -65,7 +65,7 @@ export interface PublisherRssConfig {
   concurrency: number;
   /** Per-feed request timeout. Default 6000. */
   feed_timeout_ms: number;
-  /** Budget for STARTING fetches of the catalogue; feeds not started inside it wait for the next poll. Default 15000. */
+  /** Budget for STARTING fetches of the catalogue; feeds not started inside it wait for the next poll. Default 15000. Never more than what is left of the run's own budget. */
   fetch_budget_ms: number;
 }
 
@@ -361,7 +361,12 @@ async function loadCatalog(context: ConnectorContext, config: PublisherRssConfig
   const queue = entries
     .filter((entry) => isDue(entry, context.now))
     .sort((a, b) => (a.lastFetchedAt?.getTime() ?? 0) - (b.lastFetchedAt?.getTime() ?? 0));
-  const deadline = Date.now() + config.fetch_budget_ms;
+  // Never past the run's own budget (after Phase 29e): a catalogue started
+  // late gets what is left, the last feed it starts ends within one feed
+  // timeout of the budget, and the feeds it does not reach are the
+  // longest-unfetched next time, so they are first in the queue.
+  const remaining = context.remainingBudgetMs?.() ?? null;
+  const deadline = Date.now() + (remaining === null ? config.fetch_budget_ms : Math.min(config.fetch_budget_ms, remaining));
   const fetched: FetchedFeed[] = [];
   const workers = Array.from({ length: Math.min(config.concurrency, queue.length) }, async () => {
     while (queue.length > 0 && Date.now() < deadline) {
@@ -425,6 +430,8 @@ export function publisherSignal(item: FeedItem & { publishedAt: Date }, entry: F
 export const publisherRssConnector: DataConnector = {
   name: PUBLISHER_RSS_SOURCE_NAME,
   storyFamily: NEWS_STORY_FAMILY,
+  // One catalogue read per run, shared by every subject: once it is paid for, every subject is matched.
+  sharedFetch: true,
 
   /**
    * Events only. The catalogue is fetched once for the run; this subject's

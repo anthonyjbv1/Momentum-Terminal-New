@@ -51,7 +51,7 @@ import { STORY_DEDUP_LOOKBACK_HOURS } from "./stories";
  */
 
 export interface IngestLogLine {
-  event: "run" | "source" | "poll" | "observation" | "signal" | "drop" | "collapse" | "upgrade" | "exclude" | "feed" | "note" | "detail" | "observe_only";
+  event: "run" | "source" | "poll" | "observation" | "signal" | "drop" | "collapse" | "upgrade" | "exclude" | "feed" | "note" | "detail" | "observe_only" | "feed_markers_kept";
   [key: string]: unknown;
 }
 
@@ -90,7 +90,23 @@ export interface IngestOptions {
    * the scheduled run's budget. Bounded to [1, MAX_POLL_CONCURRENCY].
    */
   pollConcurrency?: number;
+  /**
+   * How far past the budget a SHARED-FETCH source (connector.sharedFetch: the
+   * publisher catalogue) may keep starting its people once it has started
+   * (after Phase 29e). Its expensive read is already paid for, and each
+   * person after it is a second of matching and writes; skipping them only
+   * deferred their items. Past budget + grace even these are skipped, so a
+   * slow database cannot carry the run into the platform's kill. Defaults to
+   * SHARED_FETCH_GRACE_MS; meaningless without a budget.
+   */
+  sharedFetchGraceMs?: number;
 }
+
+/** The default grace past the run budget for a shared-fetch source's people. */
+export const SHARED_FETCH_GRACE_MS = 10_000;
+
+/** How far back the runner looks for each person's last successful poll when ordering a source's people. */
+export const PERSON_ORDER_WINDOW_MS = 6 * 3_600_000;
 
 /** The most people one source polls at once, whatever the configuration says: a courtesy to the hosts as much as a bound on the function. */
 export const MAX_POLL_CONCURRENCY = 8;
@@ -244,6 +260,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     budgetMs,
     clock = Date.now,
     pollConcurrency,
+    sharedFetchGraceMs = SHARED_FETCH_GRACE_MS,
   } = options;
   const wallClockStart = clock();
   const requested = options.sources && options.sources.length > 0 ? [...options.sources] : null;
@@ -306,6 +323,11 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
   // ones, on the fire that makes them due) must not queue behind the ones
   // polled a quarter of an hour ago. The same read serves the interval check.
   const lastPolled = new Map(await Promise.all(activeSources.map(async (source) => [source.id, await store.lastSuccessfulPollAt(source.id)] as const)));
+  // And each person's, per source (after Phase 29e): inside a source the
+  // person who has waited longest goes first, so a budget that runs out defers
+  // a different tail each time rather than the end of the alphabet every time.
+  const personOrderSince = new Date(now.getTime() - PERSON_ORDER_WINDOW_MS);
+  const lastPolledPeople = new Map(await Promise.all(activeSources.map(async (source) => [source.id, await store.lastSuccessfulPollsByPerson(source.id, personOrderSince)] as const)));
   activeSources = [...activeSources].sort((a, b) => (lastPolled.get(a.id)?.getTime() ?? 0) - (lastPolled.get(b.id)?.getTime() ?? 0) || a.name.localeCompare(b.name));
 
   for (const source of activeSources) {
@@ -391,6 +413,9 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     // The listing is shared as a promise, so people polled at once cannot each read it.
     const catalogue: { entries: FeedCatalogEntry[] | null; pending: Promise<FeedCatalogEntry[]> | null } = { entries: null, pending: null };
     const feedReports = new Map<string, FeedHealthReport>();
+    // Whether any of this source's people has started (a shared read may be under way), and how many of them this run did not serve.
+    let sourceStarted = false;
+    let missedPeople = 0;
     const feedMatches = new Map<string, number>();
     const feeds: FeedCatalog = {
       list: () =>
@@ -407,15 +432,21 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     // their snapshots, their poll row); the source-level counters are plain
     // additions, and the catalogue is fetched once whoever asks first.
     const pollMapping = async ({ person, externalIdentifier, config: personConfig }: (typeof mappings)[number]): Promise<void> => {
-      if (outOfBudget()) {
+      // A shared-fetch source that has started finishes its people, inside
+      // the grace (after Phase 29e): see sharedFetchGraceMs.
+      const finishing = connector.sharedFetch === true && sourceStarted && budgetMs !== undefined && elapsedMs() < budgetMs + sharedFetchGraceMs;
+      if (outOfBudget() && !finishing) {
         // Recorded per person, so the console shows who waited and why; the
         // source's last successful poll is whoever went before, so the source
-        // is due again on the next fire and the queue resumes there.
+        // is due again on the next fire and the queue resumes there, with
+        // whoever waited longest first.
+        missedPeople += 1;
         const reason = budgetReason();
         log({ event: "poll", run: runId, source: source.name, person: person.slug, status: "skipped", reason });
         await store.recordPoll({ runId, dataSourceId: source.id, personId: person.id, status: "skipped", reason, latencyMs: null, signalsCreated: 0, snapshotsRecorded: 0, observations: 0, blockedDropped: 0, duplicatesCollapsed: 0, excludedFiltered: 0, startedAt: new Date(now.getTime() + elapsedMs()), finishedAt: new Date(now.getTime() + elapsedMs()) });
         return;
       }
+      sourceStarted = true;
       const pollStarted = clock();
       const pendingSnapshots: SnapshotRow[] = [];
       const snapshots: SnapshotStore = {
@@ -445,6 +476,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         detail: (key, value) => {
           details[key] = value;
         },
+        remainingBudgetMs: () => (budgetMs === undefined ? null : Math.max(0, budgetMs - elapsedMs())),
       };
       const poll: Omit<PollRow, "status" | "reason" | "latencyMs" | "finishedAt"> = {
         runId,
@@ -678,6 +710,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         errors.push({ source: source.name, person: person.slug, message: reason });
       }
 
+      if (status === "error") missedPeople += 1;
       for (const message of notes) log({ event: "note", run: runId, source: source.name, person: person.slug, message });
       for (const [key, value] of Object.entries(details)) log({ event: "detail", run: runId, source: source.name, person: person.slug, key, value });
       // A note rides on an ok poll's reason, so a source that is limping reads as such in the console; an error keeps its own reason.
@@ -693,10 +726,14 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
       }
     };
 
-    // The people, `concurrency` at a time in mapping order: each worker takes
-    // the next person off the queue as it finishes, so a slow host delays
-    // one lane rather than everyone behind it.
-    const queue = [...mappings];
+    // The people, `concurrency` at a time, longest wait first (after Phase
+    // 29e; a person with no successful poll in the window first of all, ties
+    // by identifier): each worker takes the next person off the queue as it
+    // finishes, so a slow host delays one lane rather than everyone behind it.
+    const waited = lastPolledPeople.get(source.id) ?? new Map<string, Date>();
+    const queue = [...mappings].sort(
+      (a, b) => (waited.get(a.person.id)?.getTime() ?? 0) - (waited.get(b.person.id)?.getTime() ?? 0) || a.externalIdentifier.localeCompare(b.externalIdentifier),
+    );
     const concurrency = pollConcurrencyFor(config, pollConcurrency);
     await Promise.all(
       Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
@@ -709,10 +746,19 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     // the connector can back off; any other outcome resets it.
     if (feedReports.size > 0) {
       const previous = new Map<string, FeedCatalogEntry>((catalogue.entries ?? []).map((entry) => [entry.id, entry]));
+      // A run that did not serve everyone keeps each feed's old caching
+      // markers (after Phase 29e). With the new ones saved, a feed that is
+      // unchanged at the next fire answers 304 and hands the people who missed
+      // this run nothing until it next changes; with the old ones it answers
+      // with the whole feed again, at the cost of one full download.
+      const keepMarkers = missedPeople > 0;
       const rows: FeedHealthRow[] = [...feedReports.values()].map((health) => {
         const failed = health.status === "error" || health.status === "not_feed";
-        return { ...health, matchedCount: feedMatches.get(health.id) ?? 0, consecutiveFailures: failed ? (previous.get(health.id)?.consecutiveFailures ?? 0) + 1 : 0 };
+        const before = previous.get(health.id);
+        const markers = keepMarkers ? { etag: before?.etag ?? null, lastModified: before?.lastModified ?? null } : {};
+        return { ...health, ...markers, matchedCount: feedMatches.get(health.id) ?? 0, consecutiveFailures: failed ? (before?.consecutiveFailures ?? 0) + 1 : 0 };
       });
+      if (keepMarkers) log({ event: "feed_markers_kept", run: runId, source: source.name, missedPeople, feeds: rows.length });
       for (const row of rows) {
         const entry = previous.get(row.id);
         log({

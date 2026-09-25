@@ -130,6 +130,14 @@ export interface ConnectorContext {
    * about the poll's health, so it never touches the poll's reason.
    */
   detail?(key: string, value: Json): void;
+  /**
+   * What is left of the run's wall-clock budget, in milliseconds (never below
+   * 0), or null when the run is unbounded (the manual endpoint). A connector
+   * with a long shared read of its own (the publisher catalogue) caps that read
+   * by this, so nothing it starts runs past the budget by more than one of its
+   * own request timeouts.
+   */
+  remainingBudgetMs?(): number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -282,6 +290,16 @@ export interface DataConnector {
    * against itself.
    */
   readonly storyFamily?: string;
+  /**
+   * The connector's expensive work is ONE read shared by every person of the
+   * run (the publisher catalogue), and each person's poll after it is local
+   * matching and a few writes. The runner then finishes every person of the
+   * source once it has started, rather than skipping those left when the run
+   * budget runs out: skipping them saved a second of work each after the
+   * shared read had already been paid for, and deferred their items (after
+   * Phase 29e). Bounded by the runner's grace past the budget.
+   */
+  readonly sharedFetch?: boolean;
   /**
    * Fetch fresh data about one person and translate it into RawSignals.
    * Throw (ideally a ConnectorError) on failure; the runner records the error
