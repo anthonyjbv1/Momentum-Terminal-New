@@ -1,6 +1,6 @@
 import { getFinnhubKeyOrNull } from "@/lib/env";
 
-import { ConnectorError, type DataConnector, type MetricReading, type RawSignal } from "./types";
+import { ConnectorError, type ConnectorContext, type DataConnector, type MetricReading, type RawSignal } from "./types";
 
 /**
  * Finnhub connector — the public company an executive is identified with.
@@ -137,6 +137,18 @@ export function readFinnhubConfig(config: Record<string, unknown>): FinnhubConne
     insider_codes: stringListOr(config.insider_codes, DEFAULT_CONFIG.insider_codes).map((code) => code.trim().toUpperCase()),
     daily_close_hours: positiveOr(config.daily_close_hours, DEFAULT_CONFIG.daily_close_hours),
   };
+}
+
+/**
+ * The symbol a person's Form 4s are read under: the mapping's
+ * config.insider_symbol, else the ticker. Company news and the observe-only
+ * close always use the ticker (external_identifier). Some companies file
+ * insider transactions under a different share class than the one their news
+ * is indexed by, which is why the two can differ.
+ */
+export function readInsiderSymbol(personConfig: Record<string, unknown> | undefined, ticker: string): string {
+  const raw = personConfig?.insider_symbol;
+  return typeof raw === "string" && raw.trim() ? raw.trim().toUpperCase() : ticker;
 }
 
 /** The insider names of the tracked person, from the mapping's config. Empty means the person files under no name we know. */
@@ -371,6 +383,51 @@ export function insiderSignal(person: { display_name: string }, symbol: string, 
 }
 
 // ---------------------------------------------------------------------------
+// TEMPORARY: the insider-symbol probe (after Phase 29e)
+// ---------------------------------------------------------------------------
+
+/**
+ * A ONE-OFF, TO BE REMOVED ONCE READ. Finnhub returns no insider lines at all
+ * for BRK.B, the ticker Buffett's company news is read under. A mapping whose
+ * config carries insider_symbol_probe (a list of symbols) has each one read
+ * from the insider endpoint on its poll, over a year so that a quiet filer
+ * still shows up, and only two numbers per symbol are written to the poll row
+ * (source_polls.detail -> 'insider_symbol_probe'): the lines returned, and the
+ * lines naming the tracked person. Nothing becomes a signal; no line, name,
+ * share count or price is kept. A symbol that fails records its error instead.
+ */
+export const INSIDER_PROBE_DETAIL_KEY = "insider_symbol_probe";
+const INSIDER_PROBE_LOOKBACK_DAYS = 365;
+
+export function readProbeSymbols(personConfig: Record<string, unknown> | undefined): string[] {
+  const raw = personConfig?.insider_symbol_probe;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).map((entry) => entry.trim().toUpperCase()).slice(0, 5);
+}
+
+/** Two counts, nothing else: every line the symbol returned, and the lines whose insider is the tracked person. */
+export function probeCounts(rows: RawInsider[], names: string[]): { total: number; naming: number } {
+  return { total: rows.length, naming: rows.filter((row) => typeof row.name === "string" && matchesInsider(row.name, names)).length };
+}
+
+async function runInsiderSymbolProbe(context: ConnectorContext, config: FinnhubConnectorConfig, key: string, names: string[]): Promise<void> {
+  const symbols = readProbeSymbols(context.personConfig as Record<string, unknown> | undefined);
+  if (symbols.length === 0) return;
+  const from = isoDate(new Date(context.now.getTime() - INSIDER_PROBE_LOOKBACK_DAYS * 86_400_000));
+  const to = isoDate(context.now);
+  const results: Record<string, { total: number; naming: number } | { error: string }> = {};
+  for (const candidate of symbols) {
+    try {
+      const body = await call<{ data?: RawInsider[] }>(`/stock/insider-transactions?symbol=${encodeURIComponent(candidate)}&from=${from}&to=${to}`, config, key, context.fetch);
+      results[candidate] = probeCounts(Array.isArray(body.data) ? body.data : [], names);
+    } catch (error) {
+      results[candidate] = { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  context.detail?.(INSIDER_PROBE_DETAIL_KEY, { from, to, results });
+}
+
+// ---------------------------------------------------------------------------
 // The connector
 // ---------------------------------------------------------------------------
 
@@ -398,7 +455,7 @@ export const finnhubConnector: DataConnector = {
     if (typeof window !== "undefined") throw new Error("The Finnhub connector is server-only.");
     const key = requireKey();
     const config = readFinnhubConfig(context.config as Record<string, unknown>);
-    const symbol = requireSymbol(person, identifier);
+    const symbol = readInsiderSymbol(context.personConfig as Record<string, unknown> | undefined, requireSymbol(person, identifier));
     const names = readInsiderNames(context.personConfig as Record<string, unknown> | undefined);
     if (names.length === 0) {
       // Never attribute the company's filings to the person: say so instead.
@@ -428,6 +485,7 @@ export const finnhubConnector: DataConnector = {
       rows: account.rows.map((row) => ({ insider: row.insider, filed: row.filed, code: row.code, shares: row.shares, outcome: row.outcome, reason: row.reason })),
       filings_kept: account.filings.length,
     });
+    await runInsiderSymbolProbe(context, config, key, names);
     return account.filings.map((filing) => insiderSignal(person, symbol, filing));
   },
 
