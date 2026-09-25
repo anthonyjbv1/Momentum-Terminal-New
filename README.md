@@ -3256,7 +3256,7 @@ update public.data_sources
 ```
 Its history (`raw_source_snapshots`, `raw_metric_observations`) is still there, so a re-enabled metric would resume against its old baseline rather than start from nothing; whether that is wanted is a decision for the day it is re-enabled.
 
-**What the next poll showed.** The first rss fire after the change, 20:30 UTC: sixteen person-polls, all `ok`; sixteen `news_volume_24h` snapshots and sixteen observations (`inside_band` and `unchanged`), one per person, exactly as before; and no `viral_moment_rate` snapshot, observation or signal for anyone — the last of each is stamped 20:15:29 UTC, the poll before the change. Nothing else on the row moved.
+**What the next polls showed.** The first two rss fires after the change, 20:30 and 20:45 UTC: thirty-two person-polls, all `ok`; thirty-two `news_volume_24h` snapshots and thirty-two observations (`inside_band` and `unchanged`), one per person per fire, exactly as before; and no `viral_moment_rate` snapshot, observation or signal for anyone, on any source — the last of each is stamped 20:15:29 UTC, the poll before the change. Nothing else on the row moved.
 
 ### Reversing Phase 29
 
