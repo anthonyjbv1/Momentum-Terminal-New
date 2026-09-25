@@ -253,6 +253,8 @@ All monetary amounts are **integer cents** stored in `bigint` columns. Floating 
 
 All of these are applied to the `Momentum Terminal` Supabase project and recorded under the same versions, so `npm run db:push` treats them as applied and only pushes new files. To add a migration: create `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, run `npm run db:push`, then `npm run db:types`.
 
+**Standing rule (2026-09-25): before any migration is applied to production, confirm a backup exists from within the last 24 hours and name its time in the report.** The project's organisation has been on Supabase's **Pro** plan since 2026-09-25: a daily backup is taken automatically and the last seven days of them are kept, listed under **Dashboard → Database → Backups** (physical backups, the process Supabase uses for every project on Postgres 15.8 and newer; by Supabase's documentation, up to seven daily backups taken while the project was on the Free plan become visible on the upgrade). The Management API lists them too, `GET https://api.supabase.com/v1/projects/<ref>/database/backups` with a personal access token from the account page. The MCP tooling this project is operated through has no backups call and the operating environment cannot reach `api.supabase.com`, so the time is read from the Dashboard, or from that endpoint on a machine that can reach it, and quoted in the report before the migration is applied. Point-in-time recovery is a paid add-on and is not enabled. No `pg_dump` plumbing exists and none is planned.
+
 ### Tables
 
 | Table                 | Purpose                                                                                       |
@@ -980,7 +982,7 @@ The normalisation is the point. What each metric means is declared on its `data_
 | `threshold_std_devs` | the deadband, default **2.0σ** (raised from 1.0 in Phase 21; see [Metric emission](#metric-emission-phase-21)) |
 | `publish_observed` | whether the observed count may reach a reader. **Explicit, default false** (Phase 21+): set on small public counts, never on an audience level |
 
-`config.derived` declares metrics computed from another metric's snapshot history with no connector of their own: `upload_rate` (`kind: rate`: the change in `video_count` over the trailing week, per day, once the history spans the window) and `viral_moment_rate` (`kind: spike_count`: how many `news_volume_24h` readings in the trailing week sat two sd above the week's own mean). A derived level is snapshotted and normalised like any other.
+`config.derived` declares metrics computed from another metric's snapshot history with no connector of their own: `upload_rate` (`kind: rate`: the change in `video_count` over the trailing week, per day, once the history spans the window) and, until 2026-09-25, `viral_moment_rate` (`kind: spike_count`: how many `news_volume_24h` readings in the trailing week sat two sd above the week's own mean; switched off on the `rss` row that day after it quantised on a low-count series, see [the viral-moment cliff](#after-29e-the-viral-moment-cliff-and-a-metric-switched-off)). A derived level is snapshotted and normalised like any other. `upload_rate` is the only derived metric declared today, and no declared metric uses `spike_count`.
 
 **One baseline.** `lib/engine/baseline.ts` (`baselineDeviation`) is the single implementation of mean, population sd, sd floor, minimum sample and deadband. Trading Activity consumes it for net order flow; every metric consumes it for its observations; a test fails if either grows its own mean and sd.
 
@@ -1221,7 +1223,7 @@ Twelve of the sixteen tracked people had no source at all, so their silence meas
 
 The same block goes onto the Google News row of each shared name, pushed into the query as negative terms and applied again after the fetch; a unique name's Google News row carries no config. Nothing was invented for the unique names, and no bare surname that is a word, a company, another newsmaker or a common surname was made a term.
 
-**Volume, normalised per person.** Sixteen subjects span two orders of magnitude of coverage, and the Signals force grew with volume: a hundred routine items a day sum to a permanent lift five a day never reach, so the most-covered subject would outrank everyone on volume alone, and every source added to a person raised their ceiling. Phase 7 named the fix and deferred it for lack of history. It is in now, on the shared baseline (`lib/engine/signal-volume.ts`): the person's event signals per complete UTC day since their newest source mapping was created (`person_signal_volume()`, every event kind the force scores, never metric signals) is the series; the baseline utility gives its mean and the sigma of the trailing 24 hours; every event signal's impact is multiplied by `referenceSignalsPerDay` (20) over that mean, bounded to [0.1, 2] (`config.signals.volume`). A person at the reference reads exactly as before; one covered five times as much reads each item at a fifth; one covered a quarter as much reads each at double. A typical day then moves every score by a comparable amount and a day of three times a person's usual coverage reads as three times that, for them. The weight is exactly 1 until seven complete days exist, and a mapping change restarts a person's series (the days before it are an untracked person, not a quiet one), so every subject's baseline began together at this migration and the weights engage together, seven days on. Nothing already recorded is rewritten: `impact_score` on stored signals and `score_events` keep the values the Engine computed at the time. From then on, at the volumes of the first day, MrBeast's items read at about a half (news plus comment digests, about 40 a day), Patrick Mahomes' at about 0.8, Drake's and Kai Cenat's at double, and Elon Musk's at a fifth to a tenth. The weight and the reading are in the force's details (`volumeWeight`, `volume.sigma`) on every signals row.
+**Volume, normalised per person.** Sixteen subjects span two orders of magnitude of coverage, and the Signals force grew with volume: a hundred routine items a day sum to a permanent lift five a day never reach, so the most-covered subject would outrank everyone on volume alone, and every source added to a person raised their ceiling. Phase 7 named the fix and deferred it for lack of history. It is in now, on the shared baseline (`lib/engine/signal-volume.ts`): the person's event signals per complete UTC day since their newest source mapping was created (`person_signal_volume()`, every event kind the force scores, never metric signals) is the series; the baseline utility gives its mean and the sigma of the trailing 24 hours; every event signal's impact is multiplied by `referenceSignalsPerDay` (20) over that mean, bounded to [0.1, 2] (`config.signals.volume`). A person at the reference reads exactly as before; one covered five times as much reads each item at a fifth; one covered a quarter as much reads each at double. A typical day then moves every score by a comparable amount and a day of three times a person's usual coverage reads as three times that, for them. The weight is exactly 1 until seven complete days exist, and a mapping change restarts a person's series (the days before it are an untracked person, not a quiet one), so every subject's baseline began together at this migration and the weights engage together, seven days on. Nothing already recorded is rewritten: `impact_score` on stored signals and `score_events` keep the values the Engine computed at the time. From then on, at the volumes of the first day, MrBeast's items read at about a half (news plus comment digests, about 40 a day), Patrick Mahomes' at about 0.8, Drake's and Kai Cenat's at double, and Elon Musk's at a fifth to a tenth. The weight and the reading are in the force's details (`volumeWeight`, `volume.sigma`) on every signals row. The reference was re-derived in Phase 18++ and every series restarted with the Phase 22 mappings, so the weights engage together on **2026-09-28**; how those first weighted days are read is set out in [Reading the 09-28 wave](#reading-the-09-28-wave).
 
 **Throughput.** The runner polled a source's people one after another, and sixteen Google News fetches at the measured two seconds each would have filled the scheduled run's 35-second budget on their own, with the same people at the end of the list skipped on every fire. It now polls `poll_concurrency` people at a time (a source-row setting; 4 on `rss` and `publisher_rss`, code default 1, at most 8), each worker taking the next person as it finishes, so a slow host delays one lane. The publisher catalogue is still fetched once per run whoever asks first. Per-tick capacity is untouched: four model calls a tick serve sixteen people with news in four ticks, two minutes, and 48 signals a tick against a few hundred a day.
 
@@ -1606,6 +1608,66 @@ implementation detail on a subject-facing surface for one day. The board is
 paper-traded and under an auth gate; the honest handling is to watch the
 transient in the console, which is now possible, and leave the public surface
 telling the truth about what the Engine actually did.
+
+**One wave, not two (recorded 2026-09-25).** The two dates above were overtaken
+before either arrived: the Phase 22 trending mappings were created for every
+active person at 2026-09-20 19:20 UTC, and a mapping change restarts a person's
+series. Every one of the sixteen now has that as their newest mapping, so the
+seventh complete UTC day ends for all of them at once and the weights engage
+together at **2026-09-28 00:00 UTC**.
+
+### Reading the 09-28 wave
+
+The analysis of the first weighted days, agreed on 2026-09-25 and to be run the
+same way whoever runs it:
+
+- **What is read.** The Signals force's own record: `score_events` rows with
+  `force = 'signals'`, whose `details.signals[]` carries every contribution the
+  tick scored with its `scorer`, `impact`, `volumeWeight`, `source`, `tier` and
+  `counted`. The row's `details.volume` carries the weight's inputs (`meanPerDay`,
+  `sdPerDay`, `samples`, `sufficient`).
+- **Metric-scorer contributions are excluded.** Every element with
+  `scorer: "metric"` is left out, and the weighted **event** flow is read alone.
+  Metric signals are never volume-weighted (`signalVolumeWeight` returns 1 for
+  them) and never counted in the denominator, so they say nothing about the
+  weights; and the `viral_moment_rate` cliff of 2026-09-25 (868 emissions,
+  [switched off that evening](#after-29e-the-viral-moment-cliff-and-a-metric-switched-off))
+  sits entirely among them. Excluding the scorer, rather than the one metric,
+  keeps the comparison honest if any other metric misbehaves in the window.
+- **The comparison.** Per person and per UTC day: the number of event
+  contributions, their summed impact, and the mean `volumeWeight`, over the
+  seven days before 2026-09-28 (weight exactly 1) against the days after. A
+  person at the reference should read as before; the heavily covered should read
+  each item at a fraction, the lightly covered at a multiple, and the summed
+  daily impact should move toward one another across people without any one
+  day's story being lost.
+- **Projected weights**, from the volume of 2026-09-20 to 09-25 (they can move
+  by about 0.1 as the last two days land): Page 2.0, Brin 2.0, Adin Ross 2.0,
+  the founder 2.0, Dell 1.78, Kendrick Lamar 1.6, Kai Cenat 1.45, Bezos 0.84,
+  MrBeast 0.76, Ellison 0.67, Drake 0.46, Buffett 0.39, Huang 0.25, Zuckerberg
+  0.20, Musk 0.14, Mahomes 0.10. The bounds [0.1, 2] bind at both ends.
+- **Nothing is restated.** Published scores and score history stand as computed
+  (a petition condition); the analysis reads, and any change it argues for is
+  forward-only, recorded with its reason.
+
+```sql
+-- The weighted event flow, per person and day, metric-scorer contributions excluded.
+with c as (
+  select e.created_at, e.person_id, s
+    from public.score_events e, jsonb_array_elements(e.details->'signals') s
+   where e.force = 'signals'
+     and e.created_at >= '2026-09-21'
+     and coalesce(s->>'scorer', '') <> 'metric'
+     and (s->>'counted')::boolean
+)
+select p.slug, date_trunc('day', c.created_at) as day,
+       count(*)                                   as event_contributions,
+       round(sum((s->>'impact')::numeric), 3)     as impact_sum,
+       round(avg((s->>'volumeWeight')::numeric), 2) as mean_weight
+  from c join public.people p on p.id = c.person_id
+ group by 1, 2
+ order by 2 desc, 1;
+```
 
 ### Two loose items
 
@@ -2982,7 +3044,7 @@ Every person has **two numbers**. The **Momentum Score** is the data's number: G
 
 ### Option A: the score is independent of trading
 
-Conviction and Trading Activity read participant activity, and nothing derived from participant activity may feed the index. Both are still computed every tick and reported (`PersonSummary.market`), and neither is in the score's sum nor in `score_events`. `SCORE_FORCES = [gravity, signals, market_mood, inverse_pair]`, `MARKET_FORCES = [conviction, trading_activity]` (`lib/engine/types.ts`). Before the change, their actual contribution over the trailing 7 days was measured: **zero `score_events` rows for either force across 20,159 ticks; max 0, mean 0 per tick** — removing them cannot affect the ~09-28 weight-wave analysis. On the profile the two rows now show what they read (the share of the allocation cap committed; the net flow over the hour) with a MARKET tag, computed from the same rows the Engine reads (`positions.amount_cents`, `trade_events`), and the Dossier's CONVICTION comes from that concentration rather than from an audit row that is no longer written.
+Conviction and Trading Activity read participant activity, and nothing derived from participant activity may feed the index. Both are still computed every tick and reported (`PersonSummary.market`), and neither is in the score's sum nor in `score_events`. `SCORE_FORCES = [gravity, signals, market_mood, inverse_pair]`, `MARKET_FORCES = [conviction, trading_activity]` (`lib/engine/types.ts`). Before the change, their actual contribution over the trailing 7 days was measured: **zero `score_events` rows for either force across 20,159 ticks; max 0, mean 0 per tick** — removing them cannot affect the [09-28 weight-wave analysis](#reading-the-09-28-wave). On the profile the two rows now show what they read (the share of the allocation cap committed; the net flow over the hour) with a MARKET tag, computed from the same rows the Engine reads (`positions.amount_cents`, `trade_events`), and the Dossier's CONVICTION comes from that concentration rather than from an audit row that is no longer written.
 
 ### The arithmetic
 
@@ -3102,7 +3164,7 @@ select sp.started_at, p.slug, sp.detail->'insider_filings' as insider
  order by sp.started_at desc limit 20;
 ```
 
-**Open item, not built.** Compare like days in the company-news baseline: weekday readings against weekdays, weekend against weekends. The weekly swing inflates the standard deviation, so a weekday reading needs roughly twice the average to cross 2σ. **Do this after the ~09-28 weight-wave analysis**, and prefer comparing like days to lowering the threshold, which would also let the weekend lull through as "quieter than usual".
+**Open item, not built.** Compare like days in the company-news baseline: weekday readings against weekdays, weekend against weekends. The weekly swing inflates the standard deviation, so a weekday reading needs roughly twice the average to cross 2σ. **Do this after the [09-28 weight-wave analysis](#reading-the-09-28-wave)**, and prefer comparing like days to lowering the threshold, which would also let the weekend lull through as "quieter than usual".
 
 The Phase 29 down file still takes the schema back through 29b exactly. The 29d migrations sit after it and are its own concern: `phase29-down.db.test.ts` now builds the database through 29b and no further.
 
@@ -3158,6 +3220,44 @@ Three changes:
 
 His mapping now reads insider filings under **BRK-B**: the most complete, and the same share class as his ticker in Finnhub's hyphen form. The probe was then removed, code and config. Only open-market purchases and sales become signals; every other line of his is recorded on the poll row's `insider_filings` account with the reason it was not scored.
 
+### After 29e: the viral-moment cliff, and a metric switched off
+
+**What was seen.** At 18:00 UTC on 2026-09-25 Larry Page's and Sergey Brin's profiles each gained a signal reading "68 viral moments … via RSS"; from 16:27 UTC to the investigation, Page's Signals contributions summed to +0.75 and Brin's to +0.33 net. Two executives with two or three news items a day had, on the face of it, gone viral 68 times in a week.
+
+**The metric.** `viral_moment_rate` was the `rss` row's one derived metric (`kind: spike_count`, declared in Phase 7 when the RSS source served two creators): the count of `news_volume_24h` readings in the trailing 168 hours strictly above the week's own mean plus 2 × max(population sd, 0.5). Its voice in `lib/signals/metric-language.ts` speaks of clips and moments because it was written for a creator's news day; "via RSS" is the source row it derives from. It was never meant for executives: Phase 15 mapped all sixteen people onto the row and the derived metric came with the row.
+
+**The cliff, replayed.** Page's week was mostly readings of exactly 3 items (one reading every fifteen minutes, so about 96 a day), with a few at 2 and a few at 4. The cutoff sat at 3.009153 while one earlier reading held the mean up; at 18:00 that reading left the 168-hour window, the cutoff fell to 2.999988, and the 68 readings of exactly 3 crossed together: 0 → 68 in one poll, 64 the next. A replay from `raw_source_snapshots` reproduces the production values exactly. The 68 is arithmetic, not coverage: the metric counts the items a poll observed in the feed, not what was stored, and the same items had been observed all week; the per-person dedupe rule (Phase 29d) and the 18:41 caching-marker change were both ruled out; no baseline was deflated. The signal read 26.41σ against a thirty-day baseline whose mean was 0.13. A threshold that lands between two adjacent integers on a series that only takes integer values will do this whenever the window turns over; it is the metric's design, not a bug in the arithmetic.
+
+**Scope.** The metric had emitted 868 signals since 2026-09-17 across the sixteen people. Metric signals are never volume-weighted and never enter the volume denominator (`UNCOUNTED_SIGNAL_KINDS`), so the weights that engage on 09-28 are untouched by any of it, and the analysis excludes metric-scorer contributions regardless ([Reading the 09-28 wave](#reading-the-09-28-wave)).
+
+**The remedy applied: the metric is off, forward only.** At **2026-09-25 20:20:28 UTC** one guarded statement removed `viral_moment_rate` from `config.derived` and `config.metrics` on the `rss` row. No migration, no deploy: the next rss poll had nothing to derive. Nothing published changed: the 868 signals, their `score_events` contributions and every score stand as computed (the petition condition: corrections are forward-only, recorded with their reason, and this is the record). The code that would compute it (`spike_count` in `lib/ingest/metrics.ts`) and voice it stays, so the switch is reversible by configuration alone. The other remedies proposed — voiding the emitted signals going forward, rebuilding baselines from a corrected history, and moving the analysis date — were declined; the redesign is in [Open items](#open-items).
+
+The statement that ran:
+```sql
+update public.data_sources
+   set config = (config - 'derived') || jsonb_build_object('metrics', (config->'metrics') - 'viral_moment_rate')
+ where name = 'rss' and config->'derived' ? 'viral_moment_rate';
+```
+
+The `rss` row's `config` before it, verbatim, so the change is reversible:
+```json
+{"derived":{"viral_moment_rate":{"from":"news_volume_24h","kind":"spike_count","window_hours":168,"spike_sd_floor":0.5,"spike_std_devs":2,"min_source_samples":24}},"metrics":{"news_volume_24h":{"delta":"level","label":"news volume","scale":0.7,"polarity":1,"sd_floor":0.5,"min_samples":24,"publish_observed":true,"baseline_window_hours":336},"viral_moment_rate":{"delta":"level","label":"viral-moment frequency","scale":0.5,"polarity":1,"sd_floor":0.25,"min_samples":48,"publish_observed":true,"baseline_window_hours":720}},"max_items":30,"poll_concurrency":4,"volume_window_hours":24}
+```
+
+To put it back as it was (the two keys only, so any later change to the row survives):
+```sql
+update public.data_sources
+   set config = jsonb_set(
+                  jsonb_set(config, '{metrics,viral_moment_rate}',
+                    '{"delta":"level","label":"viral-moment frequency","scale":0.5,"polarity":1,"sd_floor":0.25,"min_samples":48,"publish_observed":true,"baseline_window_hours":720}'::jsonb),
+                  '{derived}',
+                  '{"viral_moment_rate":{"from":"news_volume_24h","kind":"spike_count","window_hours":168,"spike_sd_floor":0.5,"spike_std_devs":2,"min_source_samples":24}}'::jsonb)
+ where name = 'rss' and not (config->'metrics' ? 'viral_moment_rate');
+```
+Its history (`raw_source_snapshots`, `raw_metric_observations`) is still there, so a re-enabled metric would resume against its old baseline rather than start from nothing; whether that is wanted is a decision for the day it is re-enabled.
+
+**What the next poll showed.** The first rss fire after the change, 20:30 UTC: sixteen person-polls, all `ok`; sixteen `news_volume_24h` snapshots and sixteen observations (`inside_band` and `unchanged`), one per person, exactly as before; and no `viral_moment_rate` snapshot, observation or signal for anyone — the last of each is stamped 20:15:29 UTC, the poll before the change. Nothing else on the row moved.
+
 ### Reversing Phase 29
 
 Three ways back, in the order to reach for them.
@@ -3168,13 +3268,13 @@ Three ways back, in the order to reach for them.
 
 1. Step 1 above, then wait one tick: every `premium_cents` and `market_inventory_units` must be 0 (the file refuses otherwise, naming the count).
 2. **Vercel**: promote the Phase 28 deployment (commit `381fb7b`) to production. It runs on the Phase 29 schema as it stands — it calls `place_order` by name without the eighth argument, which defaults to null, and reads only columns that still exist — so orders keep filling (flat) throughout; there is no window of refused orders. (The other order, schema first, would leave the Phase 29 app calling functions that no longer exist until the promote.)
-3. Take a `pg_dump` (there is no platform backup on the Free plan). Export what exists only in Phase 29's tables — `premium_history`, `house_ledger`, `alerts`, `surveillance_events`, `admin_audit_log`, `excluded_parties` — then run the file as one transaction (Supabase SQL editor, or `psql -v ON_ERROR_STOP=1 -f`), preceded by `set momentum.phase29_down_data_exported = 'yes';` if any of them has rows. It takes an `ACCESS EXCLUSIVE` lock with a 5 s `lock_timeout`; orders wait a few seconds, none fails.
+3. Confirm a daily backup from within the last 24 hours exists (Dashboard → Database → Backups; the project is on the Pro plan) and name its time in the report — the [standing rule](#migrations) for every migration, and this file is one. Export what exists only in Phase 29's tables — `premium_history`, `house_ledger`, `alerts`, `surveillance_events`, `admin_audit_log`, `excluded_parties` — then run the file as one transaction (Supabase SQL editor, or `psql -v ON_ERROR_STOP=1 -f`), preceded by `set momentum.phase29_down_data_exported = 'yes';` if any of them has rows. It takes an `ACCESS EXCLUSIVE` lock with a 5 s `lock_timeout`; orders wait a few seconds, none fails.
 4. If the file reports lots or orders filled along the curve that the Phase 27 CHECKs would reject (an order filled on the curve records an average, which is not in general gross ÷ units), either restore from a backup instead, or add `set momentum.phase29_down_curve_rows = 'not_valid';` — those two CHECKs come back `NOT VALID`, the rows are kept exactly as filled, every later row is checked. On production today: 0 of 7 lots and 0 of 11 orders would fail them, and every premium is 0.
 5. The file deletes both versions (`20260925012938`, `20260925103634`) from `supabase_migrations.schema_migrations`, so `db push` sees the history the schema has. Move the two migration files out of `supabase/migrations/` in the repository at the same time, or the next push re-applies them.
 
 **What the down file loses**: the six tables above and everything in them (on production today: 443 `premium_history` rows, 3 `house_ledger`, 6 `surveillance_events`, no alerts, no audit rows, no excluded parties); `market_tier_settings`; every per-person market setting — tier, trading mode (**the founder becomes tradeable again**, as before Phase 29), halts, the four overrides, the pricing mode; account freezes, the identity hook and referrals; the ten detector thresholds; and, on rows that stay, the curve's inputs — orders' base price, inventory and premium before/after, depth, impact, worst fill, the cost/proceeds split and the fingerprint hash, lots' `entry_*` and closes' `exit_*` inputs. `positions.entry_price_points` is renamed back to `entry_score`. Kept: every order, lot, close, transaction, balance, portfolio history point, score and signal. The market price's history can no longer be reproduced once `premium_history` is gone — export it first if it matters.
 
-**3. A restore — the last resort, and not available today.** The project's organisation is on Supabase's **Free** plan, which has neither point-in-time recovery nor downloadable daily backups, so as things stand there is no restore to fall back on and option 2 is the real floor. On a paid plan a daily backup (Pro) or PITR (an add-on) could put the whole database back to before 2026-09-25 01:29 UTC, when Phase 29 was applied — losing **everything** written since (every order, signal, tick, score and waitlist entry, not just Phase 29's data) and still needing the Vercel promote in step 2. Until then the only full copy is one we take ourselves: `pg_dump` of the database before any schema rollback.
+**3. A restore — the last resort.** Since 2026-09-25 the project's organisation is on Supabase's **Pro** plan: a daily backup is taken automatically and the last seven days are kept (Dashboard → Database → Backups; the Management API lists them at `GET /v1/projects/{ref}/database/backups`). Restoring one puts the **whole** database back to that backup's moment, losing **everything** written since (every order, signal, tick, score and waitlist entry, not just Phase 29's data), and still needs the Vercel promote in step 2. Point-in-time recovery is an add-on and is not enabled. A backup from before 2026-09-25 01:29 UTC, when Phase 29 was applied, stays available only while it is inside the seven-day window, so from about 2026-10-02 no restore reaches a pre-Phase-29 state and option 2 is the floor again. The project is not to be restored without the operator's explicit instruction for that specific backup.
 
 ## Open items
 
@@ -3182,11 +3282,13 @@ Three ways back, in the order to reach for them.
   - when a reset is allowed, and by whom;
   - how it is disclosed, to holders beforehand and on the profile afterwards;
   - who bears the cost: the house book or the holders, and how it is recorded.
-- **Compare like days in the company-news baseline** (Phase 29d): weekdays against weekdays, weekends against weekends, after the ~09-28 weight-wave analysis. Prefer this to lowering the threshold.
+- **Compare like days in the company-news baseline** (Phase 29d): weekdays against weekdays, weekends against weekends, after the [09-28 weight-wave analysis](#reading-the-09-28-wave). Prefer this to lowering the threshold.
+- **A redesigned virality metric**, if one is wanted at all: count **days** on which a person's news volume was unusual, not readings (a reading every fifteen minutes makes one day about 96 readings, which is what let 68 cross at once), and set the threshold from a Poisson model of the person's own daily count rather than mean plus two sd, which has no meaning on a series of 0, 1, 2 and 3 items. It is possible only after a **30-day baseline** of the daily counts exists (the sixteen have been on the row since 2026-09-17, so not before mid-October at the earliest), and **not before the drift and score-range decisions**, which decide what any new metric would be feeding.
+- **Any metric using `spike_count` on a low-count series is suspect** for the same quantization reason: the threshold falls between two adjacent integers, and one reading leaving the window moves it across a whole plateau of identical readings at once. `viral_moment_rate` was the only `spike_count` metric ever declared and is off. No other declared metric uses the kind (`select name, config->'derived' from public.data_sources where config ? 'derived'` returns `youtube.upload_rate`, `kind: rate`, and nothing else), so there is nothing else to switch off. The level metrics over small counts (`news_volume_24h` at 0–3 items a day for the quiet executives, `company_news_volume_24h` at 8–23 for Berkshire) meet the same integers, but through the baseline's sd floor and the 2σ deadband, which bound a one-item step to at most the deadband rather than 26σ; they are not on this list, and the like-days item above is their known weakness.
 
 ## Scope so far
 
-- **After 29e**: publisher_rss overruns no longer defer the same twelve people. A shared catalogue read is finished for everyone, inside a 10-second grace that keeps the run under the 60-second kill (worst case about 47 s, from 56 s). A run that missed anyone keeps the feeds' old caching markers, and people are polled longest-wait first. Finnhub insider filings can be read under their own symbol (`config.insider_symbol`); a one-off probe found Buffett's is BRK-B. Operator resets are recorded as an open item for a policy before real money.
+- **After 29e**: publisher_rss overruns no longer defer the same twelve people. A shared catalogue read is finished for everyone, inside a 10-second grace that keeps the run under the 60-second kill (worst case about 47 s, from 56 s). A run that missed anyone keeps the feeds' old caching markers, and people are polled longest-wait first. Finnhub insider filings can be read under their own symbol (`config.insider_symbol`); a one-off probe found Buffett's is BRK-B. Operator resets are recorded as an open item for a policy before real money. The `viral_moment_rate` metric is off on the `rss` row (2026-09-25 20:20 UTC, forward only, reversible by config, the old declaration recorded), after a quantization cliff put 68 "viral moments" on Larry Page and Sergey Brin in one poll; the 09-28 weight-wave analysis reads the weighted event flow alone, metric-scorer contributions excluded. Supabase is on the Pro plan, with daily backups and a standing rule to confirm one from within 24 hours before any migration.
 - **Phase 29e**: back-to-back orders at MrBeast's demo depth no longer refuse themselves. Every fill and refusal hands the page the book the server read, the sheet reads the live book as it opens, and a "price moved" refusal offers one action in the pinned footer, "Buy at $X", the server's own average, in one tap. On a wide screen the trade sheet is two columns under one footer and fits a 1278×604 window with no scrolling. The phone layout is unchanged to the pixel.
 - **Phase 29d**: the explainer made true — Market Mood "the tide across everyone we track", Conviction as the code does it (it tightens the spread), a round trip "the spread, plus at most a cent of rounding" with the bound pinned by a test, its own link preview and the arithmetic behind a toggle; a person's own market settings on their profile (MrBeast's depth now); signals unique per source, person and key, so Page and Brin both keep the GOOGL series and a shared article, filing or game reaches everyone it concerns; and every Finnhub insider line accounted for on the poll row.
 - **Phase 29c**: the chart's legend says "in line with the data" while the market price sits within a cent of the score across the window; "baseline" for the revert target everywhere a reader sees it; the five forces in two groups, "Moving the score" and "Moving the market", with Trading Activity read as the hour's split and volume and Conviction described as what the code does with it — it tightens the spread — and every claim held to the code by a test; the forecast sentence in the sentence face; and a temporary depth demo on MrBeast (20 shares per point).
