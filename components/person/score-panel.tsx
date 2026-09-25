@@ -21,11 +21,12 @@ import {
   type TradingAvailability,
 } from "@/lib/person/profile-model";
 import type { OrderSide } from "@/lib/trading/direction";
-import { EMPTY_POSITION, cents, pointsToCents, quoteFromScore, type Cents, type OrderResult, type PositionSummary, type TradeBook, type ViewerTradingState } from "@/lib/trading/model";
+import { EMPTY_POSITION, bookFromMarket, cents, pointsToCents, quoteFromScore, type Cents, type OrderResult, type PositionSummary, type TradeBook, type ViewerTradingState } from "@/lib/trading/model";
 import { PositionCard } from "@/components/trade/position-card";
 import { TradeSheet } from "@/components/trade/trade-sheet";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { LocalClock } from "@/components/ui/local-time";
 import { directionAtPrecision, directionIcon, directionLabels, directionTone, formatChange } from "@/components/ui/direction-indicator";
 import { SectionHeader } from "@/components/ui/page-header";
 import { ScoreDisplay } from "@/components/ui/score-display";
@@ -138,16 +139,22 @@ function MarketLine({ marketPrice, premiumCents }: { marketPrice: number; premiu
   );
 }
 
-const clock = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
 
 /** The market's state, when it is not simply open. */
 function AvailabilityNotice({ availability, personName }: { availability: TradingAvailability; personName: string }) {
   if (availability.state === "tradeable") return null;
-  let text: string;
+  let text: React.ReactNode;
   switch (availability.state) {
     case "halted": {
-      const until = Number.isFinite(Date.parse(availability.until)) ? clock.format(Date.parse(availability.until)) : null;
-      text = `Trading in ${personName} is halted${until ? ` until ${until}` : ""}${availability.reason ? `: ${availability.reason}` : "."} Nothing can be placed until it is lifted; the score keeps updating.`;
+      // The time is the reader's, rendered hydration-safe (Phase 29b): formatting it here with the
+      // server's zone and again with the browser's is what made a halted profile fail to hydrate.
+      const until = Number.isFinite(Date.parse(availability.until)) ? <LocalClock iso={availability.until} className="tabular-nums" /> : null;
+      text = (
+        <>
+          Trading in {personName} is halted{until ? <> until {until}</> : null}
+          {availability.reason ? `: ${availability.reason}` : "."} Nothing can be placed, and nothing held can be closed, until it is lifted; the score keeps updating.
+        </>
+      );
       break;
     }
     case "paused":
@@ -192,18 +199,20 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnable
   // shows, and the whole book the sheet previews on.
   const quote = useMemo(() => quoteFromScore(state.score, state.spread, state.premiumCents), [state.score, state.spread, state.premiumCents]);
   const book = useMemo<TradeBook>(
-    () => ({
-      buyCents: quote.buyCents,
-      sellCents: quote.sellCents,
-      baseBuyCents: pointsToCents(state.score + state.spread),
-      baseSellCents: pointsToCents(state.score - state.spread),
-      premiumCents: state.premiumCents,
-      inventoryUnits: person.depthUnits === null ? null : state.inventoryUnits,
-      depthUnits: person.depthUnits,
-      premiumCapCents: person.premiumCapCents,
-    }),
-    [quote, state.score, state.spread, state.premiumCents, state.inventoryUnits, person.depthUnits, person.premiumCapCents],
+    () =>
+      bookFromMarket({
+        score: state.score,
+        spread: state.spread,
+        premiumCents: state.premiumCents,
+        inventoryUnits: state.inventoryUnits,
+        depthUnits: person.depthUnits,
+        premiumCapCents: person.premiumCapCents,
+      }),
+    [state.score, state.spread, state.premiumCents, state.inventoryUnits, person.depthUnits, person.premiumCapCents],
   );
+  // A display-only index shows its score and nothing else (Phase 29b): no market price, no
+  // premium line, no market line on the chart. Closing a held position works as before.
+  const scoreOnly = state.tradingMode === "display_only";
   const availability = useMemo(
     () => tradingAvailability({ tradingMode: state.tradingMode, haltedUntil: state.haltedUntil, haltReason: state.haltReason }, now),
     [state.tradingMode, state.haltedUntil, state.haltReason, now],
@@ -263,7 +272,8 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnable
 
             {change ? <ChangeLine change={change} rangeLabel={rangeLabel} /> : <p className="text-base text-fg-muted">No change recorded yet</p>}
 
-            <MarketLine marketPrice={state.marketPrice} premiumCents={state.premiumCents} />
+            {/* Display-only (Phase 29b): the score is the only number shown. */}
+            {scoreOnly ? null : <MarketLine marketPrice={state.marketPrice} premiumCents={state.premiumCents} />}
           </div>
 
           <TradeActions
@@ -273,6 +283,7 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnable
             sellCents={quote.sellCents}
             viewer={viewer}
             availability={availability}
+            now={now}
             onTrade={setSheet}
             className="hidden md:flex"
           />
@@ -290,17 +301,18 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnable
             range={range ?? "1h"}
             revertTarget={person.revertTarget}
             personName={person.displayName}
+            showMarket={!scoreOnly}
             version={state.version}
             cadenceMs={live?.cadenceMs}
           />
         </div>
       </Card>
 
-      {viewer.signedIn ? <PositionCard position={position} buyCents={quote.buyCents} sellCents={quote.sellCents} premiumCents={state.premiumCents} /> : null}
+      {viewer.signedIn ? <PositionCard position={position} buyCents={quote.buyCents} sellCents={quote.sellCents} premiumCents={state.premiumCents} scoreOnly={scoreOnly} /> : null}
 
       {/* The bar is fixed above the tab bar; while the sheet is up it would sit over the sheet, so it steps aside. */}
       {sheet === null ? (
-        <TradeBar person={person} shortingEnabled={shortingEnabled} buyCents={quote.buyCents} sellCents={quote.sellCents} viewer={viewer} availability={availability} onTrade={setSheet} />
+        <TradeBar person={person} shortingEnabled={shortingEnabled} buyCents={quote.buyCents} sellCents={quote.sellCents} viewer={viewer} availability={availability} now={now} onTrade={setSheet} />
       ) : null}
 
       {viewer.signedIn && sheet !== null ? (
@@ -311,6 +323,7 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnable
           person={{ id: person.id, slug: person.slug, displayName: person.displayName }}
           book={book}
           marketPrice={state.marketPrice}
+          scoreOnly={scoreOnly}
           availability={availability}
           balanceCents={balanceCents ?? cents(0)}
           position={position}

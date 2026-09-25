@@ -891,12 +891,14 @@ export interface MarketPersonRow {
   premiumCents: number;
   marketPrice: number;
   inventoryUnits: number;
-  overrides: { depthUnits: number | null; halfLifeTicks: number | null; premiumCapCents: number | null; shorting: boolean | null };
+  overrides: { pricingMode: string | null; depthUnits: number | null; halfLifeTicks: number | null; premiumCapCents: number | null; shorting: boolean | null };
 }
 
 export interface TierSettingsRow {
   tier: string;
-  depthUnits: number | null;
+  /** 'curve' | 'flat' (Phase 29b): flat is named, never a missing depth. */
+  pricingMode: string;
+  depthUnits: number;
   halfLifeTicks: number;
   premiumCapCents: number;
   minHoldSeconds: number;
@@ -957,7 +959,7 @@ export async function readMarket(): Promise<MarketReport> {
     client.from("users").select("id, username, frozen_at, frozen_reason").not("frozen_at", "is", null).order("frozen_at", { ascending: false }).limit(ALERT_LIMIT),
     client
       .from("people")
-      .select("id, slug, display_name, tier, trading_mode, halted_until, halt_reason, current_score, premium_cents, market_price, market_inventory_units, depth_units_override, decay_half_life_ticks_override, premium_cap_cents_override, shorting_override")
+      .select("id, slug, display_name, tier, trading_mode, halted_until, halt_reason, current_score, premium_cents, market_price, market_inventory_units, pricing_mode_override, depth_units_override, decay_half_life_ticks_override, premium_cap_cents_override, shorting_override")
       .eq("is_active", true)
       .order("slug"),
     client.from("market_tier_settings").select("*").order("tier"),
@@ -1056,6 +1058,7 @@ export async function readMarket(): Promise<MarketReport> {
       marketPrice: Number(row.market_price ?? row.current_score),
       inventoryUnits: Number(row.market_inventory_units),
       overrides: {
+        pricingMode: row.pricing_mode_override,
         depthUnits: row.depth_units_override === null ? null : Number(row.depth_units_override),
         halfLifeTicks: row.decay_half_life_ticks_override === null ? null : Number(row.decay_half_life_ticks_override),
         premiumCapCents: row.premium_cap_cents_override === null ? null : Number(row.premium_cap_cents_override),
@@ -1064,7 +1067,8 @@ export async function readMarket(): Promise<MarketReport> {
     })),
     tiers: (tiers.data ?? []).map((row) => ({
       tier: row.tier,
-      depthUnits: row.depth_units === null ? null : Number(row.depth_units),
+      pricingMode: row.pricing_mode,
+      depthUnits: Number(row.depth_units),
       halfLifeTicks: Number(row.decay_half_life_ticks),
       premiumCapCents: Number(row.premium_cap_cents),
       minHoldSeconds: Number(row.min_hold_seconds),

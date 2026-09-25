@@ -399,6 +399,18 @@ export const FORCE_DEFINITIONS: Record<ForceKey, { label: string; description: s
   trading_activity: { label: "Trading Activity", description: "Buy and Sell flow · moves the market price", role: "market" },
 };
 
+/**
+ * The forces that move the MOMENTUM SCORE: Gravity, Signals, Market Mood.
+ * Anything that explains why the score moved (the landing's "why it moved")
+ * reads these and only these; the market forces move the market price.
+ */
+export const SCORE_FORCE_KEYS = ["gravity", "signals", "market_mood"] as const satisfies readonly ForceKey[];
+export type ScoreForceKey = (typeof SCORE_FORCE_KEYS)[number];
+
+export function isScoreForceKey(value: unknown): value is ScoreForceKey {
+  return typeof value === "string" && (SCORE_FORCE_KEYS as readonly string[]).includes(value);
+}
+
 export function isForceKey(value: unknown): value is ForceKey {
   return typeof value === "string" && (FORCE_KEYS as readonly string[]).includes(value);
 }

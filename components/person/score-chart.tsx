@@ -32,12 +32,17 @@ import { ChartEmpty, LiveLineChart } from "@/components/charts/live-line-chart";
  * and the crosshair names both values — the score in points, the market
  * price in dollars, because a score is points and anything you can trade at
  * is money (Phase 26). The Gravity line stays.
+ *
+ * A display-only index (Phase 29b) passes showMarket={false}: the score is
+ * the only line, with no legend, because it is the only number the page shows.
  */
 export interface ScoreChartProps {
   points: SeriesPoint[];
   range: RangeKey;
   revertTarget: number;
   personName: string;
+  /** Draw the market price as the second line where the series carries it. False on a display-only index. */
+  showMarket?: boolean;
   /** Bumps when live ticks arrive; each change animates the reveal. */
   version?: number;
   /** The Engine's cadence, for the breath. Defaults to the real 30 seconds. */
@@ -49,7 +54,7 @@ const oneDecimal = (value: number) => value.toFixed(1);
 const asMoney = (value: number) => formatCents(pointsToCents(value));
 const marketOf = (point: SeriesPoint) => point.market;
 
-export function ScoreChart({ points, range, revertTarget, personName, version = 0, cadenceMs = LIVE_TICK_MS, className }: ScoreChartProps) {
+export function ScoreChart({ points, range, revertTarget, personName, showMarket = true, version = 0, cadenceMs = LIVE_TICK_MS, className }: ScoreChartProps) {
   const domain = useCallback((timed: TimedScore[]) => scoreDomain(timed, revertTarget), [revertTarget]);
   const describe = useCallback(
     ({ first, last, min, max, rangeLabel }: { first: TimedScore; last: TimedScore; min: TimedScore; max: TimedScore; rangeLabel: string }) =>
@@ -57,7 +62,7 @@ export function ScoreChart({ points, range, revertTarget, personName, version = 
     [personName],
   );
   // The market line is drawn when the series carries it on at least two points.
-  const hasMarket = useMemo(() => points.filter((point) => typeof point.market === "number").length >= 2, [points]);
+  const hasMarket = useMemo(() => showMarket && points.filter((point) => typeof point.market === "number").length >= 2, [showMarket, points]);
 
   return (
     <div className={cn("flex flex-col gap-2", className)}>

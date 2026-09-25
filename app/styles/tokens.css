@@ -130,6 +130,7 @@
   --spacing: 0.25rem;
   --spacing-banner: 4rem;     /* top banner height */
   --spacing-tabbar: 4rem;     /* bottom tab bar height (mobile) */
+  --spacing-tradebar: 6rem;   /* the profile's Buy / Sell bar above the tab bar (mobile): a status line and a row of pills */
   --spacing-rail: 22rem;      /* right-hand rail width (desktop) */
   --spacing-shell: 80rem;     /* max content width */
   --spacing-touch: 2.75rem;   /* minimum tap target */

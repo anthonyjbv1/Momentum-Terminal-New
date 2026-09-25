@@ -12,8 +12,10 @@ import { useFeatured } from "./use-featured";
 
 /**
  * WHY IT MOVED: the same reading a profile gives inside the app, for the one
- * person this page is allowed to describe. The last day as a line, the five
- * forces over the last hour with the points each added, and the recent
+ * person this page is allowed to describe. The last day as a line, the three
+ * forces that move the score (Gravity, Signals, Market Mood — never the
+ * market forces, which move the market price) over the last hour with the
+ * points each added, and the recent
  * signals in plain language — or, honestly, the statement that none has
  * arrived yet.
  *

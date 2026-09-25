@@ -120,7 +120,7 @@ export default async function HowThePriceWorksPage() {
             </dl>
             <p>
               A buy rounds up to the cent and a sell rounds down, so a fraction of a cent is never settled in the buyer&rsquo;s or the seller&rsquo;s favour. A depth of{" "}
-              {tiers.public_figure ? shares(tiers.public_figure.depthUnits ?? 0) : "300 shares"} means that many shares of net buying move the market price one point.
+              {tiers.public_figure ? shares(tiers.public_figure.depthUnits) : "300 shares"} means that many shares of net buying move the market price one point.
             </p>
           </Section>
 
@@ -147,10 +147,10 @@ export default async function HowThePriceWorksPage() {
                   </tr>
                 </thead>
                 <tbody className="[&_td]:border-t [&_td]:border-line [&_td]:px-4 [&_td]:py-2.5 [&_td]:align-top">
-                  <Row label="Depth (shares of net buying per point)" pub={tiers.public_figure} priv={tiers.private_individual} render={(t) => (t.depthUnits === null ? "flat market" : shares(t.depthUnits))} />
+                  <Row label="Depth (shares of net buying per point)" pub={tiers.public_figure} priv={tiers.private_individual} render={(t) => (t.pricingMode === "flat" ? "flat market" : shares(t.depthUnits))} />
                   <Row label="Premium half-life with no trading" pub={tiers.public_figure} priv={tiers.private_individual} render={(t) => hoursLabel(t.halfLifeSeconds)} />
                   <Row label="Most the market price may sit from the score" pub={tiers.public_figure} priv={tiers.private_individual} render={(t) => points(t.premiumCapCents)} />
-                  <Row label="Largest single order" pub={tiers.public_figure} priv={tiers.private_individual} render={(t) => (t.depthUnits === null ? "no limit" : shares(Math.floor(t.maxOrderShareOfDepth * t.depthUnits)))} />
+                  <Row label="Largest single order" pub={tiers.public_figure} priv={tiers.private_individual} render={(t) => (t.pricingMode === "flat" ? "no limit" : shares(Math.floor(t.maxOrderShareOfDepth * t.depthUnits)))} />
                   <Row label="Minimum hold before a position can be closed" pub={tiers.public_figure} priv={tiers.private_individual} render={(t) => hoursLabel(Math.max(t.minHoldSeconds, params.closeCooldownSeconds))} />
                   <Row label="Most the platform will hold on one person, net" pub={tiers.public_figure} priv={tiers.private_individual} render={(t) => shares(t.aggregateExposureCapUnits)} />
                   <Row
@@ -175,6 +175,7 @@ export default async function HowThePriceWorksPage() {
               be placed), or <strong className="font-medium text-fg">display-only</strong> (the score is shown, nothing new can be opened, and anything already held can still be
               closed). Each state is written on the profile and on the trade sheet when it applies.
             </p>
+            <p>A halt pauses all trading in that person, including closing a position you already hold, until the halt ends.</p>
           </Section>
 
           <Section title="Everything is on the record">

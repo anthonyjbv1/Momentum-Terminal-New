@@ -260,7 +260,8 @@ export function MarketSection({ report, now, notice }: { report: MarketReport; n
                 <tbody>
                   {(
                     [
-                      ["Depth (units / point)", (t) => (t.depthUnits === null ? "OFF (flat)" : num(t.depthUnits))],
+                      ["Pricing mode", (t) => (t.pricingMode === "flat" ? "FLAT (no premium, no impact)" : "curve")],
+                      ["Depth (units / point)", (t) => num(t.depthUnits)],
                       ["Premium half-life", (t) => `${num(t.halfLifeTicks)} ticks (${(t.halfLifeTicks / 120).toFixed(1)} h)`],
                       ["Premium cap", (t) => `${(t.premiumCapCents / 100).toFixed(2)} pts`],
                       ["Min hold", (t) => `${num(t.minHoldSeconds)} s`],
@@ -286,8 +287,9 @@ export function MarketSection({ report, now, notice }: { report: MarketReport; n
               </table>
             </Scroll>
             <p className="adm-note">
-              Read-only here; changed by migration on <code>market_tier_settings</code>. A NULL depth is the tier&rsquo;s off switch: a flat market with no premium and no impact,
-              Phase 27 pricing exactly, with no deploy. The exposure cap counts HOLDINGS while decay erases INVENTORY, so a popular person can sit at the cap with the
+              Read-only here; changed by migration on <code>market_tier_settings</code>. Pricing mode <code>flat</code> is the off switch, for a tier or (by{" "}
+              <code>people.pricing_mode_override</code>) one person: a flat market with no premium and no impact, Phase 27 pricing exactly, with no deploy; the next tick
+              returns any inventory to zero. A NULL override always means the tier&rsquo;s value. The exposure cap counts HOLDINGS while decay erases INVENTORY, so a popular person can sit at the cap with the
               premium at zero; it is a share-count cap to be replaced before a real user base arrives (design notes).
             </p>
           </div>
@@ -560,6 +562,7 @@ function AlertCard({ alert, people, now }: { alert: AlertRow; people: MarketPers
 
 function PersonRow({ person, now }: { person: MarketPersonRow; now: number }) {
   const overrides = [
+    person.overrides.pricingMode !== null ? `mode ${person.overrides.pricingMode}` : null,
     person.overrides.depthUnits !== null ? `depth ${num(person.overrides.depthUnits)}` : null,
     person.overrides.halfLifeTicks !== null ? `half-life ${num(person.overrides.halfLifeTicks)}` : null,
     person.overrides.premiumCapCents !== null ? `cap ${(person.overrides.premiumCapCents / 100).toFixed(2)}` : null,

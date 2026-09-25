@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { LIVE_TICK_MS } from "@/lib/person/live-series";
-import { FORCE_KEYS } from "@/lib/person/profile-model";
+import { FORCE_DEFINITIONS, FORCE_KEYS, SCORE_FORCE_KEYS } from "@/lib/person/profile-model";
 
 import { FEATURED_PAYLOAD_KEYS, FEATURED_SIGNAL_LIMIT, FEATURED_SLUG, STALE_AFTER_MS, changeOver, isStale, parseFeaturedPayload, tickSlot } from "./model";
 import { FEATURED } from "./copy";
@@ -72,18 +72,37 @@ describe("parseFeaturedPayload", () => {
     expect(parsed.change).toEqual({ h1: null, h24: null, d7: null });
     expect(parsed.history).toEqual([]);
     expect(parsed.signals).toEqual([]);
-    expect(parsed.forces).toEqual(FORCE_KEYS.map((key) => ({ key, impact: null })));
+    expect(parsed.forces).toEqual(SCORE_FORCE_KEYS.map((key) => ({ key, impact: null })));
   });
 
-  it("returns every force in the canonical order, whatever order or subset arrived", () => {
+  it("returns every force that moves the score in the canonical order, whatever order or subset arrived", () => {
     const parsed = parseFeaturedPayload(full())!;
-    expect(parsed.forces.map((force) => force.key)).toEqual([...FORCE_KEYS]);
+    expect(parsed.forces.map((force) => force.key)).toEqual(["gravity", "signals", "market_mood"]);
     expect(parsed.forces.find((force) => force.key === "signals")?.impact).toBe(0.5);
     expect(parsed.forces.find((force) => force.key === "gravity")?.impact).toBe(-0.02);
-    expect(parsed.forces.find((force) => force.key === "conviction")?.impact).toBeNull();
+    expect(parsed.forces.find((force) => force.key === "market_mood")?.impact).toBeNull();
     // An unknown force is not a force.
     const odd = parseFeaturedPayload({ score: 1, forces: [{ key: "luck", impact: 9 }] })!;
     expect(odd.forces.every((force) => force.impact === null)).toBe(true);
+  });
+
+  it("drops the market forces: Conviction and Trading Activity move the market price, not the score (Phase 29b)", () => {
+    // The score forces are exactly the forces whose role is "score".
+    expect([...SCORE_FORCE_KEYS]).toEqual(FORCE_KEYS.filter((key) => FORCE_DEFINITIONS[key].role === "score"));
+    const parsed = parseFeaturedPayload({
+      score: 1,
+      forces: [
+        { key: "conviction", impact: 3 },
+        { key: "trading_activity", impact: -2 },
+        { key: "signals", impact: 0.25 },
+      ],
+    })!;
+    expect(parsed.forces).toEqual([
+      { key: "gravity", impact: null },
+      { key: "signals", impact: 0.25 },
+      { key: "market_mood", impact: null },
+    ]);
+    expect(JSON.stringify(parsed)).not.toMatch(/conviction|trading_activity/);
   });
 
   it("drops malformed history points and signals, and caps the signals", () => {

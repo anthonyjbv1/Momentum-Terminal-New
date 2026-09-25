@@ -80,7 +80,9 @@ async function ProfileBody({ slug, personId, personName }: { slug: string; perso
   const renderedAt = getRenderedAt();
 
   return (
-    <div className="flex flex-col gap-10">
+    // pb-tradebar: the mobile Buy / Sell bar is fixed above the tab bar, exactly --spacing-tradebar tall
+    // (Phase 29b); the shell's pb-tabbar-safe already clears the tab bar and the home indicator.
+    <div className="flex flex-col gap-10 pb-tradebar md:pb-0">
       <ProfileLogger personId={profile.person.id} enabled={loggingEnabled} />
 
       <Dossier person={profile.person} state={profile.state} conviction={profile.conviction} />

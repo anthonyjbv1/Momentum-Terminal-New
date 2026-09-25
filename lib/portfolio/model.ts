@@ -1,6 +1,6 @@
 import { RANGES, type SeriesByRange, type SeriesPoint, type TradingMode } from "@/lib/person/profile-model";
 import type { OrderSide, PositionDirection } from "@/lib/trading/direction";
-import { EMPTY_POSITION, cents, payloadUnitsPerShare, toShares, type Cents, type PositionSummary } from "@/lib/trading/model";
+import { EMPTY_POSITION, cents, flatBook, payloadUnitsPerShare, toShares, toTradeBook, type Cents, type PositionSummary, type TradeBook } from "@/lib/trading/model";
 
 /**
  * The portfolio's shape on both sides of the server boundary, and the pure
@@ -51,6 +51,14 @@ export interface PortfolioPosition {
   tradingMode: TradingMode;
   /** While in the future, every order on the person is refused. */
   haltedUntil: string | null;
+  /**
+   * THE BOOK the close sheet previews on (Phase 29b): base prices, dealer
+   * inventory, resolved depth and premium cap, from the same resolution
+   * trade_quote() gives the profile, so a close here walks the curve exactly
+   * as it would there. A row from before Phase 29b reads as a flat book at the
+   * quotes.
+   */
+  book: TradeBook;
   /** Which quote the position is marked at: SELL for a HIGH position, BUY for a LOW one. */
   markSide: OrderSide;
   markPriceCents: Cents;
@@ -148,6 +156,7 @@ export function toPortfolioPosition(value: unknown, unitsPerShare = 1): Portfoli
     marketPrice: toNullableNumber(record.market_price) ?? (toNullableNumber(record.score) ?? 0) + toInt(record.premium_cents, 0) / 100,
     tradingMode: record.trading_mode === "display_only" || record.trading_mode === "paused" ? record.trading_mode : "tradeable",
     haltedUntil: toText(record.halted_until),
+    book: toTradeBook(record) ?? flatBook(cents(toInt(record.buy_cents)), cents(toInt(record.sell_cents)), toInt(record.premium_cents, 0)),
     markSide: record.mark_side === "BUY" ? "BUY" : "SELL",
     markPriceCents: cents(toInt(record.mark_price_cents)),
     valueCents: cents(toInt(record.value_cents)),

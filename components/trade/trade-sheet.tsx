@@ -8,6 +8,7 @@ import { cn } from "@/lib/cn";
 import { formatCents } from "@/lib/money";
 import { marketLine, type TradingAvailability } from "@/lib/person/profile-model";
 import type { OrderSide } from "@/lib/trading/direction";
+import { PREVIEW_LABELS, confirmBreakdown, confirmHeadline, dollarsLine, filledDetail, filledHeadline, spreadNote, toleranceNote, verb, walks } from "@/lib/trading/sheet-copy";
 import {
   MAX_ORDER_SHARES,
   UNITS_PER_SHARE,
@@ -42,17 +43,25 @@ import { Money } from "./money";
  * pill that opened the sheet. Scores are points; anything you can trade at
  * is dollars and cents.
  *
- * THE COST CURVE (Phase 29). The quote is the FIRST share's price. An order
- * walks the market's cost curve, so a larger order fills at an AVERAGE a
- * little past the quote and its last share at a worse price still; both are
- * shown before anything is confirmed, and the average is the price the sheet
- * sends and the server's tolerance band is checked against. The premium the
- * order leaves on the market price is shown too. All of it is computed by the
- * same integer arithmetic the server runs (lib/trading/market.ts mirrors the
- * SQL and a test holds them together), so the cost shown is the cost charged.
- * Where the book is not known (the portfolio, which reads a summary rather
- * than a quote) the preview is priced flat at the quote and the fill reports
- * the server's average.
+ * THE COST CURVE (Phase 29). The quote is THE PRICE BEFORE YOUR ORDER
+ * (Phase 29b: it used to be called the price of the first share, which it is
+ * not — the premium in the quote is truncated to the cent, the curve's first
+ * thousandth of a share is not).
+ * An order walks the market's cost curve, so a larger order fills at an
+ * AVERAGE a little past the quote and its last share at a worse price still;
+ * both are shown before anything is confirmed, and the average is the price
+ * the sheet sends and the server's tolerance band is checked against. The
+ * premium the order leaves on the market price is shown too. All of it is
+ * computed by the same integer arithmetic the server runs
+ * (lib/trading/market.ts mirrors the SQL and a test holds them together), so
+ * the cost shown is the cost charged. The profile and the portfolio both pass
+ * the person's whole book (Phase 29b), so both walk the curve.
+ *
+ * EVERY SENTENCE THAT STATES A PRICE is built in lib/trading/sheet-copy.ts
+ * from the figures it sits beside, and a test holds each one to them.
+ *
+ * SCORE ONLY (Phase 29b). On a display-only index the sheet shows no market
+ * price and no premium line: the quotes a close needs, and nothing else.
  *
  * THE MARKET'S STATES (Phase 29). Halted or paused, the sheet says so and
  * offers only Close. Display-only, a Buy says so; a Sell that closes what is
@@ -95,6 +104,12 @@ export interface TradeSheetProps {
   book: TradeBook;
   /** The market price in points (score + premium), for the line under the quotes. */
   marketPrice: number;
+  /**
+   * A display-only index (Phase 29b): the score is the only number shown, so
+   * the sheet leaves out the market price and the premium lines. Closing works
+   * exactly as before.
+   */
+  scoreOnly?: boolean;
   /** Whether the market is open right now, and if not, why. */
   availability: TradingAvailability;
   balanceCents: Cents;
@@ -163,11 +178,6 @@ function limitDecimals(raw: string, places: number): string {
   return `${whole.slice(0, 7)}.${rest.join("").slice(0, places)}`;
 }
 
-function verb(side: OrderSide, tense: "base" | "past" | "ing" = "base"): string {
-  if (side === "BUY") return tense === "past" ? "Bought" : tense === "ing" ? "Buying" : "Buy";
-  return tense === "past" ? "Sold" : tense === "ing" ? "Selling" : "Sell";
-}
-
 const clock = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
 
 /** Whether the sheet can compose an order at all on this side, and the sentence when it cannot. */
@@ -177,7 +187,7 @@ function closedReason(availability: TradingAvailability, side: OrderSide, person
       const until = Number.isFinite(Date.parse(availability.until)) ? clock.format(Date.parse(availability.until)) : null;
       return {
         title: "Trading is halted",
-        body: `Trading in ${personName} is halted${until ? ` until ${until}` : ""}${availability.reason ? `: ${availability.reason}` : "."} Nothing can be placed until it is lifted. The Momentum Score keeps updating.`,
+        body: `Trading in ${personName} is halted${until ? ` until ${until}` : ""}${availability.reason ? `: ${availability.reason}` : "."} Nothing can be placed or closed until it is lifted. The Momentum Score keeps updating.`,
       };
     }
     case "paused":
@@ -199,6 +209,7 @@ export function TradeSheet({
   person,
   book,
   marketPrice,
+  scoreOnly = false,
   availability,
   balanceCents,
   position,
@@ -431,7 +442,7 @@ export function TradeSheet({
   return (
     <Sheet open={open} onClose={close} title={title} description="Paper trading. Not real money." footer={footer}>
       <div className="flex flex-col gap-6">
-        {step !== "result" ? <QuoteBlock side={side} book={book} marketPrice={marketPrice} curved={curved} /> : null}
+        {step !== "result" ? <QuoteBlock side={side} book={book} marketPrice={marketPrice} curved={curved} scoreOnly={scoreOnly} /> : null}
 
         {step === "compose" && closed ? <MarketClosed title={closed.title} body={closed.body} /> : null}
         {step === "compose" && !closed && nothingToClose ? <NothingToClose personName={person.displayName} /> : null}
@@ -439,12 +450,8 @@ export function TradeSheet({
         {step === "compose" && !closed && !nothingToClose ? (
           <div className="flex flex-col gap-5">
             <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between gap-3">
-                <label htmlFor="trade-units" className="text-sm font-medium text-fg-secondary">
-                  {mode === "dollars" ? "Amount" : "Shares"}
-                </label>
-                <ModeToggle mode={mode} onChange={setMode} />
-              </div>
+              {/* The toggle names the field (Phase 29b): a second "Shares" beside it said the same word twice. The input carries its own aria-label. */}
+              <ModeToggle mode={mode} onChange={setMode} />
               {mode === "dollars" ? (
                 <div className="flex items-center gap-2">
                   <span aria-hidden className="text-xl font-semibold tabular-nums text-fg-muted">
@@ -512,49 +519,24 @@ export function TradeSheet({
                   {composeError}
                 </p>
               ) : null}
-              {mode === "dollars" && !composeError && preview.units > 0 ? (
-                <p className="text-sm tabular-nums text-fg-muted">
-                  {formatCents(typedSpendCents)} {side === "BUY" ? "buys" : "sells"} {sharesLabel(shares)} at {curved ? "an average of " : ""}
-                  {formatCents(livePrice)}
-                  {preview.grossCents < typedSpendCents && side === "BUY" ? <> · {formatCents(cents(typedSpendCents - preview.grossCents))} stays in your balance</> : null}
-                </p>
-              ) : null}
+              {mode === "dollars" && !composeError && preview.units > 0 ? <p className="text-sm tabular-nums text-fg-muted">{dollarsLine(side, typedSpendCents, preview, curved)}</p> : null}
             </div>
 
-            <PreviewList side={side} preview={preview} book={book} curved={curved} position={position} />
+            <PreviewList side={side} preview={preview} book={book} curved={curved} position={position} scoreOnly={scoreOnly} />
           </div>
         ) : null}
 
         {step === "confirm" ? (
           <div className="flex flex-col gap-5">
-            <div className="flex flex-col gap-3 rounded-2xl bg-surface-raised/60 p-5">
-              <p className="text-label text-fg-muted">You are about to</p>
-              <p className="text-xl font-semibold leading-snug tracking-tight text-fg">
-                {verb(side)} {sharesLabel(shares)} of {person.displayName} at {curved && preview.worstCents !== livePrice ? "an average of " : ""}
-                <span key={livePrice} className="tabular-nums animate-tick-flash">
-                  {formatCents(livePrice)}
-                </span>{" "}
-                each.
-              </p>
-              {curved && preview.worstCents !== livePrice ? (
-                <p className="text-base tabular-nums text-fg-secondary">
-                  First share {formatCents(preview.quoteCents)} · last share {formatCents(preview.worstCents)} · total {formatCents(preview.grossCents)}
-                </p>
-              ) : (
-                <p className="text-base tabular-nums text-fg-secondary">
-                  {sharesText(shares)} × {formatCents(livePrice)} = {formatCents(preview.grossCents)}
-                </p>
-              )}
-              {mode === "dollars" ? (
-                <p className="text-sm tabular-nums text-fg-muted">
-                  You asked to spend {formatCents(typedSpendCents)}. The server resolves the quantity against the quote it reads, so the charge is never more than that.
-                </p>
-              ) : null}
-              <p className="text-xs tabular-nums text-fg-faint">
-                The {curved ? "average fill" : `${side === "BUY" ? "Buy" : "Sell"} quote`} as of now. If it moves more than {formatCents(toleranceCents)} before the server reads it,
-                you will be asked to confirm again.
-              </p>
-            </div>
+            <ConfirmSummary
+              side={side}
+              preview={preview}
+              book={book}
+              curved={curved}
+              personName={person.displayName}
+              spendCents={mode === "dollars" ? typedSpendCents : null}
+              toleranceCents={toleranceCents}
+            />
 
             {quoteMoved && armedPriceCents !== null ? (
               <p role="status" className="rounded-xl bg-surface-raised px-4 py-3 text-sm text-fg">
@@ -563,13 +545,13 @@ export function TradeSheet({
               </p>
             ) : null}
 
-            <PreviewList side={side} preview={preview} book={book} curved={curved} position={position} compact />
+            <PreviewList side={side} preview={preview} book={book} curved={curved} position={position} scoreOnly={scoreOnly} compact />
           </div>
         ) : null}
 
         {step === "result" && result ? (
           result.ok ? (
-            <FilledView result={result} side={side} personName={person.displayName} />
+            <FilledView result={result} side={side} personName={person.displayName} scoreOnly={scoreOnly} />
           ) : (
             <RejectedView
               result={result}
@@ -599,8 +581,7 @@ export function TradeSheet({
  * on both sides. Under them, where the market price sits relative to the
  * data, and — on a curved book — the one sentence about size.
  */
-function QuoteBlock({ side, book, marketPrice, curved }: { side: OrderSide; book: TradeBook; marketPrice: number; curved: boolean }) {
-  const spread = book.buyCents - book.sellCents;
+export function QuoteBlock({ side, book, marketPrice, curved, scoreOnly = false }: { side: OrderSide; book: TradeBook; marketPrice: number; curved: boolean; scoreOnly?: boolean }) {
   const market = marketLine({ premiumCents: book.premiumCents });
   return (
     <div className="flex flex-col gap-3">
@@ -608,14 +589,48 @@ function QuoteBlock({ side, book, marketPrice, curved }: { side: OrderSide; book
         <QuoteCell label="Buy at" cents={book.buyCents} active={side === "BUY"} />
         <QuoteCell label="Sell at" cents={book.sellCents} active={side === "SELL"} />
       </div>
-      <p className="text-xs tabular-nums text-fg-muted">
-        Market price <span className="font-medium text-fg-secondary">{formatCents(pointsToCents(marketPrice))}</span> <span className="text-fg-faint">·</span> {market.text}
+      {scoreOnly ? null : (
+        <p className="text-xs tabular-nums text-fg-muted">
+          Market price <span className="font-medium text-fg-secondary">{formatCents(pointsToCents(marketPrice))}</span> <span className="text-fg-faint">·</span> {market.text}
+        </p>
+      )}
+      <p className="text-xs tabular-nums text-fg-faint">{spreadNote(book, curved)}</p>
+    </div>
+  );
+}
+
+/** The confirm step's statement of the order: what, at what, and the band the price is held to. */
+export function ConfirmSummary({
+  side,
+  preview,
+  book,
+  curved,
+  personName,
+  spendCents,
+  toleranceCents,
+}: {
+  side: OrderSide;
+  preview: OrderPreview;
+  book: TradeBook;
+  curved: boolean;
+  personName: string;
+  /** Dollars mode: the amount asked for. Null in Shares mode. */
+  spendCents: Cents | null;
+  toleranceCents: Cents;
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl bg-surface-raised/60 p-5">
+      <p className="text-label text-fg-muted">You are about to</p>
+      <p key={preview.priceCents} className="text-xl font-semibold leading-snug tracking-tight tabular-nums text-fg animate-tick-flash">
+        {confirmHeadline(side, preview, personName, curved)}
       </p>
-      <p className="text-xs text-fg-faint">
-        You buy at the Buy quote and sell at the Sell quote. The <Money cents={spread} face="text" className="text-fg-muted" /> per share between them is the platform&rsquo;s
-        spread.
-        {curved ? <> Each quote is the first share&rsquo;s price; a larger order moves along the price, and the average and the last share are shown before you confirm.</> : null}
-      </p>
+      <p className="text-base tabular-nums text-fg-secondary">{confirmBreakdown(side, preview, book, curved)}</p>
+      {spendCents !== null ? (
+        <p className="text-sm tabular-nums text-fg-muted">
+          You asked to spend {formatCents(spendCents)}. The server resolves the quantity against the quote it reads, so the charge is never more than that.
+        </p>
+      ) : null}
+      <p className="text-xs tabular-nums text-fg-faint">{toleranceNote(side, curved, toleranceCents)}</p>
     </div>
   );
 }
@@ -631,12 +646,13 @@ function QuoteCell({ label, cents, active }: { label: string; cents: Cents; acti
   );
 }
 
-function PreviewList({
+export function PreviewList({
   side,
   preview,
   book,
   curved,
   position,
+  scoreOnly = false,
   compact = false,
 }: {
   side: OrderSide;
@@ -644,6 +660,7 @@ function PreviewList({
   book: TradeBook;
   curved: boolean;
   position: PositionSummary;
+  scoreOnly?: boolean;
   compact?: boolean;
 }) {
   const { shares, priceCents, worstCents, grossCents, balanceAfterCents } = preview;
@@ -656,8 +673,8 @@ function PreviewList({
       ? cents(Math.round(sharesToUnits(closedShares) * (priceCents - position.avgEntryCents) / UNITS_PER_SHARE))
       : null;
   const positionAfter = side === "BUY" ? position.openUnits + shares : Math.max(0, position.openUnits - shares);
-  const walks = curved && preview.units > 0 && worstCents !== priceCents;
-  const premiumMoves = curved && preview.units > 0 && preview.premiumAfterCents !== book.premiumCents;
+  const walked = walks(preview, curved);
+  const premiumMoves = !scoreOnly && curved && preview.units > 0 && preview.premiumAfterCents !== book.premiumCents;
   const after = marketLine({ premiumCents: preview.premiumAfterCents });
 
   return (
@@ -666,23 +683,21 @@ function PreviewList({
     <dl className={cn("grid grid-cols-[1fr_auto] gap-x-6 text-sm [&>dd]:text-right", compact ? "gap-y-2" : "gap-y-2.5")}>
       {!compact ? (
         <>
-          <dt className="text-fg-muted">{walks ? "Average price per share" : "Price per share"}</dt>
+          <dt className="text-fg-muted">{walked ? PREVIEW_LABELS.average : PREVIEW_LABELS.price}</dt>
           <dd>
             <Money cents={priceCents} face="text" className="text-fg" />
           </dd>
         </>
       ) : null}
-      {walks ? (
+      {walked ? (
         <>
-          <dt className="text-fg-muted">
-            Last share fills at <span className="text-fg-faint">· the worst fill</span>
-          </dt>
+          <dt className="text-fg-muted">{PREVIEW_LABELS.lastShare}</dt>
           <dd>
             <Money cents={worstCents} face="text" className="text-fg" />
           </dd>
         </>
       ) : null}
-      <dt className="text-fg-muted">{side === "BUY" ? "Cost" : "Proceeds"}</dt>
+      <dt className="text-fg-muted">{side === "BUY" ? PREVIEW_LABELS.cost : PREVIEW_LABELS.proceeds}</dt>
       <dd>
         <Money cents={grossCents} face="text" className="font-medium text-fg" />
       </dd>
@@ -702,7 +717,7 @@ function PreviewList({
           <dd className="tabular-nums text-fg">{after.text}</dd>
         </>
       ) : null}
-      <dt className="text-fg-muted">Paper balance after</dt>
+      <dt className="text-fg-muted">{PREVIEW_LABELS.balanceAfter}</dt>
       <dd>
         <Money cents={balanceAfterCents} face="text" className="text-fg" />
       </dd>
@@ -734,30 +749,17 @@ function NothingToClose({ personName }: { personName: string }) {
   );
 }
 
-function FilledView({ result, side, personName }: { result: Extract<OrderResult, { ok: true }>; side: OrderSide; personName: string }) {
+export function FilledView({ result, side, personName, scoreOnly = false }: { result: Extract<OrderResult, { ok: true }>; side: OrderSide; personName: string; scoreOnly?: boolean }) {
   const { order, position, balanceCents, quote } = result;
-  const walked = order.worstFillCents !== order.fillPriceCents;
-  const marketAfter = quote ? marketLine({ premiumCents: quote.premiumCents }) : null;
+  const marketAfter = quote && !scoreOnly ? marketLine({ premiumCents: quote.premiumCents }) : null;
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-col items-center gap-3 py-2 text-center">
         <span className="flex size-12 items-center justify-center rounded-full bg-surface-inverse text-fg-inverse animate-rise-in" aria-hidden>
           <Check className="size-6" strokeWidth={2.5} />
         </span>
-        <p className="text-xl font-semibold tracking-tight text-fg">
-          {verb(side, "past")} {sharesLabel(order.units)} of {personName} at {walked ? "an average of " : ""}
-          <Money cents={order.fillPriceCents} face="text" /> each.
-        </p>
-        <p className="text-sm text-fg-muted">
-          {walked ? (
-            <>
-              Filled along the market&rsquo;s price as the server read it: first share <Money cents={order.baseCents + order.premiumBeforeCents} face="text" className="text-fg-secondary" />, last share{" "}
-              <Money cents={order.worstFillCents} face="text" className="text-fg-secondary" />.
-            </>
-          ) : (
-            <>Filled at the {side === "BUY" ? "Buy" : "Sell"} quote the server read as it received the order.</>
-          )}
-        </p>
+        <p className="text-xl font-semibold tracking-tight tabular-nums text-fg">{filledHeadline(side, order, personName)}</p>
+        <p className="text-sm tabular-nums text-fg-muted">{filledDetail(side, order)}</p>
       </div>
 
       <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-2.5 text-sm [&>dd]:text-right">

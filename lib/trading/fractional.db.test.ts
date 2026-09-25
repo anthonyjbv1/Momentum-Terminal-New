@@ -116,10 +116,10 @@ beforeAll(async () => {
   database = await createTestDatabase();
   for (const row of await database.rows<{ id: string; slug: string }>("select id, slug from public.people")) people.set(row.slug, row.id);
   await database.rows("update public.platform_settings set close_cooldown_seconds = 0, updated_at = now() where id");
-  // A FLAT MARKET for this suite (Phase 29): a null depth is the premium's off
-  // switch, so every price here is exactly Phase 27's. The curve has its own
+  // A FLAT MARKET for this suite (Phase 29b: the named 'flat' pricing mode),
+  // so every price here is exactly Phase 27's. The curve has its own
   // suite, market.db.test.ts.
-  await database.exec("update public.market_tier_settings set depth_units = null, min_hold_seconds = 0");
+  await database.exec("update public.market_tier_settings set pricing_mode = 'flat', min_hold_seconds = 0");
 }, 60_000);
 
 afterAll(async () => {

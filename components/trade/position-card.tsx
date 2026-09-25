@@ -36,10 +36,12 @@ export interface PositionCardProps {
   sellCents: Cents;
   /** The premium in cents per share, for the footnote. 0 on a flat market. */
   premiumCents?: number;
+  /** A display-only index (Phase 29b): no market-price wording, no premium footnote. */
+  scoreOnly?: boolean;
   className?: string;
 }
 
-export function PositionCard({ position, buyCents, sellCents, premiumCents = 0, className }: PositionCardProps) {
+export function PositionCard({ position, buyCents, sellCents, premiumCents = 0, scoreOnly = false, className }: PositionCardProps) {
   if (position.openUnits <= 0 || !position.direction) return null;
 
   // A HIGH position closes at the Sell side of the market price, a LOW one at the Buy side.
@@ -47,7 +49,7 @@ export function PositionCard({ position, buyCents, sellCents, premiumCents = 0, 
   const value = position.openUnits * mark;
   const unrealized = position.direction === "HIGH" ? value - position.costCents : position.costCents - value;
   const unrealizedPct = position.costCents > 0 ? (unrealized / position.costCents) * 100 : 0;
-  const market = marketLine({ premiumCents });
+  const market = marketLine({ premiumCents: scoreOnly ? 0 : premiumCents });
 
   return (
     <section aria-labelledby="position-heading" className={cn("flex flex-col gap-4", className)}>
@@ -73,7 +75,7 @@ export function PositionCard({ position, buyCents, sellCents, premiumCents = 0, 
           <Money cents={position.avgEntryCents ?? 0} className="text-2xl font-semibold tracking-tight text-fg" />
           <span className="text-sm text-fg-muted">cost {formatCents(position.costCents)}</span>
         </Stat>
-        <Stat label="Value" hint={`at the ${position.direction === "HIGH" ? "Sell" : "Buy"} side of the market price`}>
+        <Stat label="Value" hint={scoreOnly ? `at the ${position.direction === "HIGH" ? "Sell" : "Buy"} quote` : `at the ${position.direction === "HIGH" ? "Sell" : "Buy"} side of the market price`}>
           <Money cents={value} className="text-2xl font-semibold tracking-tight text-fg" />
           <span className="text-sm text-fg-muted">{formatCents(mark)} per share</span>
         </Stat>

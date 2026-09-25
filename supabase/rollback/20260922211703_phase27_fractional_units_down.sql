@@ -34,8 +34,10 @@ lock table public.positions, public.position_closes, public.trade_orders, public
 -- restores with the cost-curve identities, and gave place_order() an eighth
 -- argument. Running this on a Phase 29 schema would reinstall the flat
 -- functions over curve-priced rows, so it refuses, having changed nothing.
--- Phase 29 has no down file of its own: it is forward-only by design, and the
--- whole-share path this file guards was verified by its test before Phase 29.
+-- Reverse Phase 29 first with its own down file,
+-- 20260925012938_phase29_market_price_down.sql (Phase 29b); that leaves the
+-- Phase 28 schema this file was written for, and it applies again (tested in
+-- lib/trading/phase29-down.db.test.ts).
 do $phase29$
 begin
   if exists (select 1 from information_schema.columns

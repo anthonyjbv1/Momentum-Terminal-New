@@ -88,7 +88,7 @@ export const HOW = {
     {
       number: "02",
       title: "The Engine computes a Momentum Score",
-      body: "Five forces, one number, every 30 seconds — what just happened, the tide across the whole board, and the pull back toward a person’s own baseline. It measures trajectory, never the person.",
+      body: "Three forces, one number, every 30 seconds — what just happened, the tide across the whole board, and the pull back toward a person’s own baseline. It measures trajectory, never the person.",
     },
     {
       number: "03",
@@ -105,14 +105,12 @@ export const HOW = {
 export const WHY = {
   title: "Why it moved",
   sub: "The last hour, force by force — the same reading a profile shows inside the app.",
-  forcesLabel: "The five forces",
-  /** One line per force, in the founder's terms. */
+  forcesLabel: "The three forces that move the score",
+  /** One line per force that moves the score, in the founder's terms. The market forces are not on this page. */
   forces: {
     gravity: "The pull back toward Anthony’s own baseline",
     signals: "What the world said about Anthony",
     market_mood: "The tide across the whole board",
-    conviction: "How much paper capital is committed on Anthony",
-    trading_activity: "Buy and Sell flow on Anthony right now",
   } as const,
   idle: "The Engine has not ticked this score yet.",
   signalsLabel: "Recent signals",

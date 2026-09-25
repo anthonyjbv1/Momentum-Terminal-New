@@ -37,7 +37,7 @@ beforeAll(async () => {
   await database.rows("update public.platform_settings set close_cooldown_seconds = 0, updated_at = now() where id");
   // A flat market (Phase 29): with the premium off, the one price is the
   // score's price exactly, which is what this proof is about.
-  await database.exec("update public.market_tier_settings set depth_units = null, min_hold_seconds = 0");
+  await database.exec("update public.market_tier_settings set pricing_mode = 'flat', min_hold_seconds = 0");
 }, 60_000);
 
 afterAll(async () => {

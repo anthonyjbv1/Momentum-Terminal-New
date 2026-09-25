@@ -29,13 +29,23 @@ export interface TestDatabase {
   close(): Promise<void>;
 }
 
-/** A fresh database with every migration applied. */
-export async function createTestDatabase(): Promise<TestDatabase> {
+export interface TestDatabaseOptions {
+  /**
+   * Apply only the migrations whose version sorts before this one — the
+   * schema as it stood before that migration ran (the rollback tests compare
+   * against it).
+   */
+  before?: string;
+}
+
+/** A fresh database with every migration applied (or every one before `options.before`). */
+export async function createTestDatabase(options: TestDatabaseOptions = {}): Promise<TestDatabase> {
   // citext is the one extension a migration creates (Phase 28's waitlist);
   // PGlite has to be handed it up front for CREATE EXTENSION to find it.
   const db = new PGlite({ extensions: { citext } });
   await db.exec(SUPABASE_STUBS);
-  for (const [file, sql] of loadMigrations()) {
+  const { before } = options;
+  for (const [file, sql] of loadMigrations().filter(([name]) => before === undefined || name < before)) {
     try {
       await db.exec(sql);
     } catch (error) {

@@ -8,7 +8,8 @@ import { FEATURED_PAYLOAD_KEYS } from "@/lib/landing/model";
  * GET /api/public/featured — the ONE public read (Phase 28).
  *
  * The featured person's current Momentum Score, recent change, a day of
- * history, the five forces over the last hour and the newest plain-language
+ * history, the three forces that move the score over the last hour (never the
+ * market forces, Phase 29b) and the newest plain-language
  * signals. Nothing about any user, trade or position, and nothing about any
  * other person: the slug is a constant in lib/landing/model.ts, and THIS
  * HANDLER READS NO PARAMETER. Path, query and headers are ignored, so there

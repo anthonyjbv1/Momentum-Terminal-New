@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 import type { RosterPerson } from "@/lib/feed/feed";
 import { RANGES, defaultRange, rangeAvailable, tradingAvailability, type RangeKey, type SeriesByRange } from "@/lib/person/profile-model";
 import { portfolioState, toPositionSummary, type PortfolioPosition, type PortfolioSummary, type TradeHistoryEntry, type TradeHistoryPage } from "@/lib/portfolio/model";
-import { cents, flatBook, type Cents } from "@/lib/trading/model";
+import { cents, type Cents } from "@/lib/trading/model";
 import { RangeToggle } from "@/components/person/range-toggle";
 import { TradeSheet } from "@/components/trade/trade-sheet";
 import { Card } from "@/components/ui/card";
@@ -128,16 +128,17 @@ export function PortfolioView({ initialSummary, initialSeries, initialHistory, r
       )}
 
       {closingPosition ? (
-        // The summary carries the quotes and the premium but not the dealer's
-        // book, so the sheet previews flat at the quote and reports the
-        // server's average after the fill (Phase 29).
+        // The position carries the person's whole book (Phase 29b), so the
+        // sheet walks the curve and quotes the average fill exactly as the
+        // profile's sheet does.
         <TradeSheet
           key={closingPosition.person.id}
           open
           side="SELL"
           person={{ id: closingPosition.person.id, slug: closingPosition.person.slug, displayName: closingPosition.person.name }}
-          book={flatBook(closingPosition.buyCents, closingPosition.sellCents, closingPosition.premiumCents)}
+          book={closingPosition.book}
           marketPrice={closingPosition.marketPrice}
+          scoreOnly={closingPosition.tradingMode === "display_only"}
           availability={tradingAvailability({ tradingMode: closingPosition.tradingMode, haltedUntil: closingPosition.haltedUntil, haltReason: null }, now)}
           balanceCents={summary.cashCents ?? cents(0)}
           position={toPositionSummary(closingPosition)}

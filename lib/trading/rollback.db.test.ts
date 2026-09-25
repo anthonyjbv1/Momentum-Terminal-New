@@ -16,8 +16,8 @@ import { createTestDatabase, type TestDatabase } from "@/lib/__tests__/pglite";
  * place_order() an eighth argument, so running that file on a Phase 29 schema
  * would install flat functions over curve-priced rows. The file now refuses
  * on such a schema, having changed nothing, and that refusal is what these
- * tests pin. The whole-share path itself was verified by this file's earlier
- * form, before Phase 29.
+ * tests pin. Phase 29b added Phase 29's own down file; run after it, this
+ * file applies again (lib/trading/phase29-down.db.test.ts).
  *
  * The rollback lives outside supabase/migrations/ so nothing applies it by
  * accident, which is also why it is read from disk here by name.

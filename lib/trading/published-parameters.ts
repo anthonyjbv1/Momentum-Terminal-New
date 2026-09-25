@@ -17,8 +17,10 @@ import { DEFAULT_PLATFORM_SETTINGS } from "./settings";
 
 export interface PublishedTierParameters {
   tier: "public_figure" | "private_individual";
-  /** Units per point of premium; null is the flat market. */
-  depthUnits: number | null;
+  /** 'flat' is the explicit opt-in to a flat market (Phase 29b): no premium, no impact, no order-size limit from depth. */
+  pricingMode: "curve" | "flat";
+  /** Units per point of premium. Always a number; kept while the tier is flat. */
+  depthUnits: number;
   /** The premium's half-life with no trading, in seconds (ticks × the cadence). */
   halfLifeSeconds: number;
   premiumCapCents: number;
@@ -59,7 +61,8 @@ export const readPublishedMarketParameters = cache(async (): Promise<PublishedMa
     if (row.tier !== "public_figure" && row.tier !== "private_individual") continue;
     byTier[row.tier] = {
       tier: row.tier,
-      depthUnits: row.depth_units === null ? null : toInt(row.depth_units, 0),
+      pricingMode: row.pricing_mode === "flat" ? "flat" : "curve",
+      depthUnits: toInt(row.depth_units, 0),
       halfLifeSeconds: Math.round((toInt(row.decay_half_life_ticks, 0) * LIVE_TICK_MS) / 1000),
       premiumCapCents: toInt(row.premium_cap_cents, 0),
       minHoldSeconds: toInt(row.min_hold_seconds, 0),

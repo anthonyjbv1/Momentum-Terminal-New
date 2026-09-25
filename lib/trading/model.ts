@@ -174,10 +174,12 @@ export function unitsToShares(units: number): number {
  * THE BOOK a preview is priced on: everything the sheet needs to walk the
  * cost curve the way place_order() will. `buyCents` and `sellCents` include
  * the premium; the base prices exclude it and are what the curve starts from.
- * A null depth is the flat market (Phase 27 pricing, no impact); a null
- * `inventoryUnits` means the caller does not know the book (the portfolio
- * page, which reads a summary rather than a quote) and the preview is priced
- * flat at the quote, with the server's average shown after the fill.
+ * A null depth is the flat market (Phase 27 pricing, no impact): the server
+ * resolves it to null exactly when the person's pricing mode is 'flat'
+ * (Phase 29b), never from a missing number. A null `inventoryUnits` means the
+ * caller does not know the book and the preview is priced flat at the quote.
+ * The profile and the portfolio both hold the real book (toTradeBook,
+ * bookFromMarket), so both sheets walk the curve.
  */
 export interface TradeBook {
   buyCents: Cents;
@@ -227,6 +229,33 @@ export function bookSide(book: TradeBook, side: OrderSide): MarketState {
     return { baseCents: side === "BUY" ? book.buyCents : book.sellCents, inventoryUnits: 0, depthUnits: null };
   }
   return { baseCents: side === "BUY" ? book.baseBuyCents : book.baseSellCents, inventoryUnits: book.inventoryUnits, depthUnits: book.depthUnits };
+}
+
+/**
+ * A person's book from the market state a page holds live: score, spread,
+ * premium and inventory from the people row (refreshed every tick), depth and
+ * premium cap as trade_quote() resolved them. The profile's sheet previews on
+ * this; it equals toTradeBook() of the same moment's quote or portfolio row.
+ */
+export function bookFromMarket(market: {
+  score: number;
+  spread: number;
+  premiumCents: number;
+  inventoryUnits: number;
+  depthUnits: number | null;
+  premiumCapCents: number | null;
+}): TradeBook {
+  const { buyCents, sellCents } = quoteFromScore(market.score, market.spread, market.premiumCents);
+  return {
+    buyCents,
+    sellCents,
+    baseBuyCents: pointsToCents(market.score + market.spread),
+    baseSellCents: pointsToCents(market.score - market.spread),
+    premiumCents: Math.trunc(market.premiumCents),
+    inventoryUnits: market.depthUnits === null ? null : market.inventoryUnits,
+    depthUnits: market.depthUnits,
+    premiumCapCents: market.premiumCapCents,
+  };
 }
 
 /** A flat book at two quotes: what a caller that knows only the prices can offer. */
@@ -344,26 +373,22 @@ export function toPositionSummary(value: unknown, personId: string): PositionSum
 }
 
 /**
- * trade_quote() / the quote inside an order result as JSON → TradeQuote.
- * A quote from before Phase 29 carries no premium and no book: it reads as
- * a flat market at the score, which is exactly what it was.
+ * The book inside a payload: trade_quote(), the quote in an order result, or
+ * one position of portfolio_summary_for() (Phase 29b) — the same keys in all
+ * three, so the profile's sheet and the portfolio's sheet read one book the
+ * one way. A payload from before Phase 29 carries no premium and no depth: it
+ * reads as a flat market at its quotes, which is exactly what it was.
  */
-export function toTradeQuote(value: unknown, personId: string): TradeQuote | null {
+export function toTradeBook(value: unknown): TradeBook | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
   const buy = toNullableInt(record.buy_cents);
   const sell = toNullableInt(record.sell_cents);
   if (buy === null || sell === null) return null;
   const premium = toInt(record.premium_cents, 0);
-  const score = toNumber(record.score);
   const depth = toNullableInt(record.depth_units);
   const inventory = toNullableInt(record.inventory_units);
-  const haltedUntil = typeof record.halted_until === "string" ? record.halted_until : null;
   return {
-    personId: typeof record.person_id === "string" ? record.person_id : personId,
-    score: points(score),
-    spread: points(toNumber(record.spread)),
-    marketPrice: points(toNullableNumber(record.market_price) ?? score + premium / POINT_CENTS),
     buyCents: cents(buy),
     sellCents: cents(sell),
     baseBuyCents: cents(toInt(record.base_buy_cents, buy - premium)),
@@ -372,6 +397,22 @@ export function toTradeQuote(value: unknown, personId: string): TradeQuote | nul
     inventoryUnits: depth === null ? null : (inventory ?? 0),
     depthUnits: depth,
     premiumCapCents: toNullableInt(record.premium_cap_cents),
+  };
+}
+
+/** trade_quote() / the quote inside an order result as JSON → TradeQuote. */
+export function toTradeQuote(value: unknown, personId: string): TradeQuote | null {
+  const book = toTradeBook(value);
+  if (book === null) return null;
+  const record = value as Record<string, unknown>;
+  const score = toNumber(record.score);
+  const haltedUntil = typeof record.halted_until === "string" ? record.halted_until : null;
+  return {
+    personId: typeof record.person_id === "string" ? record.person_id : personId,
+    score: points(score),
+    spread: points(toNumber(record.spread)),
+    marketPrice: points(toNullableNumber(record.market_price) ?? score + book.premiumCents / POINT_CENTS),
+    ...book,
     tier: record.tier === "private_individual" ? "private_individual" : "public_figure",
     tradingMode: record.trading_mode === "display_only" || record.trading_mode === "paused" ? record.trading_mode : "tradeable",
     haltedUntil,

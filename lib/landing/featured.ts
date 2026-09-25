@@ -1,7 +1,7 @@
 import "server-only";
 
 import { getPersonBySlug, getPersonSignals } from "@/lib/person/profile";
-import { FORCES_WINDOW_MINUTES, RANGES, readForces, toSeries, type ForceImpactRow, type ScoreEventRow, type SeriesRow } from "@/lib/person/profile-model";
+import { FORCES_WINDOW_MINUTES, RANGES, isScoreForceKey, readForces, toSeries, type ForceImpactRow, type ScoreEventRow, type SeriesRow } from "@/lib/person/profile-model";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 import { FEATURED_SIGNAL_LIMIT, FEATURED_SLUG, HISTORY_POINTS, HISTORY_WINDOW_MS, changeOver, tickSlot, type FeaturedPayload } from "./model";
@@ -80,7 +80,8 @@ async function readFeaturedUncached(now: number): Promise<FeaturedPayload | null
       d7: changeOver(toSeries((d7.data ?? []) as SeriesRow[])),
     },
     history: history.map((point) => ({ at: point.at, score: point.score })),
-    forces: forces.map((force) => ({ key: force.key, impact: force.impact })),
+    // The forces that move the SCORE only: Conviction and Trading Activity move the market price, not this number.
+    forces: forces.flatMap((force) => (isScoreForceKey(force.key) ? [{ key: force.key, impact: force.impact }] : [])),
     windowMinutes: FORCES_WINDOW_MINUTES,
     // The profile's plain-language items, trimmed to what a stranger needs:
     // no ids, no sentiment working, no detail lines.

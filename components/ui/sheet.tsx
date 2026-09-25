@@ -1,7 +1,7 @@
 "use client";
 
 import { X } from "lucide-react";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { cn } from "@/lib/cn";
@@ -69,6 +69,50 @@ import { Button } from "./button";
  * edge by the occluded height, so the footer comes to rest directly above
  * the keyboard instead of behind it. Where the API is absent the inset stays
  * 0 and nothing changes.
+ *
+ * iOS SAFARI, TYPING INTO THE SHEET (Phase 29b). Focusing the Shares or
+ * Dollars field made the sheet jump and sometimes close. Three things
+ * combined, and each is now handled here:
+ *
+ *   1. THE PAGE SCROLLED BEHIND IT. iOS ignores `overflow: hidden` on the
+ *      body for its own scroll-into-view, so opening the keyboard scrolled
+ *      the document under the sheet. The body is now pinned in place
+ *      (`position: fixed` at the current scroll offset) for as long as a
+ *      sheet is open, and the offset is restored on close.
+ *   2. THE VISIBLE AREA PANNED AWAY FROM THE SHEET. With the keyboard up, iOS
+ *      pans the visual viewport inside the layout viewport (offsetTop > 0),
+ *      and fixed elements stay with the layout viewport: the sheet's title
+ *      went off the top of the screen. The overlay now follows the visual
+ *      viewport at BOTH edges — its top moves down with the pan, its bottom
+ *      up above the keyboard — so the whole sheet is always inside what the
+ *      reader can see.
+ *   3. A TAP LANDED ON THE BACKDROP. The layout shift between touchstart and
+ *      the synthesised click moved the backdrop under the finger, and the
+ *      backdrop's click closed the sheet. The backdrop now closes only on a
+ *      press that STARTED on it, never within a moment of the viewport
+ *      changing size, and — while a field in the sheet is focused — the
+ *      first tap outside only dismisses the keyboard.
+ *
+ *   4. THE ROOT OF IT: EVERY KEYSTROKE RE-OPENED THE SHEET. The open/close
+ *      effect listed `onClose` among its dependencies, and the trade sheet's
+ *      close handler changes identity with the quantity typed (it logs it).
+ *      So each keystroke ran the effect's cleanup and setup again: focus went
+ *      back to the Buy pill behind the sheet and then to the panel, and the
+ *      scroll lock came off and on. On a desktop that swallowed every digit
+ *      after the first; on iOS the blur dismissed the keyboard and the focus
+ *      jump scrolled the page — the glitch. The latest onClose is now read
+ *      through a ref, so the effect runs exactly once per open.
+ *
+ * Programmatic focus never scrolls (`preventScroll`), inputs in a sheet get
+ * `touch-action: manipulation` from the body, and the body's own scrolling is
+ * contained so it cannot chain to the page.
+ *
+ * HYDRATION (Phase 29b). The portal needs `document`, which the server does
+ * not have: a sheet open on the first render rendered nothing on the server
+ * and a dialog on the client — a hydration error, the Next.js "1 Issue"
+ * badge. The sheet now renders only once mounted on the client
+ * (useSyncExternalStore's server snapshot says "not yet"), so the server
+ * HTML and the first client render agree.
  */
 export interface SheetProps {
   open: boolean;
@@ -85,33 +129,106 @@ export interface SheetProps {
   className?: string;
 }
 
+const noSubscription = () => () => {};
+
+/** False on the server and during hydration, true once the client has taken over. */
+function useMounted(): boolean {
+  return useSyncExternalStore(
+    noSubscription,
+    () => true,
+    () => false,
+  );
+}
+
+/** How long after the viewport changes size a backdrop click is treated as the keyboard's, not the reader's. */
+export const VIEWPORT_SETTLE_MS = 500;
+
+/**
+ * Pins the page where it is while a sheet is open. `overflow: hidden` alone
+ * does not stop iOS scrolling the document to reveal a focused field, so the
+ * body is fixed at the current offset and put back exactly on release.
+ */
+function lockBodyScroll(): () => void {
+  const { body, documentElement } = document;
+  const scrollY = window.scrollY;
+  const previous = {
+    position: body.style.position,
+    top: body.style.top,
+    left: body.style.left,
+    right: body.style.right,
+    width: body.style.width,
+    overflow: body.style.overflow,
+    overscroll: documentElement.style.overscrollBehavior,
+  };
+  body.style.position = "fixed";
+  body.style.top = `-${scrollY}px`;
+  body.style.left = "0";
+  body.style.right = "0";
+  body.style.width = "100%";
+  body.style.overflow = "hidden";
+  documentElement.style.overscrollBehavior = "none";
+  return () => {
+    body.style.position = previous.position;
+    body.style.top = previous.top;
+    body.style.left = previous.left;
+    body.style.right = previous.right;
+    body.style.width = previous.width;
+    body.style.overflow = previous.overflow;
+    documentElement.style.overscrollBehavior = previous.overscroll;
+    window.scrollTo(0, scrollY);
+  };
+}
+
+function isTextField(element: Element | null): element is HTMLInputElement | HTMLTextAreaElement {
+  return element instanceof HTMLTextAreaElement || (element instanceof HTMLInputElement && !["button", "checkbox", "radio", "range", "submit", "reset"].includes(element.type));
+}
+
 export function Sheet({ open, onClose, title, description, children, footer, size = "md", className }: SheetProps) {
+  const mounted = useMounted();
   const panelRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const backdropRef = useRef<HTMLButtonElement>(null);
   const titleId = useId();
   const descriptionId = useId();
   // Whether any body remains below the footer's top edge, which is the only
   // time the footer's hairline says anything.
   const [bodyBelow, setBodyBelow] = useState(false);
+  // The backdrop's dismissal guards: whether the press began on the backdrop,
+  // and when the visual viewport last changed size (the keyboard moving).
+  const pressStartedOnBackdrop = useRef(false);
+  // The field that had the keyboard when the press began — read then, because
+  // by the click the press itself may have moved focus (Chrome focuses a
+  // clicked button; iOS may not), and the answer must not depend on which.
+  const fieldAtPress = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+  const viewportChangedAt = useRef(0);
+  // The latest onClose, read at the moment of closing. See point 4 above: a
+  // handler that changes identity must never re-run the open/close effect.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
-    if (!open) return;
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    panelRef.current?.focus();
+    if (!open || !mounted) return;
+    const panel = panelRef.current;
+    const active = document.activeElement as HTMLElement | null;
+    // A field that took focus on mount (autoFocus) keeps it; otherwise the panel takes it.
+    const focusInside = Boolean(active && panel?.contains(active));
+    const previouslyFocused = focusInside ? null : active;
+    const unlock = lockBodyScroll();
+    if (!focusInside) panel?.focus({ preventScroll: true });
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onCloseRef.current();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previousOverflow;
-      previouslyFocused?.focus?.();
+      unlock();
+      previouslyFocused?.focus?.({ preventScroll: true });
     };
-  }, [open, onClose]);
+  }, [open, mounted]);
 
   // The hairline. Measured on scroll and whenever the body resizes; the
   // observer's first callback supplies the initial reading, so nothing is
@@ -128,19 +245,28 @@ export function Sheet({ open, onClose, title, description, children, footer, siz
       element.removeEventListener("scroll", measure);
       observer?.disconnect();
     };
-  }, [open, children, footer]);
+  }, [open, mounted, children, footer]);
 
-  // The keyboard inset. See THE SOFTWARE KEYBOARD above.
+  // The keyboard and the pan. See THE SOFTWARE KEYBOARD and iOS SAFARI above.
   useEffect(() => {
     const viewport = typeof window === "undefined" ? null : window.visualViewport;
-    if (!open || !viewport) return;
-    // Written straight onto the element: the keyboard's height is a runtime
-    // measurement from an external system, not a design value, so it has no
-    // business being a class or a token.
+    if (!open || !mounted || !viewport) return;
+    const root = getComputedStyle(document.documentElement);
+    const bannerPx = (Number.parseFloat(root.getPropertyValue("--spacing-banner")) || 4) * (Number.parseFloat(root.fontSize) || 16);
+    let lastHeight = viewport.height;
+    // Written straight onto the element: the keyboard's height and the pan
+    // are runtime measurements from an external system, not design values,
+    // so they have no business being classes or tokens.
     const apply = () => {
-      const occluded = Math.round(Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop));
+      if (Math.abs(viewport.height - lastHeight) > 1) viewportChangedAt.current = performance.now();
+      lastHeight = viewport.height;
       const element = overlayRef.current;
-      if (element) element.style.bottom = occluded > 0 ? `${occluded}px` : "";
+      if (!element) return;
+      const occluded = Math.round(Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop));
+      element.style.bottom = occluded > 0 ? `${occluded}px` : "";
+      // The top follows the visible area once it has panned past the banner.
+      const panned = Math.round(viewport.offsetTop);
+      element.style.top = panned > bannerPx ? `${panned}px` : "";
     };
     apply();
     viewport.addEventListener("resize", apply);
@@ -149,17 +275,45 @@ export function Sheet({ open, onClose, title, description, children, footer, siz
       viewport.removeEventListener("resize", apply);
       viewport.removeEventListener("scroll", apply);
     };
-  }, [open]);
+  }, [open, mounted]);
 
-  if (!open || typeof document === "undefined") return null;
+  if (!open || !mounted) return null;
+
+  // Every press inside the overlay records where it began, so a click that
+  // arrives on the backdrop from a press that began on the sheet is known.
+  const onPressStart = (event: React.PointerEvent) => {
+    pressStartedOnBackdrop.current = event.target === backdropRef.current;
+    const active = document.activeElement;
+    fieldAtPress.current = isTextField(active) && panelRef.current?.contains(active) ? active : null;
+  };
+  const onBackdropClick = () => {
+    const startedHere = pressStartedOnBackdrop.current;
+    const field = fieldAtPress.current;
+    pressStartedOnBackdrop.current = false;
+    fieldAtPress.current = null;
+    // A click the layout shift put here: the press began somewhere else.
+    if (!startedHere) return;
+    // The keyboard is still moving: this is the viewport settling, not the reader.
+    if (performance.now() - viewportChangedAt.current < VIEWPORT_SETTLE_MS) return;
+    // A field in the sheet had the keyboard up: the first tap outside puts the keyboard away.
+    if (field) {
+      field.blur();
+      return;
+    }
+    onClose();
+  };
 
   return createPortal(
-    <div ref={overlayRef} className="fixed inset-x-0 bottom-0 top-banner z-(--z-overlay)">
+    <div ref={overlayRef} onPointerDownCapture={onPressStart} className="fixed inset-x-0 bottom-0 top-banner z-(--z-overlay)">
       <button
+        ref={backdropRef}
         type="button"
         aria-label="Close"
-        onClick={onClose}
-        className="absolute inset-0 cursor-default bg-canvas/75 backdrop-blur-sm animate-fade-in"
+        tabIndex={-1}
+        // The press never takes focus from the field; the click decides what happens to it.
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={onBackdropClick}
+        className="absolute inset-0 cursor-default touch-none bg-canvas/75 backdrop-blur-sm animate-fade-in"
       />
       <div
         ref={panelRef}
@@ -179,7 +333,7 @@ export function Sheet({ open, onClose, title, description, children, footer, siz
           className,
         )}
       >
-        <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto">
+        <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain [&_input]:touch-manipulation">
           <div className="sticky top-0 z-10 flex items-start justify-between gap-4 bg-surface-overlay px-6 pb-5 pt-6 sm:px-8 sm:pt-8">
             <div className="flex flex-col gap-1.5">
               <h2 id={titleId} className="text-2xl font-semibold tracking-tight text-fg">

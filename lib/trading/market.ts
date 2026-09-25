@@ -157,20 +157,44 @@ export function decayStep(inventoryUnits: number, divisor: number): number {
   return toNumber(i + (-i + k - N1) / k);
 }
 
+/** The most units the Dollars search ever considers: MAX_ORDER_SHARES × UNITS_PER_SHARE (lib/trading/model.ts). */
+const SEARCH_CEILING_UNITS = 100_000_000;
+
+/**
+ * The largest sell whose last unit still prices at or above zero: past it a
+ * sell's proceeds FALL as the quantity grows. u ≤ I + S·D / 100.
+ */
+function sellPeakUnits(state: MarketState): number {
+  if (state.depthUnits === null) return SEARCH_CEILING_UNITS;
+  const peak = (big(state.baseCents) * big(state.depthUnits) + N100 * big(state.inventoryUnits)) / N100;
+  return peak > big(SEARCH_CEILING_UNITS) ? SEARCH_CEILING_UNITS : toNumber(peak);
+}
+
 /**
  * DOLLARS MODE: the largest quantity whose walk stays within the amount. The
  * walk is monotone in the quantity, so this is a binary search over integers;
  * the charge is at most the amount, never more. Mirrors the search in
  * place_order(). Returns 0 when nothing fits.
+ *
+ * THE SEARCH IS BOUNDED (Phase 29b). A sell's walk is monotone only while
+ * the price it walks down to stays above zero; beyond that its proceeds fall
+ * again, so an amount larger than any sell could ever return kept the
+ * widening loop doubling toward 10^12 units until an intermediate figure left
+ * the safe-integer range and the sheet threw while rendering. The search now
+ * never looks past that peak, nor past the largest order the sheet accepts;
+ * inside those bounds the answer is exactly place_order()'s, and anything
+ * beyond them the server refuses as too large anyway.
  */
 export function largestUnitsWithin(spendCents: number, state: MarketState, direction: WalkDirection, rounding: Rounding): number {
   if (spendCents <= 0) return 0;
   const startMarginal = marginalCents(state, "floor");
   if (startMarginal <= 0) return 0;
+  const ceiling = direction === "down" ? Math.min(SEARCH_CEILING_UNITS, sellPeakUnits(state)) : SEARCH_CEILING_UNITS;
+  if (ceiling <= 0) return 0;
   const fits = (units: number) => walkCents(units, state, direction, rounding) <= spendCents;
   let lo = 0;
-  let hi = Math.max(1, Math.floor((spendCents * 1000) / startMarginal) + 1);
-  while (fits(hi) && hi < 1_000_000_000_000) hi *= 2;
+  let hi = Math.min(ceiling + 1, Math.max(1, Math.floor((spendCents * 1000) / startMarginal) + 1));
+  while (hi <= ceiling && fits(hi)) hi = Math.min(ceiling + 1, hi * 2);
   while (lo < hi - 1) {
     const mid = Math.floor((lo + hi) / 2);
     if (fits(mid)) lo = mid;

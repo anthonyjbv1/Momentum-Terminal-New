@@ -1,5 +1,5 @@
 import { LIVE_TICK_MS } from "@/lib/person/live-series";
-import { FORCE_KEYS, isForceKey, periodChange, type ForceKey, type SeriesPoint } from "@/lib/person/profile-model";
+import { SCORE_FORCE_KEYS, isScoreForceKey, periodChange, type ScoreForceKey, type SeriesPoint } from "@/lib/person/profile-model";
 
 /**
  * The landing page's model: what the public endpoint says about the featured
@@ -40,7 +40,8 @@ export interface FeaturedSignal {
 }
 
 export interface FeaturedForce {
-  key: ForceKey;
+  /** Only the forces that move the score (Phase 29b). */
+  key: ScoreForceKey;
   /** Points over the window; null when the Engine has never ticked this person. */
   impact: number | null;
 }
@@ -127,7 +128,7 @@ export function parseFeaturedPayload(value: unknown): FeaturedPayload | null {
         .map((force) => {
           if (typeof force !== "object" || force === null) return null;
           const f = force as Record<string, unknown>;
-          return isForceKey(f.key) ? { key: f.key, impact: num(f.impact) } : null;
+          return isScoreForceKey(f.key) ? { key: f.key, impact: num(f.impact) } : null;
         })
         .filter((force): force is FeaturedForce => force !== null)
     : [];
@@ -150,8 +151,10 @@ export function parseFeaturedPayload(value: unknown): FeaturedPayload | null {
     lastTickAt: time(record.lastTickAt),
     change: { h1: num(change.h1), h24: num(change.h24), d7: num(change.d7) },
     history,
-    // Every force, in the canonical order, whatever order or subset arrived.
-    forces: FORCE_KEYS.map((key) => forces.find((force) => force.key === key) ?? { key, impact: null }),
+    // Every force that moves the score, in the canonical order, whatever order
+    // or subset arrived. A market force (Conviction, Trading Activity) is
+    // dropped: it moves the market price, not the score this page explains.
+    forces: SCORE_FORCE_KEYS.map((key) => forces.find((force) => force.key === key) ?? { key, impact: null }),
     windowMinutes: num(record.windowMinutes) ?? 60,
     signals,
     generatedAt: time(record.generatedAt) ?? new Date(0).toISOString(),

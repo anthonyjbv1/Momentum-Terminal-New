@@ -35,6 +35,7 @@ export function makePerson(overrides: Partial<Person> = {}): Person {
     premium_cents: 0,
     market_price: 50,
     depth_units_override: null,
+    pricing_mode_override: null,
     decay_half_life_ticks_override: null,
     premium_cap_cents_override: null,
     shorting_override: null,

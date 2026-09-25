@@ -787,10 +787,11 @@ export type Database = {
           breaker_price_cents: number | null
           breaker_window_seconds: number
           decay_half_life_ticks: number
-          depth_units: number | null
+          depth_units: number
           max_order_share_of_depth: number
           min_hold_seconds: number
           premium_cap_cents: number
+          pricing_mode: string
           shorting_allowed: boolean
           tier: string
           updated_at: string
@@ -803,10 +804,11 @@ export type Database = {
           breaker_price_cents?: number | null
           breaker_window_seconds: number
           decay_half_life_ticks: number
-          depth_units?: number | null
+          depth_units: number
           max_order_share_of_depth: number
           min_hold_seconds: number
           premium_cap_cents: number
+          pricing_mode?: string
           shorting_allowed: boolean
           tier: string
           updated_at?: string
@@ -819,10 +821,11 @@ export type Database = {
           breaker_price_cents?: number | null
           breaker_window_seconds?: number
           decay_half_life_ticks?: number
-          depth_units?: number | null
+          depth_units?: number
           max_order_share_of_depth?: number
           min_hold_seconds?: number
           premium_cap_cents?: number
+          pricing_mode?: string
           shorting_allowed?: boolean
           tier?: string
           updated_at?: string
@@ -940,6 +943,7 @@ export type Database = {
           partnership_status: string
           premium_cap_cents_override: number | null
           premium_cents: number
+          pricing_mode_override: string | null
           revert_target: number
           sell_price: number | null
           shorting_override: boolean | null
@@ -977,6 +981,7 @@ export type Database = {
           partnership_status?: string
           premium_cap_cents_override?: number | null
           premium_cents?: number
+          pricing_mode_override?: string | null
           revert_target?: number
           sell_price?: number | null
           shorting_override?: boolean | null
@@ -1014,6 +1019,7 @@ export type Database = {
           partnership_status?: string
           premium_cap_cents_override?: number | null
           premium_cents?: number
+          pricing_mode_override?: string | null
           revert_target?: number
           sell_price?: number | null
           shorting_override?: boolean | null
@@ -2661,10 +2667,11 @@ export type Database = {
           breaker_price_cents: number | null
           breaker_window_seconds: number
           decay_half_life_ticks: number
-          depth_units: number | null
+          depth_units: number
           max_order_share_of_depth: number
           min_hold_seconds: number
           premium_cap_cents: number
+          pricing_mode: string
           shorting_allowed: boolean
           tier: string
           updated_at: string
