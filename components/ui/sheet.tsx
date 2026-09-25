@@ -107,6 +107,22 @@ import { Button } from "./button";
  * `touch-action: manipulation` from the body, and the body's own scrolling is
  * contained so it cannot chain to the page.
  *
+ * THE DESKTOP DIALOG ENDS INSIDE THE WINDOW (after Phase 29c). On desktop
+ * the panel sat 5rem below the top of the overlay (`top-20`) but was allowed
+ * the overlay's FULL height (`max-h-full`), so once its content reached the
+ * limit it hung 80 px past the bottom of the window — and the pinned footer,
+ * the one part that must always be on screen, was the part cut off. The
+ * arithmetic had been wrong since Phase 6a; Phase 29's taller trade sheet
+ * (the market price, the spread note, the average and last-share rows) is
+ * what made common laptop windows reach it: at 1280×720 and 1366×768 the
+ * Confirm button sat wholly below the window, and nothing could be bought or
+ * sold from the dialog. The top gap and the height limit now come from one
+ * token, `--spacing-dialog-gap` (`top-dialog-gap`, `max-h-dialog`: the
+ * overlay less that gap above and below), so the panel ends at least a gap
+ * above the window's bottom edge at every size and the body scrolls instead.
+ * Phones never used it: there the panel is a bottom sheet with `max-h-full`
+ * and no top offset.
+ *
  * HYDRATION (Phase 29b). The portal needs `document`, which the server does
  * not have: a sheet open on the first render rendered nothing on the server
  * and a dialog on the client — a hydration error, the Next.js "1 Issue"
@@ -327,8 +343,8 @@ export function Sheet({ open, onClose, title, description, children, footer, siz
           "absolute z-(--z-sheet) flex max-h-full flex-col overflow-hidden bg-surface-overlay shadow-overlay focus-visible:outline-none",
           // mobile: bottom sheet, clearing the device's home indicator (the tab bar is below it)
           "inset-x-0 bottom-0 rounded-t-3xl pb-safe md:pb-0 animate-slide-up",
-          // desktop: centred dialog
-          "sm:inset-auto sm:left-1/2 sm:top-20 sm:w-full sm:-translate-x-1/2 sm:rounded-3xl sm:animate-rise-in",
+          // desktop: centred dialog, a gap below the banner and at most the same gap above the window's bottom edge
+          "sm:inset-auto sm:left-1/2 sm:top-dialog-gap sm:max-h-dialog sm:w-full sm:-translate-x-1/2 sm:rounded-3xl sm:animate-rise-in",
           size === "lg" ? "sm:max-w-2xl" : "sm:max-w-lg",
           className,
         )}

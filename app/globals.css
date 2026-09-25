@@ -131,6 +131,14 @@
   max-height: calc(100dvh - var(--spacing-banner));
 }
 
+/* The desktop dialog's height limit: its container (the area under the banner)
+   less the dialog gap above it and the same gap below. Paired with
+   top-dialog-gap, a dialog that reaches the limit ends one gap above the
+   window's bottom edge, never past it. */
+@utility max-h-dialog {
+  max-height: calc(100% - 2 * var(--spacing-dialog-gap));
+}
+
 /* Lets a CSS transform on an SVG element scale about its own centre rather
    than the SVG's origin (the chart's pulsing dot). */
 @utility transform-fill-box {

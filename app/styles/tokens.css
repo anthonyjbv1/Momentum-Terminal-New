@@ -134,6 +134,11 @@
   --spacing-rail: 22rem;      /* right-hand rail width (desktop) */
   --spacing-shell: 80rem;     /* max content width */
   --spacing-touch: 2.75rem;   /* minimum tap target */
+  /* The desktop dialog's gap to the area under the banner, above it and (at
+     most) below it: 5rem on a tall window, less on a short one. The dialog's
+     height limit is derived from the same value (max-h-dialog), so a dialog
+     at its limit always ends inside the window. */
+  --spacing-dialog-gap: clamp(1.5rem, 10dvh, 5rem);
 
   /* ---------------------------------------------------------------------------
      Shape. Tight, intentional: felt but not attention-grabbing.
