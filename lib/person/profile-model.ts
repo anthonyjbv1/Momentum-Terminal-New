@@ -391,12 +391,21 @@ export type ForceKey = (typeof FORCE_KEYS)[number];
  */
 export type ForceRole = "score" | "market";
 
+/**
+ * Every description is a claim about what the code does, and
+ * forces-panel.test.ts holds each one to it (Phase 29c). Gravity pulls the
+ * score towards the person's BASELINE — the word a reader sees for what the
+ * code calls the revert target. Trading Activity's flow is what moves the
+ * premium. Conviction does NOT move the market price: open capital is one of
+ * the inputs that TIGHTEN the spread (lib/engine/spread.ts), alongside signal
+ * depth and confidence, and it never widens it or sets its level alone.
+ */
 export const FORCE_DEFINITIONS: Record<ForceKey, { label: string; description: string; role: ForceRole }> = {
-  gravity: { label: "Gravity", description: "Drift toward the gravity target", role: "score" },
+  gravity: { label: "Gravity", description: "Pull towards their baseline", role: "score" },
   signals: { label: "Signals", description: "News and data about the person", role: "score" },
-  market_mood: { label: "Market Mood", description: "The tide across the whole board", role: "score" },
-  conviction: { label: "Conviction", description: "Capital committed · moves the market price", role: "market" },
-  trading_activity: { label: "Trading Activity", description: "Buy and Sell flow · moves the market price", role: "market" },
+  market_mood: { label: "Market Mood", description: "The tide across the entire platform", role: "score" },
+  conviction: { label: "Conviction", description: "Capital committed · tightens the spread", role: "market" },
+  trading_activity: { label: "Trading Activity", description: "Buy and sell flow · moves the market price", role: "market" },
 };
 
 /**
@@ -605,6 +614,10 @@ export interface MarketReadings {
     concentration: number | null;
   };
   tradingActivity: {
+    /** Buy cents over the window. */
+    buyCents: number;
+    /** Sell cents over the window. */
+    sellCents: number;
     /** Buy cents minus Sell cents over the window. */
     netFlowCents: number;
     trades: number;
@@ -615,7 +628,7 @@ export interface MarketReadings {
 export function emptyMarketReadings(): MarketReadings {
   return {
     conviction: { openCapitalCents: 0, maxAllocationCents: 0, concentration: null },
-    tradingActivity: { netFlowCents: 0, trades: 0, windowMinutes: FORCES_WINDOW_MINUTES },
+    tradingActivity: { buyCents: 0, sellCents: 0, netFlowCents: 0, trades: 0, windowMinutes: FORCES_WINDOW_MINUTES },
   };
 }
 
@@ -626,10 +639,12 @@ export interface TradeEventRow {
 }
 
 export function readMarketReadings(openCapitalCents: number, maxAllocationCents: number, trades: TradeEventRow[], windowMinutes = FORCES_WINDOW_MINUTES): MarketReadings {
-  let netFlow = 0;
+  let buyCents = 0;
+  let sellCents = 0;
   for (const trade of trades) {
     const amount = toNumber(trade.amount_cents);
-    netFlow += trade.side === "SELL" ? -amount : amount;
+    if (trade.side === "SELL") sellCents += amount;
+    else buyCents += amount;
   }
   return {
     conviction: {
@@ -637,7 +652,7 @@ export function readMarketReadings(openCapitalCents: number, maxAllocationCents:
       maxAllocationCents,
       concentration: maxAllocationCents > 0 ? openCapitalCents / maxAllocationCents : null,
     },
-    tradingActivity: { netFlowCents: netFlow, trades: trades.length, windowMinutes },
+    tradingActivity: { buyCents, sellCents, netFlowCents: buyCents - sellCents, trades: trades.length, windowMinutes },
   };
 }
 

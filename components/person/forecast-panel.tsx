@@ -40,6 +40,12 @@ import { PROFILE_SURFACE, logProfileEvent } from "./use-profile-logging";
  *
  * Votes influence nothing (the Forecast force ships at weight 0.00); this
  * panel says so in its footnote rather than implying otherwise.
+ *
+ * Typography (Phase 29c, by the Phase 26 rule): the count and the minimum
+ * sit inside sentences — "1 forecast so far … once 5 people have called
+ * it" — so they are Inter with tabular figures, not the mono face. "1
+ * forecast" in the header is a word too. The split's percentages stand
+ * alone and stay mono.
  */
 export interface ForecastPanelProps {
   person: { id: string; slug: string; displayName: string; forecastPaused: boolean };
@@ -97,7 +103,7 @@ export function ForecastPanel({ person, summary: initialSummary, signedIn, ownVo
 
   return (
     <section aria-labelledby="forecast-heading" className={cn("flex flex-col gap-4", className)}>
-      <SectionHeader title={FORECAST_SECTION_TITLE} meta={summary.total > 0 ? <span className="num">{forecastsLabel(summary.total)}</span> : null} />
+      <SectionHeader title={FORECAST_SECTION_TITLE} meta={summary.total > 0 ? <span className="tabular-nums">{forecastsLabel(summary.total)}</span> : null} />
       <h2 id="forecast-heading" className="sr-only">
         {FORECAST_SECTION_TITLE}
       </h2>
@@ -107,8 +113,8 @@ export function ForecastPanel({ person, summary: initialSummary, signedIn, ownVo
           <Split rising={summary.rising} falling={summary.falling} risingReasons={summary.risingReasons ?? []} fallingReasons={summary.fallingReasons ?? []} />
         ) : summary.total > 0 ? (
           <p className="text-sm text-fg-muted">
-            <span className="num text-fg">{forecastsLabel(summary.total)}</span> so far. The Rising / Falling split shows once{" "}
-            <span className="num text-fg">{summary.minVotes}</span> people have called it.
+            <span className="tabular-nums text-fg">{forecastsLabel(summary.total)}</span> so far. The Rising / Falling split shows once{" "}
+            <span className="tabular-nums text-fg">{summary.minVotes}</span> people have called it.
           </p>
         ) : (
           <div className="flex flex-col gap-1.5">

@@ -112,7 +112,7 @@ export function valueDomain(points: TimedScore[], floor: number, reference: numb
   return { lo, hi, referenceInRange: reference !== null && reference >= lo && reference <= hi };
 }
 
-/** The score chart's domain: valueDomain with the Y_RANGE_FLOOR and the gravity target as the reference. */
+/** The score chart's domain: valueDomain with the Y_RANGE_FLOOR and Gravity's target — the baseline — as the reference. */
 export function scoreDomain(points: TimedScore[], revertTarget: number): ScoreDomain {
   const domain = valueDomain(points, Y_RANGE_FLOOR, revertTarget);
   return { ...domain, gravityInRange: domain.referenceInRange };
@@ -127,6 +127,33 @@ export function timeDomain(points: TimedScore[]): TimeDomain {
   if (points.length === 0) return { t0: 0, t1: 1 };
   const t0 = points[0].t;
   return { t0, t1: Math.max(points[points.length - 1].t, t0 + 1) };
+}
+
+/**
+ * HOW CLOSE THE MARKET LINE MAY SIT TO THE SCORE AND STILL READ AS ONE LINE
+ * (Phase 29c), in points: one cent, since one point is one dollar. The
+ * premium is whole cents, so this is "a premium of at most 1¢".
+ */
+export const MARKET_IN_LINE_POINTS = 0.01;
+
+/**
+ * Whether the market price stays within MARKET_IN_LINE_POINTS of the score at
+ * every point the chart draws. The chart's time domain runs from the first
+ * point handed to it to the last (timeDomain), so these points are the
+ * visible window. Then the second line is under the first all the way across,
+ * and a legend that shows it as a line of its own would promise something
+ * the reader cannot find. False when fewer than two points carry a market
+ * value: there is no market line to speak of.
+ */
+export function marketInLine(points: Pick<SeriesPoint, "score" | "market">[]): boolean {
+  let carried = 0;
+  for (const point of points) {
+    if (typeof point.market !== "number") continue;
+    carried += 1;
+    // Compared in whole cents: 0.01 in binary floating point is not 0.01.
+    if (Math.abs(Math.round(point.market * 100) - Math.round(point.score * 100)) > Math.round(MARKET_IN_LINE_POINTS * 100)) return false;
+  }
+  return carried >= 2;
 }
 
 export function toTimed(points: SeriesPoint[]): TimedScore[] {

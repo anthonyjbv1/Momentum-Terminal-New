@@ -50,7 +50,7 @@ export interface LiveLineChartProps {
   /** The vertical domain rule: floor, padding, and whether the reference is pulled in. Sees BOTH series' points. */
   domain: (points: TimedScore[]) => ValueDomain;
   /**
-   * A dashed reference line with a label: the gravity target, the paper
+   * A dashed reference line with a label: the baseline, the paper
    * credit. `anchor` places the in-range label at the left edge of the plot
    * (the default, and what the portfolio chart has always drawn) or at the
    * right, above the line's own end. `edgeLabel` is the longer wording for
@@ -61,8 +61,12 @@ export interface LiveLineChartProps {
   /**
    * The secondary series: a value read off each point (undefined or null to
    * leave that point out), its name for the crosshair, and its own formatter.
+   * `drawn: false` keeps it in the crosshair but draws no line or end dot —
+   * for when it lies on the primary (Phase 29c: the market price within a
+   * cent of the score, which at the half-point floor is still a few pixels
+   * and would read as a second line).
    */
-  secondary?: { label: string; value: (point: SeriesPoint) => number | null | undefined; formatValue?: (value: number) => string } | null;
+  secondary?: { label: string; value: (point: SeriesPoint) => number | null | undefined; formatValue?: (value: number) => string; drawn?: boolean } | null;
   /** The primary series' name in the crosshair, shown only when a secondary is drawn. */
   primaryLabel?: string;
   /** Axis labels. */
@@ -365,7 +369,9 @@ export function LiveLineChart({
                   />
                   <text
                     x={reference.anchor === "end" ? MARGIN.left + geometry.innerWidth - 6 : MARGIN.left}
-                    y={geometry.y(reference.value) - 6}
+                    // At the right edge the label sits where the line ends, so it takes the side of the dashed line the
+                    // line's end is NOT on: a score ending just above its baseline would otherwise run through the words.
+                    y={reference.anchor === "end" && geometry.lead.y < geometry.y(reference.value) ? geometry.y(reference.value) + 14 : geometry.y(reference.value) - 6}
                     textAnchor={reference.anchor === "end" ? "end" : undefined}
                     className="fill-fg-faint text-2xs"
                   >
@@ -393,14 +399,14 @@ export function LiveLineChart({
 
             {/* The lines, clipped so aged-out points slide away under the left edge. The secondary sits under the primary. */}
             <g clipPath={`url(#${clipId})`}>
-              {geometry.secondaryPath ? (
+              {geometry.secondaryPath && secondary?.drawn !== false ? (
                 <path d={geometry.secondaryPath} fill="none" className="stroke-fg-muted" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
               ) : null}
               <path d={geometry.path} fill="none" className="stroke-fg" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
             </g>
 
             {/* The secondary's end: a still dot, so the two ends read as two lines. */}
-            {geometry.secondaryLead ? <circle cx={geometry.secondaryLead.x} cy={geometry.secondaryLead.y} r={2.5} className="fill-fg-muted" /> : null}
+            {geometry.secondaryLead && secondary?.drawn !== false ? <circle cx={geometry.secondaryLead.x} cy={geometry.secondaryLead.y} r={2.5} className="fill-fg-muted" /> : null}
 
             {/* The leading edge: the dot, its breath, and the ring that marks a tick landing */}
             <g transform={`translate(${geometry.lead.x.toFixed(2)} ${geometry.lead.y.toFixed(2)})`}>

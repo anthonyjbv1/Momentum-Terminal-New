@@ -4,7 +4,7 @@ import { useCallback, useMemo } from "react";
 
 import { cn } from "@/lib/cn";
 import { formatCents } from "@/lib/money";
-import { scoreDomain, type TimedScore } from "@/lib/person/chart-math";
+import { marketInLine, scoreDomain, type TimedScore } from "@/lib/person/chart-math";
 import { LIVE_TICK_MS } from "@/lib/person/live-series";
 import type { RangeKey, SeriesPoint } from "@/lib/person/profile-model";
 import { pointsToCents } from "@/lib/trading/model";
@@ -13,17 +13,16 @@ import { ChartEmpty, LiveLineChart } from "@/components/charts/live-line-chart";
 /**
  * The score line (6c+): the live line chart with the score's own rules.
  * One decimal on the axis and the crosshair, the Y_RANGE_FLOOR of half a
- * point, and the gravity target as the dashed reference. Everything about
+ * point, and the baseline (Gravity's target) as the dashed reference. Everything about
  * the cadence, the breath, the tick reveal and reduced motion lives in
  * components/charts/live-line-chart.tsx, shared with the portfolio.
  *
- * GRAVITY READS OFF THE CHART NOW (Phase 26). The target used to be stated
- * twice: a dashed line here and a "Gravity target 55.0" figure in a row of
- * statistics above the chart. The row is gone, so this line is the only
- * place it appears and it carries its own value — "Gravity 55.0", set at
- * the right edge where the line ends and the reader's eye already is. Out
- * of range it falls back to the edge note, which says "Gravity target"
- * in full because there is no line beside it to explain the number.
+ * THE BASELINE READS OFF THE CHART (Phase 26; named in Phase 29c). What the
+ * code calls the revert target — where Gravity pulls — is the person's
+ * BASELINE to a reader, and that is the only word the page uses for it: the
+ * dashed line carries "Baseline 55.0" at the right edge, where the line ends
+ * and the reader's eye already is, and out of range the edge note reads
+ * "Baseline 55.0 above this range".
  *
  * THE MARKET PRICE IS THE SECOND LINE (Phase 29). Where the series carries
  * it, the market price (score + premium) is drawn beside the score in the
@@ -31,7 +30,16 @@ import { ChartEmpty, LiveLineChart } from "@/components/charts/live-line-chart";
  * the two lines IS the premium, read directly. Two series means a legend,
  * and the crosshair names both values — the score in points, the market
  * price in dollars, because a score is points and anything you can trade at
- * is money (Phase 26). The Gravity line stays.
+ * is money (Phase 26). The baseline line stays.
+ *
+ * ONE LINE WHEN THEY COINCIDE (Phase 29c). While the premium is at most a
+ * cent across the whole visible window (marketInLine), the two are one line.
+ * The legend says so — "Market price · in line with the data", with no
+ * swatch of its own — and the chart draws only the score: at the half-point
+ * floor a cent is still a few pixels, and a grey edge peeking out from under
+ * the score would read as the second line the legend says is not there. The
+ * crosshair keeps naming both values. Once they part by more than a cent,
+ * the second line and its swatch come back.
  *
  * A display-only index (Phase 29b) passes showMarket={false}: the score is
  * the only line, with no legend, because it is the only number the page shows.
@@ -63,6 +71,7 @@ export function ScoreChart({ points, range, revertTarget, personName, showMarket
   );
   // The market line is drawn when the series carries it on at least two points.
   const hasMarket = useMemo(() => showMarket && points.filter((point) => typeof point.market === "number").length >= 2, [showMarket, points]);
+  const inLine = useMemo(() => hasMarket && marketInLine(points), [hasMarket, points]);
 
   return (
     <div className={cn("flex flex-col gap-2", className)}>
@@ -72,10 +81,14 @@ export function ScoreChart({ points, range, revertTarget, personName, showMarket
             <span aria-hidden className="inline-block h-0.5 w-4 rounded-full bg-fg" />
             Momentum Score
           </li>
-          <li className="inline-flex items-center gap-1.5">
-            <span aria-hidden className="inline-block h-px w-4 rounded-full bg-fg-muted" />
-            Market price
-          </li>
+          {inLine ? (
+            <li>Market price · in line with the data</li>
+          ) : (
+            <li className="inline-flex items-center gap-1.5">
+              <span aria-hidden className="inline-block h-px w-4 rounded-full bg-fg-muted" />
+              Market price
+            </li>
+          )}
         </ul>
       ) : null}
       <LiveLineChart
@@ -84,8 +97,8 @@ export function ScoreChart({ points, range, revertTarget, personName, showMarket
         version={version}
         cadenceMs={cadenceMs}
         domain={domain}
-        reference={{ value: revertTarget, label: "Gravity", edgeLabel: "Gravity target", anchor: "end" }}
-        secondary={hasMarket ? { label: "Market", value: marketOf, formatValue: asMoney } : null}
+        reference={{ value: revertTarget, label: "Baseline", anchor: "end" }}
+        secondary={hasMarket ? { label: "Market", value: marketOf, formatValue: asMoney, drawn: !inLine } : null}
         primaryLabel="Score"
         formatAxis={oneDecimal}
         formatValue={oneDecimal}

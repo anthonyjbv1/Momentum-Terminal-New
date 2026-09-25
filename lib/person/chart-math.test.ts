@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { Y_PADDING, Y_RANGE_FLOOR, blendSeries, easeOutCubic, gridValues, monotonePath, scoreDomain, seriesPath } from "./chart-math";
+import { MARKET_IN_LINE_POINTS, Y_PADDING, Y_RANGE_FLOOR, blendSeries, easeOutCubic, gridValues, marketInLine, monotonePath, scoreDomain, seriesPath } from "./chart-math";
 
 describe("scoreDomain", () => {
   it("never spans fewer than the floor, centred on the data", () => {
@@ -107,5 +107,30 @@ describe("blendSeries", () => {
     expect(easeOutCubic(0)).toBe(0);
     expect(easeOutCubic(1)).toBe(1);
     expect(easeOutCubic(0.5)).toBeCloseTo(0.875, 6);
+  });
+});
+
+describe("marketInLine (Phase 29c)", () => {
+  const at = (score: number, market?: number) => ({ score, market });
+
+  it("is one cent", () => {
+    expect(MARKET_IN_LINE_POINTS).toBe(0.01);
+  });
+
+  it("holds while the market price is within 1¢ of the score at every point", () => {
+    expect(marketInLine([at(55.12, 55.12), at(55.2, 55.21), at(55.31, 55.3)])).toBe(true);
+    // The floating-point edge: 69.19 + 0.01 is 69.20000000000002, still a cent.
+    expect(marketInLine([at(69.19, 69.19 + 0.01), at(69.19, 69.2)])).toBe(true);
+  });
+
+  it("breaks the moment any one point is two cents apart", () => {
+    expect(marketInLine([at(55.12, 55.12), at(55.2, 55.22), at(55.31, 55.31)])).toBe(false);
+    expect(marketInLine([at(55.12, 55.12), at(55.2, 55.18)])).toBe(false);
+  });
+
+  it("reads only the points that carry a market value, and needs two of them", () => {
+    expect(marketInLine([at(50), at(51, 51), at(52, 52)])).toBe(true);
+    expect(marketInLine([at(50), at(51, 51)])).toBe(false);
+    expect(marketInLine([])).toBe(false);
   });
 });

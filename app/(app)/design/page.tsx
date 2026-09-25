@@ -194,7 +194,7 @@ export default function DesignPage() {
                 <p className="text-label text-fg-muted">A score — points</p>
                 <ScoreDisplay score={56.1} size="lg" />
                 <p className="text-sm text-fg-muted">
-                  One decimal, no currency. The axis, the crosshair, the Gravity line and the change line all read in the same unit.
+                  One decimal, no currency. The axis, the crosshair, the baseline and the change line all read in the same unit.
                 </p>
               </div>
               <div className="flex flex-col gap-3">

@@ -62,13 +62,13 @@ export default async function HowThePriceWorksPage() {
         <div className="mt-12 flex flex-col gap-10">
           <Section title="The score comes from outside signals only">
             <p>
-              The Momentum Score moves on three forces: Gravity, Signals and Market Mood. All three read the world outside this platform: news, uploads, streams, games,
-              filings, and the tide across the whole board. Nothing anyone does here moves it. Buying, selling and holding do not touch the score, by construction, and a
+              The Momentum Score moves on three forces: Gravity, the pull towards a person&rsquo;s baseline; Signals, the news and data about them; and Market Mood, the
+              tide across the entire platform. All three read the world outside this platform: news, uploads, streams, games and filings. Nothing anyone does here moves it. Buying, selling and holding do not touch the score, by construction, and a
               test fails the build if they ever could.
             </p>
             <p>
-              Two more readings sit beside those three on every profile, Conviction and Trading Activity. They describe the market, not the person, and they add exactly
-              nothing to the score.
+              Two more readings sit beside those three on every profile, Trading Activity and Conviction. They describe the market, not the person, and they add exactly
+              nothing to the score. Trading Activity is the buying and selling that moves the market price; Conviction is the capital held open, which tightens the spread.
             </p>
           </Section>
 

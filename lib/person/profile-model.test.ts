@@ -346,7 +346,7 @@ describe("the market readings", () => {
       { side: "BUY", amount_cents: 5000 },
     ]);
     expect(readings.conviction).toEqual({ openCapitalCents: 7_000_000, maxAllocationCents: 9_000_000, concentration: 7 / 9 });
-    expect(readings.tradingActivity).toEqual({ netFlowCents: 80_000, trades: 3, windowMinutes: FORCES_WINDOW_MINUTES });
+    expect(readings.tradingActivity).toEqual({ buyCents: 105_000, sellCents: 25_000, netFlowCents: 80_000, trades: 3, windowMinutes: FORCES_WINDOW_MINUTES });
     expect(readMarketReadings(100, 0, []).conviction.concentration).toBeNull();
 
     expect(convictionLevelFromConcentration(null)).toBeNull();
