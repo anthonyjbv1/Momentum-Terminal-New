@@ -8,7 +8,20 @@ import { cn } from "@/lib/cn";
 import { formatCents } from "@/lib/money";
 import { marketLine, type TradingAvailability } from "@/lib/person/profile-model";
 import type { OrderSide } from "@/lib/trading/direction";
-import { PREVIEW_LABELS, confirmBreakdown, confirmHeadline, dollarsLine, filledDetail, filledHeadline, spreadNote, toleranceNote, verb, walks } from "@/lib/trading/sheet-copy";
+import {
+  PREVIEW_LABELS,
+  confirmBreakdown,
+  confirmHeadline,
+  dollarsLine,
+  filledDetail,
+  filledHeadline,
+  priceMovedBody,
+  requoteLabel,
+  spreadNote,
+  toleranceNote,
+  verb,
+  walks,
+} from "@/lib/trading/sheet-copy";
 import {
   MAX_ORDER_SHARES,
   UNITS_PER_SHARE,
@@ -26,6 +39,7 @@ import {
   type OrderResult,
   type PositionSummary,
   type TradeBook,
+  type TradeQuote,
 } from "@/lib/trading/model";
 import { Button } from "@/components/ui/button";
 import { inputClassName } from "@/components/ui/input";
@@ -84,7 +98,25 @@ import { Money } from "./money";
  *            ever sent that the user has not just seen.
  * The server holds the last word: it fills along ITS curve, and if the
  * average sits more than the tolerance from the price sent, it refuses and
- * returns the new quote, which lands here as a re-confirm step.
+ * returns the new quote.
+ *
+ * THE BOOK AFTER AN ORDER (Phase 29e). Every answer from place_order() — a
+ * fill or a refusal — carries the book as the server read it, and that book
+ * is the one the next preview is priced on: the page applies it (onFilled,
+ * onQuote) and, until the page's own book moves past it, the sheet holds it
+ * itself. Before, a fill left the page's book where it was until the next
+ * tick, so at MrBeast's demo depth every back-to-back order was priced 20¢
+ * short and refused, and the refusal's re-quote sent the same stale price
+ * again. A price_moved refusal now offers one action in the pinned footer —
+ * "Buy at $70.41", the server's own new average, confirmed in one tap — and
+ * "Change order" goes back to compose on the fresh book.
+ *
+ * WIDE SCREENS (Phase 29e). From `lg` up the sheet is two columns under one
+ * pinned footer: the order on the left (quotes, market line, Shares|Dollars,
+ * the field and its chips), its summary on the right (average, last share,
+ * cost, balance and position after). The quote boxes shrink to one short row
+ * and the footer's actions sit under the summary. Below `lg` nothing moves:
+ * the columns stack in the phone's order with the phone's spacing.
  *
  * Nothing here computes money the server will trust. Previews are integer
  * cents from the same rules, for reading only.
@@ -122,6 +154,11 @@ export interface TradeSheetProps {
   surface: string;
   onClose: () => void;
   onFilled: (result: Extract<OrderResult, { ok: true }>) => void;
+  /**
+   * A refusal's quote: the book place_order() read (Phase 29e). The sheet
+   * prices on it at once; the page applies it too, so its own quotes agree.
+   */
+  onQuote?: (quote: TradeQuote) => void;
 }
 
 type Step = "compose" | "confirm" | "result";
@@ -207,8 +244,8 @@ export function TradeSheet({
   open,
   side,
   person,
-  book,
-  marketPrice,
+  book: pageBook,
+  marketPrice: pageMarketPrice,
   scoreOnly = false,
   availability,
   balanceCents,
@@ -220,6 +257,7 @@ export function TradeSheet({
   surface,
   onClose,
   onFilled,
+  onQuote,
 }: TradeSheetProps) {
   const [step, setStep] = useState<Step>("compose");
   const [mode, setMode] = useState<Mode>(side === "BUY" ? "dollars" : "shares");
@@ -230,6 +268,18 @@ export function TradeSheet({
   const [result, setResult] = useState<OrderResult | null>(null);
   const filled = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // THE SERVER'S BOOK (Phase 29e): the quote a refusal came back with, priced
+  // on until the page's live book changes — which, once the page has applied
+  // the same quote or polled past it, is at least as new.
+  const [served, setServed] = useState<TradeQuote | null>(null);
+  const [seenPageBook, setSeenPageBook] = useState(pageBook);
+  if (seenPageBook !== pageBook) {
+    setSeenPageBook(pageBook);
+    setServed(null);
+  }
+  const book: TradeBook = served ?? pageBook;
+  const marketPrice = served ? served.marketPrice : pageMarketPrice;
 
   const curved = book.depthUnits !== null && book.inventoryUnits !== null;
   const typedShares = useMemo(() => {
@@ -338,7 +388,12 @@ export function TradeSheet({
     setStep("confirm");
   };
 
-  const submit = async () => {
+  /**
+   * Sends the order. The price is the average the reader is looking at —
+   * the preview's, or, from a price_moved refusal, the server's own new
+   * average, which the footer's button names.
+   */
+  const submit = async (quotedPriceCents: Cents = livePrice) => {
     if (submitting || preview.units <= 0) return;
     setSubmitting(true);
     let outcome: OrderResult;
@@ -354,7 +409,7 @@ export function TradeSheet({
           personId: person.id,
           side,
           ...(mode === "dollars" ? { maxSpendCents: typedSpendCents } : { shares }),
-          quotedPriceCents: livePrice,
+          quotedPriceCents,
           surface,
         }),
       });
@@ -368,8 +423,19 @@ export function TradeSheet({
     if (outcome.ok) {
       filled.current = true;
       onFilled(outcome);
+    } else if (outcome.quote) {
+      // The book as the server read it for this order: the next preview, the
+      // one-tap re-confirm and "Change order" are all priced on it.
+      setServed(outcome.quote);
+      onQuote?.(outcome.quote);
     }
   };
+
+  // A price_moved refusal's one action: the same order at the server's new average.
+  const requote =
+    step === "result" && result && !result.ok && result.code === "price_moved" && typeof result.extra.fill_price_cents === "number" && result.extra.fill_price_cents > 0
+      ? cents(result.extra.fill_price_cents)
+      : null;
 
   const quoteMoved = step === "confirm" && armedPriceCents !== null && armedPriceCents !== livePrice;
   const title = `${verb(side)} ${person.displayName}`;
@@ -383,49 +449,70 @@ export function TradeSheet({
    * THE PINNED ACTION (Phase 26b). Every step's bottom action row lives here
    * rather than at the end of its own scrolling block, so how far the reader
    * is through the sheet has nothing to do with whether they can act on it.
+   * From `lg` up the row is laid on the body's two columns (Phase 29e): the
+   * primary action under the summary, the secondary one under the order.
    */
   const footer = ((): React.ReactNode => {
     if (step === "compose" && (closed || nothingToClose)) {
       return (
-        <Button variant="outline" size="lg" className="w-full" onClick={close}>
-          Close
-        </Button>
+        <FooterRow>
+          <Button variant="outline" size="lg" className="w-full lg:col-start-2" onClick={close}>
+            Close
+          </Button>
+        </FooterRow>
       );
     }
     if (step === "compose") {
       return (
-        <div className="flex flex-col gap-2">
-          <Button variant={side === "BUY" ? "buy" : "sell"} size="lg" className="w-full" onClick={review} disabled={Boolean(composeError) || preview.units <= 0}>
+        <FooterRow className="flex-col gap-2">
+          <Button variant={side === "BUY" ? "buy" : "sell"} size="lg" className="w-full lg:col-start-2 lg:row-start-1" onClick={review} disabled={Boolean(composeError) || preview.units <= 0}>
             Review {verb(side).toLowerCase()}
           </Button>
-          <p className="text-center text-xs text-fg-faint">Nothing is placed until you confirm the exact price.</p>
-        </div>
+          <p className="text-center text-xs text-fg-faint lg:col-start-1 lg:row-start-1 lg:text-left">Nothing is placed until you confirm the exact price.</p>
+        </FooterRow>
       );
     }
     if (step === "confirm") {
       return (
-        <div className="flex gap-3">
-          <Button variant="outline" size="lg" onClick={() => setStep("compose")} disabled={submitting}>
+        <FooterRow>
+          <Button variant="outline" size="lg" className="lg:justify-self-start" onClick={() => setStep("compose")} disabled={submitting}>
             Back
           </Button>
-          <Button variant={side === "BUY" ? "buy" : "sell"} size="lg" className="flex-1" onClick={submit} loading={submitting}>
+          <Button variant={side === "BUY" ? "buy" : "sell"} size="lg" className="flex-1" onClick={() => void submit()} loading={submitting}>
             {quoteMoved ? `Confirm at ${formatCents(livePrice)}` : `Confirm ${verb(side).toLowerCase()}`} · {formatCents(preview.grossCents)}
           </Button>
-        </div>
+        </FooterRow>
       );
     }
     if (step === "result" && result?.ok) {
       return (
-        <Button variant="primary" size="lg" className="w-full" onClick={close}>
-          Done
-        </Button>
+        <FooterRow>
+          <Button variant="primary" size="lg" className="w-full lg:col-start-2" onClick={close}>
+            Done
+          </Button>
+        </FooterRow>
+      );
+    }
+    if (step === "result" && requote !== null) {
+      // THE PRICE MOVED (Phase 29e): one action, the same order at the
+      // server's new average, sent in one tap. Changing the order goes back
+      // to compose on the book the refusal carried. Close is the sheet's own X.
+      return (
+        <FooterRow>
+          <Button variant="outline" size="lg" className="flex-1 lg:flex-none lg:justify-self-start" onClick={reopenCompose} disabled={submitting}>
+            Change order
+          </Button>
+          <Button variant={side === "BUY" ? "buy" : "sell"} size="lg" className="flex-1" onClick={() => void submit(requote)} loading={submitting}>
+            {requoteLabel(side, requote)}
+          </Button>
+        </FooterRow>
       );
     }
     if (step === "result" && result && !result.ok) {
       const terminal = result.code === "unauthenticated" || result.code === "unknown_person" || result.code === "frozen" || result.code === "excluded" || result.code === "halted" || result.code === "paused" || result.code === "identity_required";
       return (
-        <div className="flex gap-3">
-          <Button variant="ghost" size="lg" className="flex-1" onClick={close}>
+        <FooterRow>
+          <Button variant="ghost" size="lg" className={cn("flex-1", terminal && "lg:col-start-2")} onClick={close}>
             Close
           </Button>
           {!terminal ? (
@@ -433,159 +520,209 @@ export function TradeSheet({
               Change order
             </Button>
           ) : null}
-        </div>
+        </FooterRow>
       );
     }
     return null;
   })();
 
+  const quoteBlock = <QuoteBlock side={side} book={book} marketPrice={marketPrice} curved={curved} scoreOnly={scoreOnly} />;
+
   return (
-    <Sheet open={open} onClose={close} title={title} description="Paper trading. Not real money." footer={footer}>
-      <div className="flex flex-col gap-6">
-        {step !== "result" ? <QuoteBlock side={side} book={book} marketPrice={marketPrice} curved={curved} scoreOnly={scoreOnly} /> : null}
+    <Sheet open={open} onClose={close} title={title} description="Paper trading. Not real money." footer={footer} size="wide">
+      {step === "compose" && closed ? <Columns left={<>{quoteBlock}<MarketClosed title={closed.title} body={closed.body} /></>} /> : null}
+      {step === "compose" && !closed && nothingToClose ? <Columns left={<>{quoteBlock}<NothingToClose personName={person.displayName} /></>} /> : null}
 
-        {step === "compose" && closed ? <MarketClosed title={closed.title} body={closed.body} /> : null}
-        {step === "compose" && !closed && nothingToClose ? <NothingToClose personName={person.displayName} /> : null}
-
-        {step === "compose" && !closed && !nothingToClose ? (
-          <div className="flex flex-col gap-5">
-            <div className="flex flex-col gap-2">
-              {/* The toggle names the field (Phase 29b): a second "Shares" beside it said the same word twice. The input carries its own aria-label. */}
-              <ModeToggle mode={mode} onChange={setMode} />
-              {mode === "dollars" ? (
-                <div className="flex items-center gap-2">
-                  <span aria-hidden className="text-xl font-semibold tabular-nums text-fg-muted">
-                    $
-                  </span>
-                  <input
-                    ref={inputRef}
-                    id="trade-units"
-                    inputMode="decimal"
-                    autoComplete="off"
-                    aria-label="Amount in dollars"
-                    value={amountText}
-                    onChange={(event) => setAmountText(limitDecimals(event.target.value, 2))}
-                    aria-invalid={composeError ? true : undefined}
-                    className={cn(inputClassName, "text-center text-xl tabular-nums")}
-                  />
+      {step === "compose" && !closed && !nothingToClose ? (
+        <Columns
+          left={
+            <>
+              {quoteBlock}
+              <div className="flex flex-col gap-2">
+                {/* The toggle names the field (Phase 29b): a second "Shares" beside it said the same word twice. The input carries its own aria-label. On a wide screen the two share a row. */}
+                <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:gap-3">
+                  <ModeToggle mode={mode} onChange={setMode} />
+                  {mode === "dollars" ? (
+                    <div className="flex items-center gap-2 lg:flex-1">
+                      <span aria-hidden className="text-xl font-semibold tabular-nums text-fg-muted">
+                        $
+                      </span>
+                      <input
+                        ref={inputRef}
+                        id="trade-units"
+                        inputMode="decimal"
+                        autoComplete="off"
+                        aria-label="Amount in dollars"
+                        value={amountText}
+                        onChange={(event) => setAmountText(limitDecimals(event.target.value, 2))}
+                        aria-invalid={composeError ? true : undefined}
+                        className={cn(inputClassName, "text-center text-xl tabular-nums")}
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 lg:flex-1">
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        aria-label="One fewer share"
+                        onClick={() => setQuantityText(sharesText(Math.max(1 / UNITS_PER_SHARE, shares - 1)))}
+                        disabled={preview.units <= UNITS_PER_SHARE}
+                      >
+                        <Minus />
+                      </Button>
+                      <input
+                        ref={inputRef}
+                        id="trade-units"
+                        inputMode="decimal"
+                        autoComplete="off"
+                        aria-label="Number of shares"
+                        value={quantityText}
+                        onChange={(event) => setQuantityText(limitDecimals(event.target.value, 3))}
+                        aria-invalid={composeError ? true : undefined}
+                        className={cn(inputClassName, "text-center text-xl tabular-nums")}
+                      />
+                      <Button variant="outline" size="icon" aria-label="One more share" onClick={() => setQuantityText(sharesText(Math.min(MAX_ORDER_SHARES, shares + 1)))}>
+                        <Plus />
+                      </Button>
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    aria-label="One fewer share"
-                    onClick={() => setQuantityText(sharesText(Math.max(1 / UNITS_PER_SHARE, shares - 1)))}
-                    disabled={preview.units <= UNITS_PER_SHARE}
-                  >
-                    <Minus />
-                  </Button>
-                  <input
-                    ref={inputRef}
-                    id="trade-units"
-                    inputMode="decimal"
-                    autoComplete="off"
-                    aria-label="Number of shares"
-                    value={quantityText}
-                    onChange={(event) => setQuantityText(limitDecimals(event.target.value, 3))}
-                    aria-invalid={composeError ? true : undefined}
-                    className={cn(inputClassName, "text-center text-xl tabular-nums")}
-                  />
-                  <Button variant="outline" size="icon" aria-label="One more share" onClick={() => setQuantityText(sharesText(Math.min(MAX_ORDER_SHARES, shares + 1)))}>
-                    <Plus />
-                  </Button>
+                <div className="flex flex-wrap gap-2">
+                  {mode === "dollars"
+                    ? DOLLAR_PRESETS.map((preset) => (
+                        <Chip key={preset} active={typedSpendCents === preset * 100} onClick={() => setAmountText(String(preset))}>
+                          ${preset}
+                        </Chip>
+                      ))
+                    : SHARE_PRESETS.map((preset) => (
+                        <Chip key={preset} active={shares === preset} onClick={() => setQuantityText(String(preset))}>
+                          {preset}
+                        </Chip>
+                      ))}
+                  {maxChip ? (
+                    <Chip active={maxChip.active} onClick={maxChip.onClick}>
+                      {maxChip.label}
+                    </Chip>
+                  ) : null}
                 </div>
-              )}
-              <div className="flex flex-wrap gap-2">
-                {mode === "dollars"
-                  ? DOLLAR_PRESETS.map((preset) => (
-                      <Chip key={preset} active={typedSpendCents === preset * 100} onClick={() => setAmountText(String(preset))}>
-                        ${preset}
-                      </Chip>
-                    ))
-                  : SHARE_PRESETS.map((preset) => (
-                      <Chip key={preset} active={shares === preset} onClick={() => setQuantityText(String(preset))}>
-                        {preset}
-                      </Chip>
-                    ))}
-                {maxChip ? (
-                  <Chip active={maxChip.active} onClick={maxChip.onClick}>
-                    {maxChip.label}
-                  </Chip>
+                {composeError ? (
+                  <p role="alert" className="text-sm text-fg-secondary">
+                    {composeError}
+                  </p>
                 ) : null}
+                {mode === "dollars" && !composeError && preview.units > 0 ? <p className="text-sm tabular-nums text-fg-muted">{dollarsLine(side, typedSpendCents, preview, curved)}</p> : null}
               </div>
-              {composeError ? (
-                <p role="alert" className="text-sm text-fg-secondary">
-                  {composeError}
+            </>
+          }
+          right={
+            <SummaryPanel>
+              <PreviewList side={side} preview={preview} book={book} curved={curved} position={position} scoreOnly={scoreOnly} />
+            </SummaryPanel>
+          }
+        />
+      ) : null}
+
+      {step === "confirm" ? (
+        <Columns
+          left={
+            <>
+              {quoteBlock}
+              <ConfirmSummary
+                side={side}
+                preview={preview}
+                book={book}
+                curved={curved}
+                personName={person.displayName}
+                spendCents={mode === "dollars" ? typedSpendCents : null}
+                toleranceCents={toleranceCents}
+              />
+            </>
+          }
+          right={
+            <div className="flex flex-col gap-5 lg:gap-3">
+              {quoteMoved && armedPriceCents !== null ? (
+                <p role="status" className="rounded-xl bg-surface-raised px-4 py-3 text-sm text-fg">
+                  The price moved while you were reviewing: <Money cents={armedPriceCents} face="text" className="text-fg-muted" /> →{" "}
+                  <Money cents={livePrice} face="text" />. The button below carries the new price.
                 </p>
               ) : null}
-              {mode === "dollars" && !composeError && preview.units > 0 ? <p className="text-sm tabular-nums text-fg-muted">{dollarsLine(side, typedSpendCents, preview, curved)}</p> : null}
+              <SummaryPanel>
+                <PreviewList side={side} preview={preview} book={book} curved={curved} position={position} scoreOnly={scoreOnly} compact />
+              </SummaryPanel>
+              <ConfirmNotes side={side} curved={curved} spendCents={mode === "dollars" ? typedSpendCents : null} toleranceCents={toleranceCents} className="hidden px-1 lg:flex" />
             </div>
+          }
+        />
+      ) : null}
 
-            <PreviewList side={side} preview={preview} book={book} curved={curved} position={position} scoreOnly={scoreOnly} />
-          </div>
-        ) : null}
-
-        {step === "confirm" ? (
-          <div className="flex flex-col gap-5">
-            <ConfirmSummary
-              side={side}
-              preview={preview}
-              book={book}
-              curved={curved}
-              personName={person.displayName}
-              spendCents={mode === "dollars" ? typedSpendCents : null}
-              toleranceCents={toleranceCents}
-            />
-
-            {quoteMoved && armedPriceCents !== null ? (
-              <p role="status" className="rounded-xl bg-surface-raised px-4 py-3 text-sm text-fg">
-                The price moved while you were reviewing: <Money cents={armedPriceCents} face="text" className="text-fg-muted" /> →{" "}
-                <Money cents={livePrice} face="text" />. The button below carries the new price.
-              </p>
-            ) : null}
-
-            <PreviewList side={side} preview={preview} book={book} curved={curved} position={position} scoreOnly={scoreOnly} compact />
-          </div>
-        ) : null}
-
-        {step === "result" && result ? (
-          result.ok ? (
-            <FilledView result={result} side={side} personName={person.displayName} scoreOnly={scoreOnly} />
-          ) : (
-            <RejectedView
-              result={result}
-              side={side}
-              shares={shares}
-              onRequote={(priceCents) => {
-                setArmedPriceCents(priceCents);
-                setResult(null);
-                setStep("confirm");
-              }}
-              onShares={(next) => {
-                setMode("shares");
-                setQuantityText(sharesText(next));
-                setResult(null);
-                setStep("compose");
-              }}
-            />
-          )
-        ) : null}
-      </div>
+      {step === "result" && result ? (
+        result.ok ? (
+          <FilledView result={result} side={side} personName={person.displayName} scoreOnly={scoreOnly} />
+        ) : (
+          <RejectedView
+            result={result}
+            side={side}
+            requoteCents={requote}
+            summary={
+              requote !== null && preview.units > 0 ? (
+                <SummaryPanel>
+                  <PreviewList side={side} preview={preview} book={book} curved={curved} position={position} scoreOnly={scoreOnly} compact />
+                </SummaryPanel>
+              ) : null
+            }
+            onShares={(next) => {
+              setMode("shares");
+              setQuantityText(sharesText(next));
+              setResult(null);
+              setStep("compose");
+            }}
+          />
+        )
+      ) : null}
     </Sheet>
   );
 }
 
 /**
+ * THE BODY'S TWO COLUMNS (Phase 29e). Below `lg` a single column in the
+ * phone's order and spacing — the left block's parts 1.5rem apart, then the
+ * right block 1.25rem under them, exactly as the sheet stacked them before.
+ * From `lg` up the right block becomes a fixed summary column beside the
+ * left; with nothing on the right, the left has the width to itself.
+ */
+function Columns({ left, right }: { left: React.ReactNode; right?: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-5 lg:grid lg:grid-cols-trade-sheet lg:items-start lg:gap-x-10">
+      <div className={cn("flex min-w-0 flex-col gap-6 lg:gap-4", !right && "lg:col-span-2")}>{left}</div>
+      {right ? <div className="min-w-0">{right}</div> : null}
+    </div>
+  );
+}
+
+/** The summary column's own panel on a wide screen; on a phone the list sits on the sheet as it always has. */
+function SummaryPanel({ children }: { children: React.ReactNode }) {
+  return <div className="lg:rounded-2xl lg:bg-surface-raised/40 lg:p-5">{children}</div>;
+}
+
+/** The footer's row: a row of actions on a phone, laid on the body's two columns from `lg` up. */
+function FooterRow({ className, children }: { className?: string; children: React.ReactNode }) {
+  return <div className={cn("flex gap-3 lg:grid lg:grid-cols-trade-sheet lg:items-center lg:gap-x-10", className)}>{children}</div>;
+}
+
+/**
  * Both quotes, always: the spread is the platform's revenue and stays visible
  * on both sides. Under them, where the market price sits relative to the
- * data, and — on a curved book — the one sentence about size.
+ * data, and — on a curved book — the one sentence about size. From `lg` up
+ * (Phase 29e) the two boxes are one short row, label and price on one line,
+ * and the order's column is wide enough for the spread note on one line (at
+ * a 1278-wide laptop window it is; on the narrowest wide window it wraps
+ * rather than overflow).
  */
 export function QuoteBlock({ side, book, marketPrice, curved, scoreOnly = false }: { side: OrderSide; book: TradeBook; marketPrice: number; curved: boolean; scoreOnly?: boolean }) {
   const market = marketLine({ premiumCents: book.premiumCents });
   return (
-    <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-2 gap-3">
+    <div className="flex flex-col gap-3 lg:gap-1.5">
+      <div className="grid grid-cols-2 gap-3 lg:mb-1.5">
         <QuoteCell label="Buy at" cents={book.buyCents} active={side === "BUY"} />
         <QuoteCell label="Sell at" cents={book.sellCents} active={side === "SELL"} />
       </div>
@@ -599,7 +736,12 @@ export function QuoteBlock({ side, book, marketPrice, curved, scoreOnly = false 
   );
 }
 
-/** The confirm step's statement of the order: what, at what, and the band the price is held to. */
+/**
+ * The confirm step's statement of the order: what, at what, and the band the
+ * price is held to. From `lg` up (Phase 29e) the two notes under it move to
+ * the summary column (ConfirmNotes), which has the room; on a phone they stay
+ * in the box, where they always were.
+ */
 export function ConfirmSummary({
   side,
   preview,
@@ -619,12 +761,21 @@ export function ConfirmSummary({
   toleranceCents: Cents;
 }) {
   return (
-    <div className="flex flex-col gap-3 rounded-2xl bg-surface-raised/60 p-5">
+    <div className="flex flex-col gap-3 rounded-2xl bg-surface-raised/60 p-5 lg:gap-2 lg:p-4">
       <p className="text-label text-fg-muted">You are about to</p>
-      <p key={preview.priceCents} className="text-xl font-semibold leading-snug tracking-tight tabular-nums text-fg animate-tick-flash">
+      <p key={preview.priceCents} className="text-xl font-semibold leading-snug tracking-tight tabular-nums text-fg animate-tick-flash lg:text-lg">
         {confirmHeadline(side, preview, personName, curved)}
       </p>
       <p className="text-base tabular-nums text-fg-secondary">{confirmBreakdown(side, preview, book, curved)}</p>
+      <ConfirmNotes side={side} curved={curved} spendCents={spendCents} toleranceCents={toleranceCents} className="lg:hidden" />
+    </div>
+  );
+}
+
+/** The confirm step's small print: the amount asked for (Dollars mode) and the tolerance band. */
+export function ConfirmNotes({ side, curved, spendCents, toleranceCents, className }: { side: OrderSide; curved: boolean; spendCents: Cents | null; toleranceCents: Cents; className?: string }) {
+  return (
+    <div className={cn("flex flex-col gap-3", className)}>
       {spendCents !== null ? (
         <p className="text-sm tabular-nums text-fg-muted">
           You asked to spend {formatCents(spendCents)}. The server resolves the quantity against the quote it reads, so the charge is never more than that.
@@ -637,9 +788,9 @@ export function ConfirmSummary({
 
 function QuoteCell({ label, cents, active }: { label: string; cents: Cents; active: boolean }) {
   return (
-    <div className={cn("flex flex-col gap-1 rounded-2xl px-4 py-3", active ? "bg-surface-raised" : "bg-surface-raised/40")}>
+    <div className={cn("flex flex-col gap-1 rounded-2xl px-4 py-3 lg:flex-row lg:items-baseline lg:justify-between lg:gap-3 lg:py-2", active ? "bg-surface-raised" : "bg-surface-raised/40")}>
       <span className="text-label text-fg-muted">{label}</span>
-      <span key={cents} className={cn("text-xl font-semibold tabular-nums tracking-tight", active ? "text-fg animate-tick-flash" : "text-fg-muted")}>
+      <span key={cents} className={cn("text-xl font-semibold tabular-nums tracking-tight lg:text-lg", active ? "text-fg animate-tick-flash" : "text-fg-muted")}>
         {formatCents(cents)}
       </span>
     </div>
@@ -753,7 +904,7 @@ export function FilledView({ result, side, personName, scoreOnly = false }: { re
   const { order, position, balanceCents, quote } = result;
   const marketAfter = quote && !scoreOnly ? marketLine({ premiumCents: quote.premiumCents }) : null;
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-5 lg:grid lg:grid-cols-trade-sheet lg:items-center lg:gap-x-10">
       <div className="flex flex-col items-center gap-3 py-2 text-center">
         <span className="flex size-12 items-center justify-center rounded-full bg-surface-inverse text-fg-inverse animate-rise-in" aria-hidden>
           <Check className="size-6" strokeWidth={2.5} />
@@ -762,7 +913,7 @@ export function FilledView({ result, side, personName, scoreOnly = false }: { re
         <p className="text-sm tabular-nums text-fg-muted">{filledDetail(side, order)}</p>
       </div>
 
-      <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-2.5 text-sm [&>dd]:text-right">
+      <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-2.5 text-sm lg:rounded-2xl lg:bg-surface-raised/40 lg:p-5 [&>dd]:text-right">
         <dt className="text-fg-muted">{side === "BUY" ? "Cost" : "Proceeds"}</dt>
         <dd>
           <Money cents={side === "BUY" ? order.costCents : order.proceedsCents} face="text" className="font-medium text-fg" />
@@ -809,55 +960,62 @@ export function FilledView({ result, side, personName, scoreOnly = false }: { re
 }
 
 /**
- * The rejection, and the ways out that need its context: a re-quote at the
- * price it names, and the smaller order the limit allows. Close and Change
- * order are in the sheet's footer (Phase 26b).
+ * The rejection, and the way out that needs its context: the smaller order
+ * the limit allows. Close and Change order are in the sheet's footer (Phase
+ * 26b), and so is a price_moved refusal's one-tap re-confirm (Phase 29e):
+ * the body says what moved, once, under one heading, and beside it (below
+ * it on a phone) the summary of the order the footer's button will send,
+ * priced on the book the refusal carried.
  */
-function RejectedView({
+export function RejectedView({
   result,
   side,
-  shares,
-  onRequote,
+  requoteCents,
+  summary,
   onShares,
 }: {
   result: Extract<OrderResult, { ok: false }>;
   side: OrderSide;
-  shares: number;
-  onRequote: (priceCents: Cents) => void;
+  /** price_moved: the server's new average, which the footer's button sends. */
+  requoteCents: Cents | null;
+  summary: React.ReactNode;
   onShares: (shares: number) => void;
 }) {
-  const newPrice = typeof result.extra.fill_price_cents === "number" ? (result.extra.fill_price_cents as Cents) : result.quote ? (side === "BUY" ? result.quote.buyCents : result.quote.sellCents) : null;
   // max_units comes back in the server's scale; the sentence is in shares.
   const maxShares = typeof result.extra.max_units === "number" ? result.extra.max_units / UNITS_PER_SHARE : null;
   const haltedUntil = typeof result.extra.halted_until === "string" && Number.isFinite(Date.parse(result.extra.halted_until)) ? Date.parse(result.extra.halted_until) : null;
+  const quotedCents = typeof result.extra.quoted_price_cents === "number" ? cents(result.extra.quoted_price_cents) : null;
+  const priceMoved = result.code === "price_moved" && requoteCents !== null && quotedCents !== null;
+
+  const message = (
+    <div className="flex flex-col gap-2 rounded-2xl bg-surface-raised/60 p-5">
+      <p className="text-lg font-semibold tracking-tight text-fg">{REJECTION_TITLES[result.code]}</p>
+      {priceMoved ? (
+        <p className="text-sm leading-relaxed tabular-nums text-fg-secondary">{priceMovedBody(side, requoteCents, quotedCents)}</p>
+      ) : (
+        <>
+          <p className="text-sm leading-relaxed text-fg-secondary">{result.message}</p>
+          {haltedUntil !== null ? <p className="text-sm tabular-nums text-fg-muted">Trading resumes at {clock.format(haltedUntil)}.</p> : null}
+          <p className="text-xs text-fg-faint">Nothing was placed.</p>
+        </>
+      )}
+    </div>
+  );
 
   return (
-    <div className="flex flex-col gap-5">
-      <div className="flex flex-col gap-2 rounded-2xl bg-surface-raised/60 p-5">
-        <p className="text-lg font-semibold tracking-tight text-fg">{REJECTION_TITLES[result.code]}</p>
-        <p className="text-sm leading-relaxed text-fg-secondary">{result.message}</p>
-        {haltedUntil !== null ? <p className="text-sm tabular-nums text-fg-muted">Trading resumes at {clock.format(haltedUntil)}.</p> : null}
-        <p className="text-xs text-fg-faint">Nothing was placed.</p>
-      </div>
-
-      {result.code === "price_moved" && newPrice !== null ? (
-        <div className="flex flex-col gap-3">
-          <div className="flex items-baseline justify-between rounded-xl bg-surface-raised px-4 py-3">
-            <span className="text-sm text-fg-muted">New {side === "BUY" ? "Buy" : "Sell"} average</span>
-            <span className="text-lg font-semibold tabular-nums text-fg">{formatCents(newPrice)}</span>
-          </div>
-          <Button variant={side === "BUY" ? "buy" : "sell"} size="lg" className="w-full" onClick={() => onRequote(newPrice)}>
-            Review at {formatCents(newPrice)} · {sharesLabel(shares)}
-          </Button>
+    <Columns
+      left={
+        <div className="flex flex-col gap-5">
+          {message}
+          {SIZED_DOWN_CODES.has(result.code) && maxShares !== null && maxShares > 0 ? (
+            <Button variant="outline" size="lg" className="w-full" onClick={() => onShares(maxShares)}>
+              {verb(side)} {sharesLabel(maxShares)} instead
+            </Button>
+          ) : null}
         </div>
-      ) : null}
-
-      {SIZED_DOWN_CODES.has(result.code) && maxShares !== null && maxShares > 0 ? (
-        <Button variant="outline" size="lg" className="w-full" onClick={() => onShares(maxShares)}>
-          {verb(side)} {sharesLabel(maxShares)} instead
-        </Button>
-      ) : null}
-    </div>
+      }
+      right={priceMoved ? summary : null}
+    />
   );
 }
 

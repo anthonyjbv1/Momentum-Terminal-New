@@ -3,8 +3,10 @@
 import { useCallback, useRef, useState } from "react";
 
 import { useTickPolling } from "@/components/engine/use-tick-polling";
-import { LIVE_TICK_MS, foldTicksIntoRanges, latestTickAt, type LiveTick } from "@/lib/person/live-series";
-import type { ProfilePerson, SeriesByRange, TradingMode } from "@/lib/person/profile-model";
+import { LIVE_TICK_MS, latestTickAt } from "@/lib/person/live-series";
+import { applyTradeQuote, mergeLiveResponse, type LiveResponse, type LiveState } from "@/lib/person/live-state";
+import type { ProfilePerson, SeriesByRange } from "@/lib/person/profile-model";
+import type { TradeQuote } from "@/lib/trading/model";
 
 /**
  * Keeps a person's score, market price and series current on the Engine's
@@ -19,45 +21,17 @@ import type { ProfilePerson, SeriesByRange, TradingMode } from "@/lib/person/pro
  * THE MARKET STATE (Phase 29) rides along: the premium, the market price,
  * the dealer's inventory, the trading mode and any halt. The premium can
  * move between ticks (an order moved it) and at a tick (decay), so a poll
- * that brings no new tick but a new premium still updates the quotes.
+ * that brings no new tick but a new book still updates the quotes.
+ *
+ * AN ORDER'S OWN QUOTE (Phase 29e). `applyQuote` puts the book place_order()
+ * returned — with a fill or a refusal — straight into the state, and
+ * `refresh` asks for the live book now rather than at the next tick (the
+ * trade sheet does both). lib/person/live-state.ts has the rule for which of
+ * a poll and a quote is newer.
  */
 
 export { LIVE_POLL_DELAY_MS, LIVE_RETRY_DELAY_MS } from "@/components/engine/use-tick-polling";
-
-export interface LiveState {
-  series: SeriesByRange;
-  score: number;
-  lastTickAt: string | null;
-  buyPrice: number | null;
-  sellPrice: number | null;
-  spread: number;
-  /** The premium in cents per share, and the market price in points (score + premium). */
-  premiumCents: number;
-  marketPrice: number;
-  inventoryUnits: number;
-  tradingMode: TradingMode;
-  haltedUntil: string | null;
-  haltReason: string | null;
-  /** Increments whenever new ticks arrive. */
-  version: number;
-  /** When the state last changed, for relative ages. */
-  updatedAt: number | null;
-}
-
-interface LiveResponse {
-  score: number;
-  lastTickAt: string | null;
-  buyPrice: number | null;
-  sellPrice: number | null;
-  spread: number;
-  premiumCents: number;
-  marketPrice: number;
-  inventoryUnits: number;
-  tradingMode: string;
-  haltedUntil: string | null;
-  haltReason: string | null;
-  ticks: LiveTick[];
-}
+export type { LiveState } from "@/lib/person/live-state";
 
 export interface LiveSeriesOptions {
   /** Defaults to /api/person/[slug]/live. */
@@ -68,11 +42,15 @@ export interface LiveSeriesOptions {
   enabled?: boolean;
 }
 
-function toTradingMode(value: unknown, fallback: TradingMode): TradingMode {
-  return value === "display_only" || value === "paused" || value === "tradeable" ? value : fallback;
+export interface LiveSeries {
+  state: LiveState;
+  /** An order's quote, from a fill or a refusal: the book as the server read it. */
+  applyQuote: (quote: TradeQuote) => void;
+  /** Read the live book now. A poll already in flight is followed by one more. */
+  refresh: () => void;
 }
 
-export function useLiveSeries(person: ProfilePerson, initial: SeriesByRange, options: LiveSeriesOptions = {}): LiveState {
+export function useLiveSeries(person: ProfilePerson, initial: SeriesByRange, options: LiveSeriesOptions = {}): LiveSeries {
   const endpoint = options.endpoint ?? `/api/person/${person.slug}/live`;
   const cadenceMs = options.cadenceMs ?? LIVE_TICK_MS;
   const enabled = options.enabled ?? true;
@@ -95,54 +73,58 @@ export function useLiveSeries(person: ProfilePerson, initial: SeriesByRange, opt
   }));
   const cursor = useRef<string | null>(latestTickAt(initial));
   const inFlight = useRef(false);
+  const again = useRef(false);
+  // One sequence for polls sent and quotes applied: a poll numbered below
+  // the latest applied quote may have read the market before that order.
+  const sequence = useRef(0);
+  const quoteSequence = useRef(0);
 
-  const poll = useCallback(async (): Promise<boolean> => {
-    if (inFlight.current || typeof document === "undefined" || document.visibilityState === "hidden") return false;
-    inFlight.current = true;
-    try {
-      const url = new URL(endpoint, window.location.origin);
-      if (cursor.current) url.searchParams.set("after", cursor.current);
-      const response = await fetch(url.toString(), { cache: "no-store", credentials: "same-origin" });
-      if (!response.ok) return false;
-      const body = (await response.json()) as Partial<LiveResponse>;
-      const ticks = Array.isArray(body.ticks) ? body.ticks : [];
-      const score = typeof body.score === "number" && Number.isFinite(body.score) ? body.score : null;
-      const premium = typeof body.premiumCents === "number" && Number.isFinite(body.premiumCents) ? Math.trunc(body.premiumCents) : null;
-      const haltedUntil = typeof body.haltedUntil === "string" ? body.haltedUntil : body.haltedUntil === null ? null : undefined;
-      if (ticks.length > 0) cursor.current = ticks[ticks.length - 1].at;
-
-      setState((previous) => {
-        const scoreChanged = score !== null && score !== previous.score;
-        const premiumChanged = premium !== null && premium !== previous.premiumCents;
-        const modeChanged = (body.tradingMode !== undefined && toTradingMode(body.tradingMode, previous.tradingMode) !== previous.tradingMode) || (haltedUntil !== undefined && haltedUntil !== previous.haltedUntil);
-        if (ticks.length === 0 && !scoreChanged && !premiumChanged && !modeChanged) return previous;
-        const now = Date.now();
-        return {
-          series: ticks.length > 0 ? foldTicksIntoRanges(previous.series, ticks, now) : previous.series,
-          score: score ?? previous.score,
-          lastTickAt: body.lastTickAt ?? previous.lastTickAt,
-          buyPrice: typeof body.buyPrice === "number" ? body.buyPrice : previous.buyPrice,
-          sellPrice: typeof body.sellPrice === "number" ? body.sellPrice : previous.sellPrice,
-          spread: typeof body.spread === "number" ? body.spread : previous.spread,
-          premiumCents: premium ?? previous.premiumCents,
-          marketPrice: typeof body.marketPrice === "number" && Number.isFinite(body.marketPrice) ? body.marketPrice : previous.marketPrice,
-          inventoryUnits: typeof body.inventoryUnits === "number" && Number.isFinite(body.inventoryUnits) ? Math.trunc(body.inventoryUnits) : previous.inventoryUnits,
-          tradingMode: toTradingMode(body.tradingMode, previous.tradingMode),
-          haltedUntil: haltedUntil === undefined ? previous.haltedUntil : haltedUntil,
-          haltReason: haltedUntil === undefined ? previous.haltReason : typeof body.haltReason === "string" ? body.haltReason : null,
-          version: previous.version + (ticks.length > 0 ? 1 : 0),
-          updatedAt: now,
-        };
-      });
-      return ticks.length > 0;
-    } catch {
-      return false;
-    } finally {
-      inFlight.current = false;
-    }
+  const poll = useCallback((): Promise<boolean> => {
+    const run = async (): Promise<boolean> => {
+      if (inFlight.current || typeof document === "undefined" || document.visibilityState === "hidden") return false;
+      inFlight.current = true;
+      sequence.current += 1;
+      const sent = sequence.current;
+      try {
+        const url = new URL(endpoint, window.location.origin);
+        if (cursor.current) url.searchParams.set("after", cursor.current);
+        const response = await fetch(url.toString(), { cache: "no-store", credentials: "same-origin" });
+        if (!response.ok) return false;
+        const body = (await response.json()) as Partial<LiveResponse>;
+        const ticks = Array.isArray(body.ticks) ? body.ticks : [];
+        if (ticks.length > 0) cursor.current = ticks[ticks.length - 1].at;
+        const bookIsCurrent = sent > quoteSequence.current;
+        setState((previous) => mergeLiveResponse(previous, body, { now: Date.now(), bookIsCurrent }));
+        return ticks.length > 0;
+      } catch {
+        return false;
+      } finally {
+        inFlight.current = false;
+        if (again.current) {
+          again.current = false;
+          void run();
+        }
+      }
+    };
+    return run();
   }, [endpoint]);
 
   useTickPolling(poll, { cadenceMs, enabled });
 
-  return state;
+  const applyQuote = useCallback((quote: TradeQuote) => {
+    sequence.current += 1;
+    quoteSequence.current = sequence.current;
+    setState((previous) => applyTradeQuote(previous, quote, Date.now()));
+  }, []);
+
+  const refresh = useCallback(() => {
+    if (!enabled) return;
+    if (inFlight.current) {
+      again.current = true;
+      return;
+    }
+    void poll();
+  }, [enabled, poll]);
+
+  return { state, applyQuote, refresh };
 }

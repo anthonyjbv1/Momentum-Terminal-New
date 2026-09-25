@@ -139,6 +139,18 @@
   max-height: calc(100% - 2 * var(--spacing-dialog-gap));
 }
 
+/* The wide dialog's width limit (Phase 29e): its own maximum, or the window
+   less the dialog gap each side, whichever is smaller. */
+@utility max-w-dialog-wide {
+  max-width: min(var(--spacing-dialog-wide-limit), 100% - 2 * var(--spacing-dialog-gap));
+}
+
+/* The trade sheet's two columns on a wide screen (Phase 29e): the order on
+   the left, taking what is left, and its summary in a fixed column beside it. */
+@utility grid-cols-trade-sheet {
+  grid-template-columns: minmax(0, 1fr) min(var(--spacing-trade-summary), 38%);
+}
+
 /* Lets a CSS transform on an SVG element scale about its own centre rather
    than the SVG's origin (the chart's pulsing dot). */
 @utility transform-fill-box {

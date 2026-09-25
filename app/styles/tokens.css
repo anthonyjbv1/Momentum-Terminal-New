@@ -137,8 +137,20 @@
   /* The desktop dialog's gap to the area under the banner, above it and (at
      most) below it: 5rem on a tall window, less on a short one. The dialog's
      height limit is derived from the same value (max-h-dialog), so a dialog
-     at its limit always ends inside the window. */
-  --spacing-dialog-gap: clamp(1.5rem, 10dvh, 5rem);
+     at its limit always ends inside the window. Phase 29e took 1.5rem off the
+     middle term: on a 604px-tall laptop window the gap was 60px above and
+     below, two rows of the trade sheet spent on empty backdrop. */
+  --spacing-dialog-gap: clamp(1rem, 10dvh - 1.5rem, 5rem);
+  /* The wide dialog (the trade sheet from lg up, Phase 29e): at most this
+     wide, and never closer to the window's sides than the dialog gap. Named
+     -limit so it cannot become Tailwind's own max-w-dialog-wide, which would
+     be this width alone and override the utility in globals.css. */
+  --spacing-dialog-wide-limit: 72rem;
+  /* The trade sheet's summary column on a wide screen (Phase 29e): the
+     average, last share, cost, balance and position after, beside the order.
+     At most this, and at most 38% of the row on a narrower window, so the
+     order's own column keeps the room for its field. */
+  --spacing-trade-summary: 24rem;
 
   /* ---------------------------------------------------------------------------
      Shape. Tight, intentional: felt but not attention-grabbing.

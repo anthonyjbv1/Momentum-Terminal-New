@@ -50,3 +50,29 @@ describe("the Sheet's desktop geometry", () => {
     expect(classes).toEqual(expect.arrayContaining(["inset-x-0", "bottom-0", "max-h-full"]));
   });
 });
+
+describe("the wide dialog (Phase 29e)", () => {
+  const source = read("components/ui/sheet.tsx");
+
+  it("is the md dialog below lg: every class the wide variant adds is an lg: class", () => {
+    const sizeLine = source.split("\n").find((line) => line.includes('size === "wide" ?'));
+    expect(sizeLine).toBeDefined();
+    const wideSize = sizeLine?.match(/size === "wide" \? "([^"]*)"/)?.[1].split(/\s+/) ?? [];
+    expect(wideSize).toEqual(["sm:max-w-lg", "lg:max-w-dialog-wide"]);
+    const added = [...source.matchAll(/wide && "([^"]*)"/g)].flatMap((match) => match[1].split(/\s+/));
+    expect(added.length).toBeGreaterThan(0);
+    for (const name of added) expect(name.startsWith("lg:"), name).toBe(true);
+  });
+
+  it("is never wider than the window less the dialog gap either side, and the limit is not Tailwind's own", () => {
+    const css = read("app/globals.css");
+    const utility = css.match(/@utility max-w-dialog-wide \{([^}]*)\}/);
+    expect(utility?.[1].replace(/\s+/g, " ").trim()).toBe("max-width: min(var(--spacing-dialog-wide-limit), 100% - 2 * var(--spacing-dialog-gap));");
+    // A spacing token named dialog-wide would generate Tailwind's own max-w-dialog-wide (the width alone) and override this one.
+    expect(read("app/styles/tokens.css")).not.toMatch(/--spacing-dialog-wide:/);
+  });
+
+  it("the trade sheet is the one wide dialog", () => {
+    expect(read("components/trade/trade-sheet.tsx")).toContain('size="wide"');
+  });
+});

@@ -86,6 +86,21 @@ export const PREVIEW_LABELS = {
   balanceAfter: "Paper balance after",
 } as const;
 
+/**
+ * THE PRICE MOVED (Phase 29e): the refusal's one sentence, under the heading
+ * "The price moved" (which it does not repeat). Both figures are the
+ * server's — the average it would fill at now, and the one the sheet sent —
+ * so the reader sees exactly what changed.
+ */
+export function priceMovedBody(side: OrderSide, fillCents: Cents, quotedCents: Cents): string {
+  return `${verb(side)} now fills at an average of ${formatCents(fillCents)} a share, not ${formatCents(quotedCents)}. Nothing was placed.`;
+}
+
+/** The refusal's one action: the same order at the server's new average, confirmed in one tap. */
+export function requoteLabel(side: OrderSide, fillCents: Cents): string {
+  return `${verb(side)} at ${formatCents(fillCents)}`;
+}
+
 /** After a fill: the headline, in the server's numbers. */
 export function filledHeadline(side: OrderSide, order: Pick<FilledOrder, "units" | "fillPriceCents" | "worstFillCents">, personName: string): string {
   const walked = order.worstFillCents !== order.fillPriceCents;

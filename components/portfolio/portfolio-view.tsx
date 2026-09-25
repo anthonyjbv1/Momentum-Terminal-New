@@ -149,6 +149,9 @@ export function PortfolioView({ initialSummary, initialSeries, initialHistory, r
           surface={PORTFOLIO_SURFACE}
           onClose={() => setClosing(null)}
           onFilled={onFilled}
+          // A refusal carries the book as the server read it; the sheet prices on it at once,
+          // and the summary is asked for again so the row behind the sheet agrees (Phase 29e).
+          onQuote={() => void refresh()}
         />
       ) : null}
     </div>

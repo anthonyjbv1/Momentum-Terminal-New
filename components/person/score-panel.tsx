@@ -177,7 +177,7 @@ function AvailabilityNotice({ availability, personName }: { availability: Tradin
 export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnabled, viewer: initialViewer, toleranceCents, minOrderCents, live, className }: ScorePanelProps) {
   const { person, series: initialSeries, latestTick } = profile;
   const router = useRouter();
-  const state = useLiveSeries(person, initialSeries, live);
+  const { state, applyQuote, refresh } = useLiveSeries(person, initialSeries, live);
   const series = state.series;
   const now = useNow(renderedAt);
 
@@ -232,14 +232,29 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnable
     logProfileEvent(loggingEnabled, { eventType: "change_range", personId: person.id, metadata: { range: next, surface: PROFILE_SURFACE } });
   };
 
+  // THE BOOK AFTER AN ORDER (Phase 29e). The fill's quote is the market as
+  // the order left it: applied at once, the next preview is priced on it
+  // rather than on the book from before the order, which is what refused
+  // every back-to-back order at MrBeast's demo depth.
   const onFilled = useCallback(
     (result: Extract<OrderResult, { ok: true }>) => {
       setBalanceCents(result.balanceCents);
       setPosition(result.position);
+      if (result.quote) applyQuote(result.quote);
       // The banner's balance chip is a Server Component: ask the server for a fresh one.
       router.refresh();
     },
-    [router],
+    [applyQuote, router],
+  );
+
+  // Opening the sheet reads the live book now, not at the next tick: another
+  // trader's order, or the decay since the last poll, is in the first preview.
+  const openSheet = useCallback(
+    (side: OrderSide) => {
+      setSheet(side);
+      refresh();
+    },
+    [refresh],
   );
 
   return (
@@ -284,7 +299,7 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnable
             viewer={viewer}
             availability={availability}
             now={now}
-            onTrade={setSheet}
+            onTrade={openSheet}
             className="hidden md:flex"
           />
         </div>
@@ -312,7 +327,7 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnable
 
       {/* The bar is fixed above the tab bar; while the sheet is up it would sit over the sheet, so it steps aside. */}
       {sheet === null ? (
-        <TradeBar person={person} shortingEnabled={shortingEnabled} buyCents={quote.buyCents} sellCents={quote.sellCents} viewer={viewer} availability={availability} now={now} onTrade={setSheet} />
+        <TradeBar person={person} shortingEnabled={shortingEnabled} buyCents={quote.buyCents} sellCents={quote.sellCents} viewer={viewer} availability={availability} now={now} onTrade={openSheet} />
       ) : null}
 
       {viewer.signedIn && sheet !== null ? (
@@ -334,6 +349,7 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnable
           surface={PROFILE_SURFACE}
           onClose={() => setSheet(null)}
           onFilled={onFilled}
+          onQuote={applyQuote}
         />
       ) : null}
     </section>

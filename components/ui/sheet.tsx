@@ -123,6 +123,13 @@ import { Button } from "./button";
  * Phones never used it: there the panel is a bottom sheet with `max-h-full`
  * and no top offset.
  *
+ * THE WIDE DIALOG (Phase 29e). `size="wide"` is the trade sheet's: from
+ * `lg` up the panel is wide enough for two columns (the order beside its
+ * summary), and the title block tightens — the description on the title's
+ * line, less padding above and below — because on a short laptop window
+ * (1278×604) every row of chrome is a row of the order scrolled out of view.
+ * Below `lg` it is the `md` dialog and the bottom sheet, unchanged.
+ *
  * HYDRATION (Phase 29b). The portal needs `document`, which the server does
  * not have: a sheet open on the first render rendered nothing on the server
  * and a dialog on the client — a hydration error, the Next.js "1 Issue"
@@ -141,7 +148,8 @@ export interface SheetProps {
    * scrolled. Anything that needs the body's context belongs in `children`.
    */
   footer?: ReactNode;
-  size?: "md" | "lg";
+  /** `wide`: the `md` dialog, and from `lg` up a two-column dialog with a tighter title block. */
+  size?: "md" | "lg" | "wide";
   className?: string;
 }
 
@@ -294,6 +302,7 @@ export function Sheet({ open, onClose, title, description, children, footer, siz
   }, [open, mounted]);
 
   if (!open || !mounted) return null;
+  const wide = size === "wide";
 
   // Every press inside the overlay records where it began, so a click that
   // arrives on the backdrop from a press that began on the sheet is known.
@@ -345,13 +354,13 @@ export function Sheet({ open, onClose, title, description, children, footer, siz
           "inset-x-0 bottom-0 rounded-t-3xl pb-safe md:pb-0 animate-slide-up",
           // desktop: centred dialog, a gap below the banner and at most the same gap above the window's bottom edge
           "sm:inset-auto sm:left-1/2 sm:top-dialog-gap sm:max-h-dialog sm:w-full sm:-translate-x-1/2 sm:rounded-3xl sm:animate-rise-in",
-          size === "lg" ? "sm:max-w-2xl" : "sm:max-w-lg",
+          size === "lg" ? "sm:max-w-2xl" : size === "wide" ? "sm:max-w-lg lg:max-w-dialog-wide" : "sm:max-w-lg",
           className,
         )}
       >
         <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain [&_input]:touch-manipulation">
-          <div className="sticky top-0 z-10 flex items-start justify-between gap-4 bg-surface-overlay px-6 pb-5 pt-6 sm:px-8 sm:pt-8">
-            <div className="flex flex-col gap-1.5">
+          <div className={cn("sticky top-0 z-10 flex items-start justify-between gap-4 bg-surface-overlay px-6 pb-5 pt-6 sm:px-8 sm:pt-8", wide && "lg:items-center lg:pb-4 lg:pt-6")}>
+            <div className={cn("flex flex-col gap-1.5", wide && "lg:flex-row lg:items-baseline lg:gap-3")}>
               <h2 id={titleId} className="text-2xl font-semibold tracking-tight text-fg">
                 {title}
               </h2>
@@ -361,11 +370,11 @@ export function Sheet({ open, onClose, title, description, children, footer, siz
                 </p>
               ) : null}
             </div>
-            <Button variant="outline" size="icon" onClick={onClose} aria-label="Close" className="-mr-2 -mt-2 size-10">
+            <Button variant="outline" size="icon" onClick={onClose} aria-label="Close" className={cn("-mr-2 -mt-2 size-10", wide && "lg:mt-0")}>
               <X />
             </Button>
           </div>
-          <div className="px-6 pb-6 sm:px-8 sm:pb-8">{children}</div>
+          <div className={cn("px-6 pb-6 sm:px-8 sm:pb-8", wide && "lg:pb-6")}>{children}</div>
         </div>
         {footer ? (
           // shrink-0 against the panel's bottom edge: pinned by the column,

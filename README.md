@@ -3106,6 +3106,33 @@ select sp.started_at, p.slug, sp.detail->'insider_filings' as insider
 
 The Phase 29 down file still takes the schema back through 29b exactly. The 29d migrations sit after it and are its own concern: `phase29-down.db.test.ts` now builds the database through 29b and no further.
 
+### Phase 29e: the "price moved" loop, and the trade sheet on a wide screen
+
+**The loop.** On MrBeast's demo depth (20 shares a point), a 4-share buy followed at once by another was refused "The price moved" every time, and "Change order" led back to the same refusal. The cause, confirmed before the fix:
+- **The page kept the book from before the fill** (the main cause). A fill updated the balance and the position, but not the premium and inventory the sheet prices on, until the next poll, up to 30 seconds later. The live hook also dropped a poll whose only change was the inventory. At this depth one 4-share order moves the average 20¢, twice the 10¢ tolerance, so the next order was priced 20¢ short. Production's orders show it: each 4-share buy's average is 20¢ above the last.
+- **The refusal's way out re-sent the stale price.** "Review at $X" went to the confirm step, which still priced on the unchanged book and sent the old average. It even showed the move backwards. "Change order" reopened compose on the same book.
+- **Decay between review and confirm is not the cause.** One tick of decay moves a 4-share average by about a cent at most, even at the premium cap, and the confirm step already re-arms when a poll moves the book.
+- **The re-quote button sat in the scrolling body,** under the pinned footer on a short window.
+
+The fix:
+- **Every answer from `place_order()` carries the book as the server read it** (after the order on a fill, before it on a refusal), and that book is applied at once. `ScorePanel` applies a fill's quote (`onFilled`) and a refusal's (the new `onQuote` prop). The sheet also prices on a refusal's book itself until the page's book moves past it, which is how the portfolio's sheet gets it too (it re-reads its summary as well).
+- **The page reads the live book when the sheet opens,** and a poll that changes only the inventory now moves it. `lib/person/live-state.ts` has the merge.
+- **A stale poll cannot undo an applied quote.** Polls and applied quotes share one sequence, so a poll sent before a quote was applied still brings its ticks but not its book.
+- **A price_moved refusal has one action, in the pinned footer: "Buy at $70.41".** That is the server's own new average (`extra.fill_price_cents`), sent with the same order in one tap. Beside it is "Change order", which goes back to compose on the fresh book. The body says "The price moved" once, then "Buy now fills at an average of $70.41 a share, not $70.21. Nothing was placed." (`priceMovedBody` in `lib/trading/sheet-copy.ts`), with the summary of the order the tap will send.
+
+The tests:
+- `lib/trading/back-to-back.db.test.ts` runs on real Postgres at depth 20 through the page's own functions. It reproduces the loop, then shows five back-to-back buys and five back-to-back sells each filling at exactly the average previewed. It covers a refusal followed by a one-tap re-confirm (Shares and Dollars), decay between review and confirm (mid-book and at the cap, inside the tolerance), and a stale poll not putting the old inventory back.
+- `lib/person/live-state.test.ts` holds the merge rules.
+- `components/trade/price-moved.test.ts` holds the words and where the action lives.
+
+**The sheet on a wide screen (≥1024px).** It had been a phone layout in a 512px dialog. At 1278×604 its body overflowed by 306–391px, measured on the committed code.
+- **Two columns.** From `lg` up the order is on the left: the quotes in one short row, the market line, the spread note, Shares|Dollars beside the field, and the chips. The summary is on the right: average, last share, cost, balance after, position after. On the confirm step the two notes move under the summary too.
+- **The footer spans both columns,** with the primary action under the summary.
+- **The dialog is `Sheet size="wide"`.** It is at most 72rem wide, and never closer to the window's sides than the dialog gap.
+- **The dialog gap got smaller** on short windows. `--spacing-dialog-gap` is now `clamp(1rem, 10dvh - 1.5rem, 5rem)`, 36px on a 604px-tall window where it was 60px.
+
+Measured at 1278×604 (Buy and Sell, Dollars and 4 shares): compose, confirm, refused and filled all fit with no scrolling, and the spread note is on one line. The layout was also checked from 1024×768 to 1920×1080. The one exception is 1024×600, where the Sell steps scroll by 17px with the footer still pinned. Below `lg` nothing changed: the 375px screenshots of compose and confirm, Buy and Sell, are byte-identical before and after. `components/ui/sheet.test.ts` holds that the wide variant adds only `lg:` classes. It also holds that the width limit is not Tailwind's own `max-w-*` for a spacing token of the same name, the collision that first made the dialog run edge to edge at 1024.
+
 ### Reversing Phase 29
 
 Three ways back, in the order to reach for them.
@@ -3126,6 +3153,7 @@ Three ways back, in the order to reach for them.
 
 ## Scope so far
 
+- **Phase 29e**: back-to-back orders at MrBeast's demo depth no longer refuse themselves. Every fill and refusal hands the page the book the server read, the sheet reads the live book as it opens, and a "price moved" refusal offers one action in the pinned footer, "Buy at $X", the server's own average, in one tap. On a wide screen the trade sheet is two columns under one footer and fits a 1278×604 window with no scrolling. The phone layout is unchanged to the pixel.
 - **Phase 29d**: the explainer made true — Market Mood "the tide across everyone we track", Conviction as the code does it (it tightens the spread), a round trip "the spread, plus at most a cent of rounding" with the bound pinned by a test, its own link preview and the arithmetic behind a toggle; a person's own market settings on their profile (MrBeast's depth now); signals unique per source, person and key, so Page and Brin both keep the GOOGL series and a shared article, filing or game reaches everyone it concerns; and every Finnhub insider line accounted for on the poll row.
 - **Phase 29c**: the chart's legend says "in line with the data" while the market price sits within a cent of the score across the window; "baseline" for the revert target everywhere a reader sees it; the five forces in two groups, "Moving the score" and "Moving the market", with Trading Activity read as the hour's split and volume and Conviction described as what the code does with it — it tightens the spread — and every claim held to the code by a test; the forecast sentence in the sentence face; and a temporary depth demo on MrBeast (20 shares per point).
 - **Phase 29b**: post-ship fixes — flat a named mode, never a NULL depth (confirmed on production: all fifteen tradeable people resolve to their tier's depth); the portfolio's close sheet walking the curve like the profile's; the landing's "why it moved" limited to the forces that move the score; every price sentence in the sheet held to its figures by a test; the sheet's keystroke bug (every keystroke re-ran its setup) and the iOS keyboard handling; three hydration mismatches; display-only as score only; an opaque trade bar with the page reserving its height; the copy tidy; and a down file that takes Phase 29 back to Phase 28 exactly, with the whole restore path in the README.
