@@ -5,7 +5,9 @@ import { makePerson, makeSource } from "@/lib/__tests__/fixtures";
 import {
   COMPANY_NEWS_VOLUME_METRIC,
   DAILY_CLOSE_METRIC,
+  INSIDER_DETAIL_KEY,
   PRICE_DERIVED_METRICS,
+  accountInsiderFilings,
   countArticles,
   finnhubConnector,
   insiderSignal,
@@ -63,6 +65,7 @@ const context = (
 ) => {
   const recorded: Array<{ metricKey: string; value: number }> = [];
   const notes: string[] = [];
+  const details: Record<string, unknown> = {};
   return {
     source: makeSource({ name: "finnhub", tier: 1 }),
     config: (options.config ?? {}) as Record<string, never>,
@@ -77,8 +80,12 @@ const context = (
     now: NOW,
     fetch,
     note: (message: string) => void notes.push(message),
+    detail: (key: string, value: unknown) => {
+      details[key] = value;
+    },
     recorded,
     notes,
+    details,
   };
 };
 
@@ -327,5 +334,70 @@ describe("finnhubConnector", () => {
 
   it("refuses an empty ticker", async () => {
     await expect(finnhubConnector.fetchMetrics?.(musk, "  ", context(finnhubFetch()))).rejects.toThrow(/No ticker configured for elon-musk/);
+  });
+});
+
+describe("every insider line, accounted for (Phase 29d)", () => {
+  const saved = process.env.FINNHUB_API_KEY;
+  beforeEach(() => {
+    process.env.FINNHUB_API_KEY = "test-key";
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env.FINNHUB_API_KEY;
+    else process.env.FINNHUB_API_KEY = saved;
+  });
+
+  it("counts what came back, names the other insiders, and gives each of the person's own lines an outcome and a reason", () => {
+    const account = accountInsiderFilings(
+      [
+        line(),
+        line({ name: "Taneja Vaibhav", change: -9_000 }),
+        line({ name: "Kirkhorn Zachary", change: -1_000 }),
+        line({ transactionCode: "A", change: 250_000 }),
+        line({ transactionCode: "M", change: 10_000 }),
+        line({ change: 0 }),
+        line({ filingDate: undefined, transactionDate: undefined }),
+        line({ transactionCode: "P", change: 100, filingDate: "2026-09-10" }),
+        line({ transactionCode: "P", change: -100, filingDate: "2026-09-10" }),
+      ],
+      ["Musk Elon"],
+      ["P", "S"],
+    );
+    expect(account.fetched).toBe(9);
+    expect(account.otherInsiderRows).toBe(2);
+    expect(account.otherInsiders).toEqual(["Kirkhorn Zachary", "Taneja Vaibhav"]);
+    expect(account.rows.map((row) => [row.code, row.outcome, row.reason])).toEqual([
+      ["S", "kept", null],
+      ["A", "dropped", "code_not_scored"],
+      ["M", "dropped", "code_not_scored"],
+      ["S", "dropped", "no_share_change"],
+      ["S", "dropped", "no_filing_date"],
+      ["P", "dropped", "net_zero"],
+      ["P", "dropped", "net_zero"],
+    ]);
+    expect(account.filings).toHaveLength(1);
+    // The old reader is the account's filings, unchanged.
+    expect(readInsiderFilings([line(), line({ transactionCode: "A" })], ["Musk Elon"], ["P", "S"])).toEqual(account.filings);
+  });
+
+  it("writes the account onto the poll through context.detail, with no price anywhere in it", async () => {
+    const fetch = finnhubFetch({ insiders: [line(), line({ name: "Taneja Vaibhav", change: -9_000 }), line({ transactionCode: "A", change: 250_000 })] });
+    const ctx = context(fetch);
+    const events = await finnhubConnector.fetchForPerson(musk, SYMBOL, ctx);
+    expect(events).toHaveLength(1);
+    const detail = ctx.details[INSIDER_DETAIL_KEY] as Record<string, unknown>;
+    expect(detail).toMatchObject({ symbol: SYMBOL, from: "2026-08-04", to: "2026-09-18", fetched: 3, other_insider_rows: 1, other_insiders: ["Taneja Vaibhav"], filings_kept: 1 });
+    expect(detail.rows).toEqual([
+      { insider: "Musk Elon", filed: "2026-09-16", code: "S", shares: -500_000, outcome: "kept", reason: null },
+      { insider: "Musk Elon", filed: "2026-09-16", code: "A", shares: 250_000, outcome: "dropped", reason: "code_not_scored" },
+    ]);
+    expect(JSON.stringify(detail)).not.toContain(String(TRANSACTION_PRICE));
+    expect(JSON.stringify(detail)).not.toMatch(/price/i);
+  });
+
+  it("says why there is nothing when the mapping names no insider", async () => {
+    const ctx = context(finnhubFetch(), { personConfig: {} });
+    await finnhubConnector.fetchForPerson(musk, SYMBOL, ctx);
+    expect(ctx.details[INSIDER_DETAIL_KEY]).toEqual({ symbol: SYMBOL, fetched: null, reason: "no_insider_names" });
   });
 });

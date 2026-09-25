@@ -1903,6 +1903,7 @@ export type Database = {
           blocked_dropped: number
           created_at: string
           data_source_id: string
+          detail: Json | null
           duplicates_collapsed: number
           excluded_filtered: number
           finished_at: string
@@ -1921,6 +1922,7 @@ export type Database = {
           blocked_dropped?: number
           created_at?: string
           data_source_id: string
+          detail?: Json | null
           duplicates_collapsed?: number
           excluded_filtered?: number
           finished_at: string
@@ -1939,6 +1941,7 @@ export type Database = {
           blocked_dropped?: number
           created_at?: string
           data_source_id?: string
+          detail?: Json | null
           duplicates_collapsed?: number
           excluded_filtered?: number
           finished_at?: string

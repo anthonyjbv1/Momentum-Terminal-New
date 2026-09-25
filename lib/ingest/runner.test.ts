@@ -668,3 +668,32 @@ describe("runIngestion", () => {
     });
   });
 });
+
+describe("a connector's account of its poll (Phase 29d)", () => {
+  it("lands on the poll row and in the log, and never on the poll's reason", async () => {
+    const accountant: DataConnector = {
+      name: "accountant",
+      async fetchForPerson(_person, _identifier, context) {
+        context.detail?.("insider_filings", { fetched: 3, rows: [{ code: "A", outcome: "dropped", reason: "code_not_scored" }], filings_kept: 0 });
+        return [];
+      },
+    };
+    const source = makeSource({ id: "src-a", name: "accountant", is_active: true });
+    const store = createMemoryIngestStore({ sources: [source], mappings: { "src-a": [{ person, externalIdentifier: "TSLA" }] } });
+    const lines: IngestLogLine[] = [];
+    await runIngestion({ store, now: NOW, registry: buildRegistry([accountant]), force: true, log: (line) => lines.push(line) });
+
+    expect(store.polls).toHaveLength(1);
+    expect(store.polls[0]).toMatchObject({ status: "ok", reason: null, detail: { insider_filings: { fetched: 3, filings_kept: 0 } } });
+    expect(lines.filter((line) => line.event === "detail")).toEqual([
+      expect.objectContaining({ event: "detail", source: "accountant", person: person.slug, key: "insider_filings", value: expect.objectContaining({ fetched: 3 }) }),
+    ]);
+  });
+
+  it("writes nothing when the connector has nothing to account for", async () => {
+    const silent: DataConnector = { name: "silent", fetchForPerson: async () => [] };
+    const store = createMemoryIngestStore({ sources: [makeSource({ id: "src-s", name: "silent", is_active: true })], mappings: { "src-s": [{ person, externalIdentifier: "x" }] } });
+    await runIngestion({ store, now: NOW, registry: buildRegistry([silent]), force: true, log: quiet });
+    expect(store.polls[0].detail ?? {}).toEqual({});
+  });
+});

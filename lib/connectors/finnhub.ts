@@ -91,6 +91,9 @@ export const PRICE_DERIVED_METRICS = ["daily_close"] as const;
 export const DAILY_CLOSE_METRIC = "daily_close";
 /** Articles Finnhub carried about the company in the trailing window. A count, baselined per person. */
 export const COMPANY_NEWS_VOLUME_METRIC = "company_news_volume_24h";
+/** Where a poll's insider-filing account is written: source_polls.detail -> 'insider_filings'. */
+export const INSIDER_DETAIL_KEY = "insider_filings";
+
 /** Signal kind of an insider filing, so the Feed and the Engine can tell it from an article. */
 export const INSIDER_FILING_KIND = "insider_filing";
 
@@ -227,39 +230,114 @@ interface RawInsider {
   transactionCode?: unknown;
 }
 
+/** Why one of the tracked person's own Form 4 lines did not become part of a signal. */
+export type InsiderDropReason = "code_not_scored" | "no_share_change" | "no_filing_date" | "net_zero";
+
+/** One of the tracked person's own lines, and what became of it. Share counts only: no price is ever read. */
+export interface InsiderRowOutcome {
+  insider: string;
+  filed: string | null;
+  code: string;
+  shares: number | null;
+  outcome: "kept" | "dropped";
+  reason: InsiderDropReason | null;
+}
+
 /**
- * The tracked person's decisions, one per (filing date, code), share counts
- * summed across the filing's lines. Everything about the price — Finnhub's
- * transactionPrice — is dropped here and never read again.
+ * EVERY INSIDER LINE FINNHUB RETURNED, ACCOUNTED FOR (Phase 29d). Before this,
+ * lines that did not become signals were dropped without a count, so "no
+ * insider signal ever" could not be told apart from "no filing ever", "filed
+ * under a name we do not match" or "filed only awards and exercises". Now:
+ *
+ *   fetched          every line for the company in the window
+ *   otherInsiders    lines whose insider is not the tracked person, counted,
+ *                    with the distinct names (so a name we fail to match
+ *                    shows up here)
+ *   rows             each of the tracked person's own lines: kept, or dropped
+ *                    with the reason — a code that is not scored (awards,
+ *                    exercises, withholding: not a decision), no share count,
+ *                    no date, or a filing whose lines cancel out
+ *   filings          what becomes signals: one per (filing date, code)
+ *
+ * Everything about the price — Finnhub's transactionPrice — is dropped here
+ * and never read again, and none of it reaches the account.
  */
-export function readInsiderFilings(rows: RawInsider[], names: string[], codes: string[]): InsiderFiling[] {
+export interface InsiderAccount {
+  fetched: number;
+  otherInsiderRows: number;
+  otherInsiders: string[];
+  rows: InsiderRowOutcome[];
+  filings: InsiderFiling[];
+}
+
+/** Most distinct other insiders' names an account carries. */
+const OTHER_INSIDER_NAMES = 20;
+
+export function accountInsiderFilings(rows: RawInsider[], names: string[], codes: string[]): InsiderAccount {
   const wanted = new Set(codes.map((code) => code.toUpperCase()));
-  const byFiling = new Map<string, InsiderFiling>();
+  const byFiling = new Map<string, { filing: InsiderFiling; lines: InsiderRowOutcome[] }>();
+  const outcomes: InsiderRowOutcome[] = [];
+  const others = new Set<string>();
+  let otherInsiderRows = 0;
   for (const row of rows) {
-    if (typeof row.name !== "string" || !matchesInsider(row.name, names)) continue;
+    const name = typeof row.name === "string" ? row.name : "";
+    if (!name || !matchesInsider(name, names)) {
+      otherInsiderRows += 1;
+      if (name && others.size < OTHER_INSIDER_NAMES) others.add(name);
+      continue;
+    }
     const code = typeof row.transactionCode === "string" ? row.transactionCode.trim().toUpperCase() : "";
-    if (!wanted.has(code)) continue;
     const change = typeof row.change === "number" && Number.isFinite(row.change) ? row.change : null;
-    if (change === null || change === 0) continue;
     const filedRaw = typeof row.filingDate === "string" ? row.filingDate : typeof row.transactionDate === "string" ? row.transactionDate : null;
-    if (!filedRaw) continue;
-    const filedAt = new Date(`${filedRaw.slice(0, 10)}T00:00:00.000Z`);
-    if (Number.isNaN(filedAt.getTime())) continue;
-    const key = `${filedRaw.slice(0, 10)}|${code}`;
+    const filedAt = filedRaw ? new Date(`${filedRaw.slice(0, 10)}T00:00:00.000Z`) : null;
+    const filed = filedAt && !Number.isNaN(filedAt.getTime()) ? filedRaw!.slice(0, 10) : null;
+    const line: InsiderRowOutcome = { insider: name, filed, code, shares: change, outcome: "dropped", reason: null };
+    outcomes.push(line);
+    if (!wanted.has(code)) {
+      line.reason = "code_not_scored";
+      continue;
+    }
+    if (change === null || change === 0) {
+      line.reason = "no_share_change";
+      continue;
+    }
+    if (!filed || !filedAt) {
+      line.reason = "no_filing_date";
+      continue;
+    }
+    line.outcome = "kept";
+    const key = `${filed}|${code}`;
     const existing = byFiling.get(key);
-    if (existing) existing.shares += change;
-    else {
+    if (existing) {
+      existing.filing.shares += change;
+      existing.lines.push(line);
+    } else {
       byFiling.set(key, {
-        insider: row.name,
-        filedAt,
-        transactionDate: typeof row.transactionDate === "string" ? row.transactionDate.slice(0, 10) : null,
-        code,
-        shares: change,
+        filing: { insider: name, filedAt, transactionDate: typeof row.transactionDate === "string" ? row.transactionDate.slice(0, 10) : null, code, shares: change },
+        lines: [line],
       });
     }
   }
   // A filing whose lines cancel out reported no net decision.
-  return [...byFiling.values()].filter((filing) => filing.shares !== 0).sort((a, b) => a.filedAt.getTime() - b.filedAt.getTime());
+  const filings: InsiderFiling[] = [];
+  for (const { filing, lines } of byFiling.values()) {
+    if (filing.shares === 0) {
+      for (const line of lines) {
+        line.outcome = "dropped";
+        line.reason = "net_zero";
+      }
+    } else filings.push(filing);
+  }
+  filings.sort((a, b) => a.filedAt.getTime() - b.filedAt.getTime());
+  return { fetched: rows.length, otherInsiderRows, otherInsiders: [...others].sort(), rows: outcomes, filings };
+}
+
+/**
+ * The tracked person's decisions, one per (filing date, code), share counts
+ * summed across the filing's lines: the filings of accountInsiderFilings.
+ */
+export function readInsiderFilings(rows: RawInsider[], names: string[], codes: string[]): InsiderFiling[] {
+  return accountInsiderFilings(rows, names, codes).filings;
 }
 
 /** How a transaction code reads in a sentence. */
@@ -325,6 +403,7 @@ export const finnhubConnector: DataConnector = {
     if (names.length === 0) {
       // Never attribute the company's filings to the person: say so instead.
       context.note?.(`no config.insider_names on the ${person.slug} mapping, so no Form 4 of ${symbol} was attributed to them; the company-news count is unaffected`);
+      context.detail?.(INSIDER_DETAIL_KEY, { symbol, fetched: null, reason: "no_insider_names" });
       return [];
     }
 
@@ -335,7 +414,21 @@ export const finnhubConnector: DataConnector = {
       key,
       context.fetch,
     );
-    return readInsiderFilings(body.data ?? [], names, config.insider_codes).map((filing) => insiderSignal(person, symbol, filing));
+    const account = accountInsiderFilings(body.data ?? [], names, config.insider_codes);
+    // The whole account onto the poll row and the run log (Phase 29d), kept or not.
+    context.detail?.(INSIDER_DETAIL_KEY, {
+      symbol,
+      from,
+      to: isoDate(context.now),
+      names,
+      codes: config.insider_codes,
+      fetched: account.fetched,
+      other_insider_rows: account.otherInsiderRows,
+      other_insiders: account.otherInsiders,
+      rows: account.rows.map((row) => ({ insider: row.insider, filed: row.filed, code: row.code, shares: row.shares, outcome: row.outcome, reason: row.reason })),
+      filings_kept: account.filings.length,
+    });
+    return account.filings.map((filing) => insiderSignal(person, symbol, filing));
   },
 
   /**

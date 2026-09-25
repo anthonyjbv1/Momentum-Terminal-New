@@ -46,7 +46,9 @@ import {
 
 const PERSON_COLUMNS =
   "id, slug, display_name, category, avatar_url, current_score, revert_target, target_offset, spread, buy_price, sell_price, created_at, last_tick_at, forecast_paused, " +
-  "premium_cents, market_price, market_inventory_units, tier, trading_mode, halted_until, halt_reason, max_allocation_cents";
+  "premium_cents, market_price, market_inventory_units, tier, trading_mode, halted_until, halt_reason, max_allocation_cents, " +
+  // The person's own market settings (Phase 29d): shown on the profile wherever they differ from the tier's.
+  "depth_units_override, decay_half_life_ticks_override, premium_cap_cents_override, pricing_mode_override, shorting_override";
 
 /** Most signal / narrative items the page lists. */
 const SIGNAL_LIMIT = 30;

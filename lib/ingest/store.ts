@@ -114,6 +114,8 @@ export interface PollRow {
   excludedFiltered: number;
   startedAt: Date;
   finishedAt: Date;
+  /** What the connector accounted for on this poll, by key (Phase 29d): source_polls.detail. Absent or empty: nothing. */
+  detail?: Record<string, Json> | null;
 }
 
 /** One metric reading judged against its baseline. Raw: the level and its statistics live here and nowhere else. */
@@ -310,7 +312,8 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
             tier: row.tier ?? null,
             processed: false,
           })),
-          { onConflict: "data_source_id,dedupe_key", ignoreDuplicates: true },
+          // Unique per source AND person (Phase 29d): an item two people share — a ticker, an article — is kept for each.
+          { onConflict: "data_source_id,person_id,dedupe_key", ignoreDuplicates: true },
         )
         .select("id, dedupe_key");
       if (error) throw new Error(`Failed to insert signals: ${error.message}`);
@@ -483,6 +486,7 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
         excluded_filtered: poll.excludedFiltered,
         started_at: poll.startedAt.toISOString(),
         finished_at: poll.finishedAt.toISOString(),
+        detail: poll.detail && Object.keys(poll.detail).length > 0 ? (poll.detail as Json) : null,
       });
       if (error) throw new Error(`Failed to record the poll: ${error.message}`);
     },
@@ -637,9 +641,10 @@ export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): Memor
     async insertSignals(rows) {
       const stored: StoredSignal[] = [];
       for (const row of rows) {
+        // The database's rule (Phase 29d): unique per source and person; a row without a key never conflicts.
         const duplicate =
           row.dedupeKey !== undefined &&
-          signals.some((s) => s.dataSourceId === row.dataSourceId && s.dedupeKey === row.dedupeKey);
+          signals.some((s) => s.dataSourceId === row.dataSourceId && s.personId === row.personId && s.dedupeKey === row.dedupeKey);
         if (duplicate) continue;
         const signal = { ...row, id: id("sig"), tier: row.tier ?? null, processed: false };
         signals.push(signal);

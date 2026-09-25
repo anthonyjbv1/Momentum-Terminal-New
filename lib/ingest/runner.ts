@@ -51,7 +51,7 @@ import { STORY_DEDUP_LOOKBACK_HOURS } from "./stories";
  */
 
 export interface IngestLogLine {
-  event: "run" | "source" | "poll" | "observation" | "signal" | "drop" | "collapse" | "upgrade" | "exclude" | "feed" | "note" | "observe_only";
+  event: "run" | "source" | "poll" | "observation" | "signal" | "drop" | "collapse" | "upgrade" | "exclude" | "feed" | "note" | "detail" | "observe_only";
   [key: string]: unknown;
 }
 
@@ -429,6 +429,8 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
       // What the connector wants the operator to know about an otherwise ok
       // poll (Phase 16): written onto the poll row's reason and logged.
       const notes: string[] = [];
+      // The connector's structured account of the poll (Phase 29d): onto source_polls.detail and the log, never the reason.
+      const details: Record<string, Json> = {};
       const context: ConnectorContext = {
         source,
         config,
@@ -440,6 +442,9 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         exclude: (item) => excluded.push(item),
         feeds,
         note: (message) => notes.push(message),
+        detail: (key, value) => {
+          details[key] = value;
+        },
       };
       const poll: Omit<PollRow, "status" | "reason" | "latencyMs" | "finishedAt"> = {
         runId,
@@ -674,6 +679,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
       }
 
       for (const message of notes) log({ event: "note", run: runId, source: source.name, person: person.slug, message });
+      for (const [key, value] of Object.entries(details)) log({ event: "detail", run: runId, source: source.name, person: person.slug, key, value });
       // A note rides on an ok poll's reason, so a source that is limping reads as such in the console; an error keeps its own reason.
       if (status === "ok" && notes.length > 0) reason = notes.join(" | ");
 
@@ -681,7 +687,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
       const finishedAt = new Date(poll.startedAt.getTime() + latencyMs);
       log({ event: "poll", run: runId, source: source.name, person: person.slug, status, reason, latencyMs, signals: poll.signalsCreated, snapshots: poll.snapshotsRecorded, observations: poll.observations, notes: notes.length });
       try {
-        await store.recordPoll({ ...poll, status, reason, latencyMs, finishedAt });
+        await store.recordPoll({ ...poll, status, reason, latencyMs, finishedAt, detail: details });
       } catch (error) {
         errors.push({ source: source.name, person: person.slug, message: `poll log failed: ${errorMessage(error)}` });
       }

@@ -5,12 +5,14 @@ import { Suspense } from "react";
 import { getCurrentUser } from "@/lib/auth";
 import { getForecastSummary, getForecastViewerState } from "@/lib/forecast/server";
 import { getPersonBySlug, getPersonProfile, getPersonSignals, getRenderedAt } from "@/lib/person/profile";
+import { readPublishedMarketParameters } from "@/lib/trading/published-parameters";
 import { getViewerTradingState } from "@/lib/trading/server";
 import { getPlatformSettings } from "@/lib/trading/settings";
 import { BackLink } from "@/components/person/back-link";
 import { Dossier } from "@/components/person/dossier";
 import { ForecastPanel } from "@/components/person/forecast-panel";
 import { ForcesPanel } from "@/components/person/forces-panel";
+import { MarketOverrides } from "@/components/person/market-overrides";
 import { ProfileSkeleton } from "@/components/person/profile-skeleton";
 import { ScorePanel } from "@/components/person/score-panel";
 import { SignalsList } from "@/components/person/signals-list";
@@ -64,7 +66,7 @@ export default async function PersonPage({ params }: { params: Params }) {
 
 /** Everything below the back link: the readings, streamed in once they are loaded. */
 async function ProfileBody({ slug, personId, personName }: { slug: string; personId: string; personName: string }) {
-  const [profile, signals, user, settings, viewer, forecast, forecastViewer] = await Promise.all([
+  const [profile, signals, user, settings, viewer, forecast, forecastViewer, market] = await Promise.all([
     getPersonProfile(slug),
     getPersonSignals(personId, personName),
     getCurrentUser(),
@@ -72,6 +74,7 @@ async function ProfileBody({ slug, personId, personName }: { slug: string; perso
     getViewerTradingState(personId),
     getForecastSummary(personId),
     getForecastViewerState(personId),
+    readPublishedMarketParameters(),
   ]);
   // The person was found a moment ago; only a deactivation in between lands here.
   if (!profile) notFound();
@@ -96,6 +99,14 @@ async function ProfileBody({ slug, personId, personName }: { slug: string; perso
         viewer={viewer}
         toleranceCents={settings.priceToleranceCents}
         minOrderCents={settings.minOrderCents}
+      />
+
+      {/* The person's own market settings, where they differ from the tier's (Phase 29d); nothing for everyone else. */}
+      <MarketOverrides
+        name={profile.person.displayName}
+        overrides={profile.person.overrides}
+        tier={market.tiers[profile.person.tier]}
+        shortingEnabled={settings.shortingEnabled}
       />
 
       <ForcesPanel forces={profile.forces} market={profile.market} latestTick={profile.latestTick} curved={profile.person.depthUnits !== null} />

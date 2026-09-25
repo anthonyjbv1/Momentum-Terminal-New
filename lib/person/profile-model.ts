@@ -4,6 +4,7 @@ import { directionAtPrecision, directionOf, type Direction } from "@/components/
 /** Decimals a force's contribution is shown to, everywhere it is shown. Its colour follows the same rounding. */
 export const FORCE_IMPACT_DECIMALS = 2;
 import { categoryLabel } from "@/lib/home/board-model";
+import { readOverrides, type PersonMarketOverrides } from "@/lib/person/market-overrides";
 
 /**
  * The person profile's shape and the pure logic that produces it: chart
@@ -62,6 +63,8 @@ export interface ProfilePerson {
   lastTickAt: string | null;
   /** Phase 19: the per-person kill switch on the crowd layer. True hides the Forecast section and refuses new votes. */
   forecastPaused: boolean;
+  /** The person's own market settings over their tier's (Phase 29d); every field null for almost everyone. */
+  overrides: PersonMarketOverrides;
 }
 
 /** The people row as it comes back from the database. */
@@ -94,6 +97,12 @@ export interface ProfilePersonRow {
   last_tick_at: string | null;
   /** Phase 19; absent reads as not paused. */
   forecast_paused?: boolean | null;
+  /** Phase 29d: the person's own market settings; absent reads as none. */
+  depth_units_override?: number | string | null;
+  decay_half_life_ticks_override?: number | string | null;
+  premium_cap_cents_override?: number | string | null;
+  pricing_mode_override?: string | null;
+  shorting_override?: boolean | null;
 }
 
 function toNumber(value: unknown, fallback = 0): number {
@@ -135,6 +144,7 @@ export function toProfilePerson(row: ProfilePersonRow): ProfilePerson {
     createdAt: row.created_at,
     lastTickAt: row.last_tick_at,
     forecastPaused: row.forecast_paused === true,
+    overrides: readOverrides(row),
   };
 }
 
@@ -403,7 +413,7 @@ export type ForceRole = "score" | "market";
 export const FORCE_DEFINITIONS: Record<ForceKey, { label: string; description: string; role: ForceRole }> = {
   gravity: { label: "Gravity", description: "Pull towards their baseline", role: "score" },
   signals: { label: "Signals", description: "News and data about the person", role: "score" },
-  market_mood: { label: "Market Mood", description: "The tide across the entire platform", role: "score" },
+  market_mood: { label: "Market Mood", description: "The tide across everyone we track", role: "score" },
   conviction: { label: "Conviction", description: "Capital committed · tightens the spread", role: "market" },
   trading_activity: { label: "Trading Activity", description: "Buy and sell flow · moves the market price", role: "market" },
 };

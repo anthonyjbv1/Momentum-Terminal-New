@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { EXPLAINER_META } from "@/lib/landing/copy";
 import { readPublishedMarketParameters, type PublishedTierParameters } from "@/lib/trading/published-parameters";
 import { LandingFooter } from "@/components/landing/landing-footer";
 import { LandingHeader } from "@/components/landing/landing-header";
@@ -19,10 +20,31 @@ import { LandingHeader } from "@/components/landing/landing-header";
  * which scans every source file under app/(public).
  */
 
+/**
+ * THE PAGE'S OWN LINK PREVIEW (Phase 29d). Next merges metadata one key deep,
+ * so a page that sets only `title` and `description` still inherits the
+ * public layout's openGraph and twitter blocks — which are the landing
+ * page's — and a shared link to this page previewed as the landing. Both
+ * blocks are set here in full, from EXPLAINER_META in lib/landing/copy.ts.
+ */
 export const metadata: Metadata = {
-  title: "How the price works",
-  description: "Every person on the board has two numbers: the Momentum Score, moved by the data alone, and the market price, moved by trading and drifting back toward the score.",
+  title: EXPLAINER_META.title,
+  description: EXPLAINER_META.description,
   alternates: { canonical: "/how-the-price-works" },
+  openGraph: {
+    type: "article",
+    siteName: "Momentum Terminal",
+    title: EXPLAINER_META.shareTitle,
+    description: EXPLAINER_META.description,
+    url: "/how-the-price-works",
+    images: [{ url: "/og", width: 1200, height: 630, alt: "Momentum Terminal" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: EXPLAINER_META.shareTitle,
+    description: EXPLAINER_META.description,
+    images: ["/og"],
+  },
 };
 
 export const dynamic = "force-dynamic";
@@ -63,12 +85,13 @@ export default async function HowThePriceWorksPage() {
           <Section title="The score comes from outside signals only">
             <p>
               The Momentum Score moves on three forces: Gravity, the pull towards a person&rsquo;s baseline; Signals, the news and data about them; and Market Mood, the
-              tide across the entire platform. All three read the world outside this platform: news, uploads, streams, games and filings. Nothing anyone does here moves it. Buying, selling and holding do not touch the score, by construction, and a
-              test fails the build if they ever could.
+              tide across everyone we track. All three read the world outside this platform: news, uploads, streams, games and filings. Nothing anyone does here moves
+              it. Buying, selling and holding do not touch the score, by construction, and a test fails the build if they ever could.
             </p>
             <p>
               Two more readings sit beside those three on every profile, Trading Activity and Conviction. They describe the market, not the person, and they add exactly
-              nothing to the score. Trading Activity is the buying and selling that moves the market price; Conviction is the capital held open, which tightens the spread.
+              nothing to the score. Trading Activity is the buying and selling that moves the market price. Conviction is the capital held open on a person: more of it
+              tightens that person&rsquo;s spread, and never widens it.
             </p>
           </Section>
 
@@ -90,8 +113,10 @@ export default async function HowThePriceWorksPage() {
           <Section title="The quotes, and what a round trip costs">
             <p>
               You buy at the Buy quote and sell at the Sell quote. The two sit either side of the market price by the spread, and the gap between them is the platform&rsquo;s
-              spread, shown on every trade sheet. A round trip against an otherwise unchanged market costs exactly the spread and nothing more: the move your own buying
-              put on the price is undone when you sell the same shares back.
+              spread, shown on every trade sheet. A round trip against an otherwise unchanged market costs the spread, plus at most a cent of rounding (the spread on a
+              fraction of a share is counted up to the whole cent): the move your own buying put on the price is undone when you sell the same shares back. The market is
+              never quite unchanged in practice, because the minimum hold keeps you in for a while and the premium your buying added drifts back toward the score as you
+              wait.
             </p>
             <p>
               Each quote is the price <em>before your order</em>. An order moves along the price as it fills, so it pays an average a little past the quote and its
@@ -100,11 +125,16 @@ export default async function HowThePriceWorksPage() {
             </p>
           </Section>
 
-          <Section title="The arithmetic">
+          <details className="group">
+            <summary className="w-fit cursor-pointer list-none rounded-full bg-surface px-4 py-2 text-sm font-medium text-fg hover:bg-surface-raised focus-visible:outline-2 [&::-webkit-details-marker]:hidden">
+              <span className="group-open:hidden">Show the arithmetic</span>
+              <span className="hidden group-open:inline">Hide the arithmetic</span>
+            </summary>
+            <Section title="The arithmetic" className="mt-5">
             <p>
               Quantities are counted in thousandths of a share, prices in whole cents, and every step is integer arithmetic. With <span className="num">S</span> the
               quote in cents (the score plus or minus half the spread, premium excluded), <span className="num">I</span> the market&rsquo;s inventory in thousandths
-              (positive after net buying, negative after net selling) and <span className="num">D</span> the tier&rsquo;s depth:
+              (positive after net buying, negative after net selling) and <span className="num">D</span> the depth (the tier&rsquo;s, unless the person carries their own):
             </p>
             <dl className="grid grid-cols-1 gap-3 rounded-2xl bg-surface p-5 text-sm sm:grid-cols-[auto_1fr] sm:gap-x-8">
               <dt className="text-fg-muted">a buy of u costs</dt>
@@ -122,7 +152,13 @@ export default async function HowThePriceWorksPage() {
               A buy rounds up to the cent and a sell rounds down, so a fraction of a cent is never settled in the buyer&rsquo;s or the seller&rsquo;s favour. A depth of{" "}
               {tiers.public_figure ? shares(tiers.public_figure.depthUnits) : "300 shares"} means that many shares of net buying move the market price one point.
             </p>
-          </Section>
+            <p>
+              A round trip of u against an unchanged market costs <span className="num">ceil( u&middot;&Delta; / 1000 )</span> cents or one cent more, with{" "}
+              <span className="num">&Delta;</span> the gap between the Buy and Sell quotes in cents: the two walks cancel, and only the buy&rsquo;s rounding up and the
+              sell&rsquo;s rounding down are left.
+            </p>
+            </Section>
+          </details>
 
           <Section title="The platform is the other side of every trade">
             <p>
@@ -169,6 +205,7 @@ export default async function HowThePriceWorksPage() {
                 </tbody>
               </table>
             </div>
+            <p>Individual people can carry their own settings; where they do, their profile says so.</p>
             <p>
               The smallest order is {dollars(params.minOrderCents)}, either way of entering it. A person can also be <strong className="font-medium text-fg">halted</strong>{" "}
               (a breaker tripped or an operator stepped in; every order is refused until a stated time), <strong className="font-medium text-fg">paused</strong> (nothing can
@@ -200,9 +237,9 @@ export default async function HowThePriceWorksPage() {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children, className }: { title: string; children: React.ReactNode; className?: string }) {
   return (
-    <section className="flex flex-col gap-3">
+    <section className={`flex flex-col gap-3${className ? ` ${className}` : ""}`}>
       <h2 className="text-xl font-semibold tracking-tight text-fg">{title}</h2>
       <div className="flex flex-col gap-3 text-base leading-relaxed text-fg-secondary">{children}</div>
     </section>

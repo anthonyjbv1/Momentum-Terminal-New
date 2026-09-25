@@ -88,7 +88,7 @@ export const HOW = {
     {
       number: "02",
       title: "The Engine computes a Momentum Score",
-      body: "Three forces, one number, every 30 seconds — what just happened, the tide across the entire platform, and the pull towards a person’s baseline. It measures trajectory, never the person.",
+      body: "Three forces, one number, every 30 seconds — what just happened, the tide across everyone we track, and the pull towards a person’s baseline. It measures trajectory, never the person.",
     },
     {
       number: "03",
@@ -110,7 +110,7 @@ export const WHY = {
   forces: {
     gravity: "The pull towards Anthony’s baseline",
     signals: "What the world said about Anthony",
-    market_mood: "The tide across the entire platform",
+    market_mood: "The tide across everyone we track",
   } as const,
   idle: "The Engine has not ticked this score yet.",
   signalsLabel: "Recent signals",
@@ -240,3 +240,15 @@ export function allCopyStrings(): string[] {
   walk({ FEATURED, HEADLINES, HERO, HOW, WHY, WAITLIST, CHROME, META, OG, PRIVACY });
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// /how-the-price-works: its own link preview (Phase 29d)
+// ---------------------------------------------------------------------------
+
+/** The explainer's title, share title and description: what a link to it previews as, instead of the landing page. */
+export const EXPLAINER_META = {
+  title: "How the price works",
+  shareTitle: "How the price works · Momentum Terminal",
+  description:
+    "Every person on the board has two numbers: the Momentum Score, moved by the data alone, and the market price, moved by trading and drifting back toward the score. The arithmetic and the limits, in plain language.",
+} as const;

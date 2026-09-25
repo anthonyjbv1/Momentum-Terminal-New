@@ -29,6 +29,12 @@ import { createTestDatabase, type TestDatabase } from "@/lib/__tests__/pglite";
 
 const PHASE29 = "20260925012938_phase29_market_price.sql";
 const PHASE29B = "20260925103634_phase29b_post_ship_fixes.sql";
+/**
+ * Every migration through Phase 29b and none after: the schema the down file
+ * reverses. Later, unrelated migrations (the signals dedupe rule of Phase 29d)
+ * are not the down file's to undo, so the database under test stops here.
+ */
+const THROUGH_29B = "20260925103635";
 const DOWN = readFileSync(join(__dirname, "..", "..", "supabase", "rollback", "20260925012938_phase29_market_price_down.sql"), "utf8");
 const SHARE = 1000;
 
@@ -157,7 +163,7 @@ async function preexistingRows(database: TestDatabase, columns: Snapshot["column
 describe("the Phase 29 rollback", () => {
   it("takes the schema back to exactly what Phase 28 left", async () => {
     const before = await snapshot(await open(PHASE29));
-    const database = await open();
+    const database = await open(THROUGH_29B);
     // The comparison is not blind: with Phase 29 applied it sees the difference everywhere it should.
     expect(Object.keys(difference(before, await snapshot(database)))).toEqual(expect.arrayContaining(["columns", "constraints", "indexes", "functions", "triggers", "policies", "tables"]));
     await runDown(database);
@@ -209,7 +215,7 @@ describe("the Phase 29 rollback", () => {
   }, 180_000);
 
   it("leaves the schema the Phase 27 rollback was written for, so that file applies again after this one", async () => {
-    const database = await open();
+    const database = await open(THROUGH_29B);
     await database.exec("update public.platform_settings set close_cooldown_seconds = 0 where id");
     await database.exec("update public.market_tier_settings set pricing_mode = 'flat', min_hold_seconds = 0");
     const alice = await user(database, "alice@example.com");
@@ -224,7 +230,7 @@ describe("the Phase 29 rollback", () => {
   }, 180_000);
 
   it("refuses to run twice, changing nothing", async () => {
-    const database = await open();
+    const database = await open(THROUGH_29B);
     await runDown(database);
     const reversed = await snapshot(database);
     await expect(runDown(database)).rejects.toThrow(/Phase 29 is not applied/);
@@ -232,7 +238,7 @@ describe("the Phase 29 rollback", () => {
   }, 180_000);
 
   it("refuses while a premium stands, then the named flat mode and one decay step clear the way", async () => {
-    const database = await open();
+    const database = await open(THROUGH_29B);
     await database.exec("update public.market_tier_settings set min_hold_seconds = 0");
     const alice = await user(database, "alice@example.com");
     const drake = await personId(database, "drake");
@@ -251,7 +257,7 @@ describe("the Phase 29 rollback", () => {
   }, 180_000);
 
   it("refuses curve-filled rows by count, and with not_valid keeps them and checks every row after", async () => {
-    const database = await open();
+    const database = await open(THROUGH_29B);
     await database.exec("update public.market_tier_settings set min_hold_seconds = 0");
     await database.exec("update public.platform_settings set close_cooldown_seconds = 0 where id");
     const alice = await user(database, "alice@example.com");
@@ -290,7 +296,7 @@ describe("the Phase 29 rollback", () => {
   }, 180_000);
 
   it("refuses to delete Phase-29-only data until it has been exported", async () => {
-    const database = await open();
+    const database = await open(THROUGH_29B);
     await database.exec(`
       insert into public.alerts (type, severity, evidence) values ('manual', 'low', '{}'::jsonb);
       insert into public.surveillance_events (recorded_at, detector, severity, evidence) values (now(), 'manual', 'low', '{}'::jsonb);

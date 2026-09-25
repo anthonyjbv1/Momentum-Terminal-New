@@ -121,6 +121,15 @@ export interface ConnectorContext {
    * dead. Symmetric with `exclude`: the connector says, the runner accounts.
    */
   note?(message: string): void;
+  /**
+   * A structured account of what the connector did this poll (Phase 29d),
+   * under a key: the Finnhub connector's insider filings — every line fetched,
+   * which were the tracked person's, and why each did or did not become a
+   * signal. The runner writes every entry onto the poll row
+   * (source_polls.detail -> key) and logs it. Unlike a note it says nothing
+   * about the poll's health, so it never touches the poll's reason.
+   */
+  detail?(key: string, value: Json): void;
 }
 
 // ---------------------------------------------------------------------------

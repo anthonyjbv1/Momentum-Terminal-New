@@ -54,7 +54,7 @@ describe("the two groups", () => {
 describe("each row's copy", () => {
   it("is the Phase 29c wording", () => {
     expect(FORCE_DEFINITIONS.gravity.description).toBe("Pull towards their baseline");
-    expect(FORCE_DEFINITIONS.market_mood.description).toBe("The tide across the entire platform");
+    expect(FORCE_DEFINITIONS.market_mood.description).toBe("The tide across everyone we track");
     expect(FORCE_DEFINITIONS.trading_activity.description).toBe("Buy and sell flow · moves the market price");
     expect(FORCE_DEFINITIONS.conviction.description).toBe("Capital committed · tightens the spread");
     // No reader-facing copy calls the baseline a "gravity target".
