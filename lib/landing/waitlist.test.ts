@@ -12,7 +12,7 @@ import { WAITLIST_RATE_LIMIT, WAITLIST_SOURCES, joinWaitlist, parseWaitlistBody,
  */
 
 function submission(overrides: Partial<WaitlistSubmission> = {}): WaitlistSubmission {
-  return { email: "person@example.com", source: "landing_hero", utm: {}, referrer: null, honeypot: "", ...overrides };
+  return { email: "person@example.com", source: "landing_hero", utm: {}, referrer: null, ref: null, honeypot: "", ...overrides };
 }
 
 describe("parseWaitlistBody", () => {
@@ -41,6 +41,15 @@ describe("parseWaitlistBody", () => {
     expect(parsed.utm).toEqual({ source: "x", campaign: "c".repeat(128) });
     expect(parsed.referrer).toHaveLength(512);
     expect(parsed.honeypot).toBe("http://spam.example");
+  });
+
+  it("keeps a member's referral code from the link when it is well-formed, and drops anything else without refusing (Phase 32)", () => {
+    expect(parseWaitlistBody({ email: "p@example.com", ref: "k7mn2pqr" })).toMatchObject({ ref: "k7mn2pqr" });
+    expect(parseWaitlistBody({ email: "p@example.com", ref: " K7MN2PQR " })).toMatchObject({ ref: "k7mn2pqr" });
+    // Look-alike characters are not in the alphabet; too short, too long, not a string.
+    for (const ref of ["k7mn2pq1", "k7mn2pqo", "k7mn2pq", "k7mn2pqrs", 12345678, null, undefined]) {
+      expect(parseWaitlistBody({ email: "p@example.com", ref }), String(ref)).toMatchObject({ email: "p@example.com", ref: null });
+    }
   });
 });
 

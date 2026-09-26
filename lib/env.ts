@@ -316,6 +316,37 @@ export function isIngestCronEnabled(): boolean {
   return process.env.INGEST_CRON_ENABLED?.trim() === "true";
 }
 
+// ---------------------------------------------------------------------------
+// The beta's front door (Phase 32) — SERVER ONLY
+// ---------------------------------------------------------------------------
+
+/**
+ * THE SIGNUP SWITCH. Only the exact string "true" opens the invite flow: the
+ * join page, onboarding, the new profile, sign-in by email link or Google,
+ * and sending invites from the console. Anything else (unset, "false", "1",
+ * "TRUE") leaves the app as it was before Phase 32, except that the old
+ * public /signup page is gone either way. The database's own rule — no new
+ * account without an attested invite — holds whatever this says.
+ */
+export function isBetaSignupEnabled(): boolean {
+  return process.env.BETA_SIGNUP_ENABLED?.trim() === "true";
+}
+
+/**
+ * Google sign-in, a second switch, because it needs setup outside this code
+ * (a Google Cloud OAuth client and the provider enabled in Supabase). Exactly
+ * "true" shows the button; the signup switch must be on as well.
+ */
+export function isGoogleAuthEnabled(): boolean {
+  return isBetaSignupEnabled() && process.env.GOOGLE_AUTH_ENABLED?.trim() === "true";
+}
+
+/** Resend's API key, for the invitation emails our server sends. SERVER ONLY. Null when unset: invites are created but not sent, and the console says so. */
+export function getResendApiKeyOrNull(): string | null {
+  const value = process.env.RESEND_API_KEY?.trim();
+  return value ? value : null;
+}
+
 /** Vercel's CRON_SECRET (sent as `Authorization: Bearer` on scheduled invocations), or null. */
 export function getCronSecretOrNull(): string | null {
   const value = process.env.CRON_SECRET?.trim();

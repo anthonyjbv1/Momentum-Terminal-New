@@ -97,7 +97,7 @@ describe("requireAdmin", () => {
 
 describe("every admin read", () => {
   /** Called with a window where one is taken; the argument is ignored by the ones that don't. */
-  const readers = ["readLlmCost", "readIngestion", "readEngine", "readLevers", "readMarket", "readBehaviour", "readWaitlist"] as const;
+  const readers = ["readLlmCost", "readIngestion", "readEngine", "readLevers", "readMarket", "readBehaviour", "readWaitlist", "readSignup"] as const;
 
   it("refuses a signed-out caller and never builds the service-role client", async () => {
     const admin = await loadAdmin();
@@ -157,29 +157,45 @@ describe("the admin surface", () => {
   });
 
   /**
-   * THE ONE WRITE PATH (Phase 29). Until Phase 29 the console had none. It now
-   * has exactly one file that writes, app/admin/actions.ts, and that file
-   * writes only by calling the audit-logged admin RPCs as the signed-in
-   * operator: no table is inserted, updated or deleted from the application
-   * side, and no other file under the admin surface carries a Server Action.
+   * THE WRITE PATHS (Phase 29, a second in Phase 32). Until Phase 29 the
+   * console had none. It now has exactly two files that write:
+   * app/admin/actions.ts (the review queue) and app/admin/invite-actions.ts
+   * (issue, resend, revoke). Both write only by calling the audit-logged
+   * admin RPCs as the signed-in operator: no table is inserted, updated or
+   * deleted from the application side, and no other file under the admin
+   * surface carries a Server Action. The invite actions reach their RPCs
+   * through lib/invites/server.ts, whose operator half is held to the same
+   * rule below.
    */
-  it("has one write path, and it only calls the audit-logged admin RPCs", () => {
+  it("has two write paths, and they only call the audit-logged admin RPCs", () => {
     const actions = join(root, "app", "admin", "actions.ts");
+    const inviteActions = join(root, "app", "admin", "invite-actions.ts");
     for (const file of surface) {
       const source = readFileSync(file, "utf8");
       for (const write of [".insert(", ".update(", ".upsert(", ".delete("]) {
         expect(source.includes(write), `${relative(root, file)} contains ${write}`).toBe(false);
       }
-      if (file !== actions) expect(source.includes('"use server"'), `${relative(root, file)} is a Server Action`).toBe(false);
+      if (file !== actions && file !== inviteActions) expect(source.includes('"use server"'), `${relative(root, file)} is a Server Action`).toBe(false);
     }
-    const source = readFileSync(actions, "utf8");
-    expect(source.startsWith('"use server"')).toBe(true);
-    const calls = [...source.matchAll(/\.rpc\(\s*"([a-z_]+)"/g)].map((match) => match[1]);
-    expect(calls.length).toBeGreaterThan(0);
-    for (const name of calls) expect(name, name).toMatch(/^admin_/);
-    // The operator's own session client, never the service role.
-    expect(source.includes("createSupabaseServerClient")).toBe(true);
-    expect(source.includes("createSupabaseAdminClient")).toBe(false);
+    for (const file of [actions, inviteActions]) {
+      const source = readFileSync(file, "utf8");
+      expect(source.startsWith('"use server"')).toBe(true);
+      for (const name of [...source.matchAll(/\.rpc\(\s*"([a-z_]+)"/g)].map((match) => match[1])) expect(name, name).toMatch(/^admin_/);
+      // The operator's own session client, never the service role.
+      expect(source.includes("createSupabaseServerClient"), relative(root, file)).toBe(true);
+      expect(source.includes("createSupabaseAdminClient"), relative(root, file)).toBe(false);
+      expect(source.includes("requireAdmin()"), relative(root, file)).toBe(true);
+    }
+    expect([...readFileSync(actions, "utf8").matchAll(/\.rpc\(/g)].length).toBeGreaterThan(0);
+
+    // The invite actions' RPCs: the operator half of lib/invites/server.ts
+    // calls admin_* RPCs on the client it is handed, and builds no client.
+    const invites = readFileSync(join(root, "lib", "invites", "server.ts"), "utf8");
+    const operatorHalf = invites.slice(invites.indexOf("// The operator's side"));
+    const calls = [...operatorHalf.matchAll(/\.rpc\(\s*"([a-z_]+)"/g)].map((match) => match[1]);
+    expect(calls.sort()).toEqual(["admin_issue_invites", "admin_record_invite_send", "admin_resend_invite", "admin_revoke_invite"]);
+    expect(operatorHalf.includes("createSupabaseAdminClient")).toBe(false);
+    for (const write of [".insert(", ".update(", ".upsert(", ".delete("]) expect(operatorHalf.includes(write), write).toBe(false);
   });
 
   it("lives outside the main app tree, so removing the Phase 7 auth gate cannot expose it", () => {

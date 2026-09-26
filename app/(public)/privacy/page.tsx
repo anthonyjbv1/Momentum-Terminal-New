@@ -1,14 +1,16 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { PRIVACY, PRIVACY_CONTACT_EMAIL } from "@/lib/landing/copy";
+import { isBetaSignupEnabled } from "@/lib/env";
+import { PRIVACY, PRIVACY_CONTACT_EMAIL, PRIVACY_DELETION } from "@/lib/landing/copy";
 import { LandingFooter } from "@/components/landing/landing-footer";
 import { LandingHeader } from "@/components/landing/landing-header";
 
 /**
- * /privacy (Phase 28): what the landing page and the waitlist collect, why,
- * for how long, and how to have it removed. Short on purpose. Every word is
- * in lib/landing/copy.ts.
+ * /privacy (Phase 28, accounts added in Phase 32): what is collected, why,
+ * who handles it, for how long, and how to have it deleted. Every word is in
+ * lib/landing/copy.ts. The Deletion section's first line follows the beta
+ * switch: self-serve deletion exists only while BETA_SIGNUP_ENABLED is on.
  */
 
 export const metadata: Metadata = {
@@ -17,6 +19,7 @@ export const metadata: Metadata = {
 };
 
 export default function PrivacyPage() {
+  const deletion = isBetaSignupEnabled() ? PRIVACY_DELETION.inApp : PRIVACY_DELETION.byEmail;
   return (
     <>
       <LandingHeader />
@@ -27,21 +30,24 @@ export default function PrivacyPage() {
           {PRIVACY.sections.map((section) => (
             <section key={section.title} className="flex flex-col gap-3">
               <h2 className="text-xl font-semibold tracking-tight text-fg">{section.title}</h2>
-              {section.body.map((paragraph) => (
-                <p key={paragraph} className="text-base leading-relaxed text-fg-secondary">
-                  {paragraph.includes("{contact}") ? (
-                    <>
-                      {paragraph.split("{contact}")[0]}
-                      <a href={`mailto:${PRIVACY_CONTACT_EMAIL}`} className="font-medium text-fg underline-offset-4 hover:underline">
-                        {PRIVACY_CONTACT_EMAIL}
-                      </a>
-                      {paragraph.split("{contact}")[1]}
-                    </>
-                  ) : (
-                    paragraph
-                  )}
-                </p>
-              ))}
+              {section.body.map((paragraph) => {
+                const text = paragraph.replace("{deletion}", deletion);
+                return (
+                  <p key={paragraph} className="text-base leading-relaxed text-fg-secondary">
+                    {text.includes("{contact}") ? (
+                      <>
+                        {text.split("{contact}")[0]}
+                        <a href={`mailto:${PRIVACY_CONTACT_EMAIL}`} className="font-medium text-fg underline-offset-4 hover:underline">
+                          {PRIVACY_CONTACT_EMAIL}
+                        </a>
+                        {text.split("{contact}")[1]}
+                      </>
+                    ) : (
+                      text
+                    )}
+                  </p>
+                );
+              })}
             </section>
           ))}
         </div>

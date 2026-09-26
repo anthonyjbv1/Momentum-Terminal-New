@@ -13,7 +13,7 @@ const PERSON = "11111111-1111-4111-8111-111111111111";
 const SESSION = "22222222-2222-4222-8222-222222222222";
 
 describe("canonical event types", () => {
-  it("lists the twenty-one documented types, each with a definition", () => {
+  it("lists the twenty-two documented types, each with a definition", () => {
     expect([...BEHAVIORAL_EVENT_TYPES]).toEqual([
       "view_person",
       "time_spent",
@@ -34,6 +34,7 @@ describe("canonical event types", () => {
       "reject_trade",
       "view_portfolio",
       "cast_forecast",
+      "onboarding_step",
       "view_landing",
       "join_waitlist",
     ]);
@@ -116,6 +117,14 @@ describe("validateBehavioralEvent", () => {
       expect(validateBehavioralEvent({ eventType: "view_portfolio", metadata: { positions: 2, orders: 7 } }).ok).toBe(true);
       expect(validateBehavioralEvent({ eventType: "view_portfolio", metadata: { positions: -1 } })).toMatchObject({ ok: false, reason: expect.stringContaining("positions") });
       expect(validateBehavioralEvent({ eventType: "view_portfolio", metadata: { orders: 1.5 } }).ok).toBe(false);
+    });
+
+    it("onboarding_step needs one of the four steps and one of the four actions, and no person (Phase 32)", () => {
+      expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "follow", action: "next", followed: 3 } })).toMatchObject({ ok: true, event: { personId: null, metadata: { step: "follow", action: "next", followed: 3 } } });
+      expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "FOLLOW", action: "Skip" } })).toMatchObject({ ok: true, event: { metadata: { step: "follow", action: "skip" } } });
+      expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "welcome", action: "view" } })).toMatchObject({ ok: false, reason: expect.stringContaining("step") });
+      expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "what", action: "rush" } })).toMatchObject({ ok: false, reason: expect.stringContaining("action") });
+      expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "what", action: "view", followed: -1 } }).ok).toBe(false);
     });
 
     it("cast_forecast needs a person, a direction of rising | falling and one of the seven reason tags", () => {

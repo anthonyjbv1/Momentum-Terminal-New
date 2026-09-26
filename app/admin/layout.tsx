@@ -34,6 +34,7 @@ const SECTIONS = [
   { href: "#market", label: "Market" },
   { href: "#behaviour", label: "Behaviour" },
   { href: "#waitlist", label: "Waitlist" },
+  { href: "#signup", label: "Sign-up" },
 ];
 
 export default async function AdminLayout({ children }: Readonly<{ children: React.ReactNode }>) {

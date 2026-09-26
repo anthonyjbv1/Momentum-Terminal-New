@@ -34,6 +34,12 @@ export interface WaitlistFormProps {
 
 type Phase = { kind: "idle" } | { kind: "busy" } | { kind: "done"; position: number | null } | { kind: "error"; message: string };
 
+/** A member's referral code from the visitor's own link (?ref=), sent as found; the server keeps it only when well-formed. */
+function referralCode(): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("ref");
+}
+
 function campaignParameters(): Record<string, string> {
   if (typeof window === "undefined") return {};
   const params = new URLSearchParams(window.location.search);
@@ -68,6 +74,7 @@ export function WaitlistForm({ source, endpoint = "/api/waitlist", className }: 
           source,
           website,
           utm: campaignParameters(),
+          ref: referralCode(),
           referrer: typeof document === "undefined" ? null : document.referrer || null,
         }),
       });

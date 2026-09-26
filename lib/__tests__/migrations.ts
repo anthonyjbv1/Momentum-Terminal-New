@@ -20,6 +20,13 @@ export const SUPABASE_STUBS = `
   create role service_role nologin;
   create role supabase_auth_admin nologin;
 
+  -- Supabase's default privileges: every function created in public is
+  -- executable by anon, authenticated and service_role BY NAME, so a
+  -- migration's "revoke ... from public" alone does not take it back. The
+  -- stub grants the same, so a test sees what production sees (the gap that
+  -- left trade_history_for() open to anon until 2026-09-26).
+  alter default privileges in schema public grant execute on functions to anon, authenticated, service_role;
+
   create schema auth;
   -- Supabase keeps extensions in their own schema (Phase 28's citext).
   create schema extensions;
@@ -27,11 +34,21 @@ export const SUPABASE_STUBS = `
     id                 uuid        primary key default gen_random_uuid(),
     email              text,
     raw_user_meta_data jsonb       not null default '{}'::jsonb,
-    created_at         timestamptz not null default now()
+    -- Set by GoTrue, never by the caller: the provider that made the user.
+    raw_app_meta_data  jsonb       not null default '{"provider": "email"}'::jsonb,
+    created_at         timestamptz not null default now(),
+    email_confirmed_at timestamptz,
+    last_sign_in_at    timestamptz
   );
   create function auth.uid() returns uuid
   language sql stable
   as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+
+  -- Phase 32: a new auth user needs an open, attested invite. Tests that make
+  -- users to trade with take the operator's bypass for the whole database;
+  -- the tests of the rule itself turn it off in their own session.
+  select set_config('momentum.signup_without_invite', 'on', false);
+  do $$ begin execute format('alter database %I set momentum.signup_without_invite = %L', current_database(), 'on'); end $$;
 `;
 
 /** The migration files in the order Supabase applies them (by version prefix). */

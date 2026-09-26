@@ -5,6 +5,7 @@ import { unstable_rethrow } from "next/navigation";
 import { getCurrentProfile } from "@/lib/auth";
 import { Avatar } from "@/components/ui/avatar";
 import { buttonClassName } from "@/components/ui/button";
+import { avatarSource } from "@/lib/profile/model";
 
 /** Banner profile access: the signed-in user's avatar, or a sign-in link. */
 export async function ProfileButton() {
@@ -36,7 +37,7 @@ export async function ProfileButton() {
       aria-label={`Profile: ${profile.display_name}`}
       className="flex size-10 items-center justify-center rounded-full transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
     >
-      <Avatar name={profile.display_name} src={profile.avatar_url} size="md" />
+      <Avatar name={profile.display_name} src={avatarSource(profile)} size="md" initialsUnderImage={Boolean(profile.avatar_path)} />
     </Link>
   );
 }

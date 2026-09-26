@@ -3,8 +3,10 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { HOUSE_BANNED } from "@/lib/copy-rules";
+
 import { FEATURED_SLUG } from "./model";
-import { FEATURED, HEADLINES, HERO, HOW, META, OG, PRIVACY, PRIVACY_CONTACT_EMAIL, PRIVACY_CONTACT_IS_PLACEHOLDER, WAITLIST, WHY, allCopyStrings } from "./copy";
+import { FEATURED, HEADLINES, HERO, HOW, META, OG, PRIVACY, PRIVACY_CONTACT_EMAIL, PRIVACY_CONTACT_IS_PLACEHOLDER, PRIVACY_DELETION, WAITLIST, WHY, allCopyStrings } from "./copy";
 
 /**
  * THE COPY RULES (Phase 28), held against every string a stranger reads.
@@ -18,28 +20,8 @@ import { FEATURED, HEADLINES, HERO, HOW, META, OG, PRIVACY, PRIVACY_CONTACT_EMAI
 
 const root = join(__dirname, "..", "..");
 
-/** Never, in any form: the words the brief forbids, and the two it forbids by frame. */
-const BANNED: Array<{ name: string; pattern: RegExp }> = [
-  { name: "invest", pattern: /\binvest\w*/i },
-  { name: "bet", pattern: /\bbet(s|ting|tor|tors)?\b/i },
-  { name: "gamble", pattern: /\bgambl\w*/i },
-  { name: "wager", pattern: /\bwager\w*/i },
-  { name: "earn", pattern: /\bearn(s|ed|ing|ings)?\b/i },
-  { name: "profit", pattern: /\bprofit\w*/i },
-  { name: "returns", pattern: /\breturn(s|ed|ing)?\b/i },
-  { name: "income", pattern: /\bincome\b/i },
-  { name: "get paid", pattern: /\bget(s|ting)? paid\b|\bpaid\b|\bpayout\w*/i },
-  { name: "worth (a person's)", pattern: /\bworth\b/i },
-  { name: "value (a person's)", pattern: /\bvalue[sd]?\b|\bvaluation\b/i },
-  { name: "real money coming", pattern: /real[- ]money (trading )?(is|will|soon|coming|later|next)/i },
-  { name: "Oracle", pattern: /\boracle\b/i },
-  { name: "Black Mirror", pattern: /black mirror/i },
-  { name: "Nosedive", pattern: /nosedive/i },
-  // No manufactured urgency.
-  { name: "urgency", pattern: /\b(hurry|limited (time|spots|places)|only \d+ (left|spots|places)|last chance|act now|don.t miss)\b/i },
-  // The founder is never a pronoun.
-  { name: "pronoun", pattern: /\b(he|him|his|she|her|hers)\b/ },
-];
+/** Never, in any form: the words the brief forbids, and the two it forbids by frame (lib/copy-rules.ts). */
+const BANNED = HOUSE_BANNED;
 
 /** Every source file under a directory. */
 function sources(dir: string, out: string[] = []): string[] {
@@ -138,8 +120,27 @@ describe("the copy file", () => {
     expect(looksLikePlaceholder, `PRIVACY_CONTACT_EMAIL "${PRIVACY_CONTACT_EMAIL}" vs PRIVACY_CONTACT_IS_PLACEHOLDER ${PRIVACY_CONTACT_IS_PLACEHOLDER}`).toBe(PRIVACY_CONTACT_IS_PLACEHOLDER);
     const deletion = PRIVACY.sections.find((section) => section.title === "Deletion")!;
     expect(deletion.body.join(" ")).toContain("{contact}");
-    expect(PRIVACY.sections.map((section) => section.title)).toEqual(["What is collected", "Why", "How long", "Deletion"]);
+    expect(PRIVACY.sections.map((section) => section.title)).toEqual(["What is collected", "Why", "Who handles it", "How long", "Deletion"]);
     expect(PRIVACY.sections.find((section) => section.title === "Why")!.body.join(" ")).toMatch(/not sold/);
+    // Phase 32: privacy@ for data, info@ for invitations and the Terms.
+    expect(PRIVACY_CONTACT_EMAIL).toBe("privacy@momentumterminal.app");
+  });
+
+  it("covers accounts (Phase 32): deleted versus kept without a name, the backups, and a deletion line for each state of the beta switch", () => {
+    const deletion = PRIVACY.sections.find((section) => section.title === "Deletion")!.body.join(" ");
+    expect(deletion).toContain("{deletion}");
+    expect(deletion).toMatch(/What is deleted: your email address, username, display name and photo/);
+    expect(deletion).toMatch(/What is kept, without your name: your paper trades, the paper ledger and your forecasts/);
+    expect(PRIVACY.sections.find((section) => section.title === "How long")!.body.join(" ")).toMatch(/backups are kept for seven days/);
+    // Self-serve deletion exists only behind the switch; with it off, the page says to write in.
+    expect(PRIVACY_DELETION.inApp).toMatch(/from your profile/);
+    expect(PRIVACY_DELETION.inApp).toMatch(/before you confirm/);
+    expect(PRIVACY_DELETION.byEmail).toContain("{contact}");
+    expect(PRIVACY_DELETION.byEmail).not.toMatch(/profile/);
+    const collected = PRIVACY.sections.find((section) => section.title === "What is collected")!.body.join(" ");
+    expect(collected).toMatch(/18 or older/);
+    expect(collected).toMatch(/one-way hash/);
+    expect(collected).toMatch(/address itself is not stored/);
   });
 
   it("the OG image says the same things the page does", () => {

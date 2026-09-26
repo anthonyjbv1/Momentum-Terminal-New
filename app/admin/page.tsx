@@ -1,19 +1,21 @@
-import { WINDOWS, readBehaviour, readEngine, readIngestion, readLevers, readLlmCost, readMarket, readWaitlist, type Window } from "@/lib/admin/data";
+import { WINDOWS, readBehaviour, readEngine, readIngestion, readLevers, readLlmCost, readMarket, readSignup, readWaitlist, type Window } from "@/lib/admin/data";
 import { getRenderedAt } from "@/lib/render-time";
 import { BehaviourSection } from "@/components/admin/behaviour";
 import { EngineSection, LeversSection } from "@/components/admin/engine";
 import { IngestionSection } from "@/components/admin/ingestion";
 import { LlmCostSection } from "@/components/admin/llm-cost";
 import { MarketSection } from "@/components/admin/market";
+import { SignupSection } from "@/components/admin/signup";
 import { WaitlistSection } from "@/components/admin/waitlist";
 
 /**
- * /admin — one page, seven sections, everything on it read at request time.
+ * /admin — one page, eight sections, everything on it read at request time.
  *
  * Each read re-checks the admin flag itself (lib/admin/data.ts), so the layout's
  * check is a convenience and not the boundary. `?window=` moves the two
  * time-scoped sections; everything else is current state. `?notice=` carries
- * the outcome of the last market action (app/admin/actions.ts) as a sentence.
+ * the outcome of the last market action (app/admin/actions.ts) as a sentence;
+ * `?signup=` the outcome of the last invite action (app/admin/invite-actions.ts).
  */
 
 export const dynamic = "force-dynamic";
@@ -23,19 +25,20 @@ function parseWindow(value: string | string[] | undefined): Window {
   return WINDOWS.find((window) => window.id === first)?.id ?? "24h";
 }
 
-function parseNotice(value: string | string[] | undefined): string | null {
+function parseNotice(value: string | string[] | undefined, max = 300): string | null {
   const first = Array.isArray(value) ? value[0] : value;
-  return typeof first === "string" && first.trim() ? first.trim().slice(0, 300) : null;
+  return typeof first === "string" && first.trim() ? first.trim().slice(0, max) : null;
 }
 
-export default async function AdminPage({ searchParams }: { searchParams: Promise<{ window?: string | string[]; notice?: string | string[] }> }) {
+export default async function AdminPage({ searchParams }: { searchParams: Promise<{ window?: string | string[]; notice?: string | string[]; signup?: string | string[] }> }) {
   const params = await searchParams;
   const window = parseWindow(params.window);
   const notice = parseNotice(params.notice);
+  const signupNotice = parseNotice(params.signup, 600);
   // One clock for the whole page, so every "3m ago" on it agrees.
   const now = getRenderedAt();
 
-  const [llm, ingestion, engine, levers, market, behaviour, waitlist] = await Promise.all([
+  const [llm, ingestion, engine, levers, market, behaviour, waitlist, signup] = await Promise.all([
     readLlmCost(window),
     readIngestion(),
     readEngine(),
@@ -43,6 +46,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     readMarket(),
     readBehaviour(window),
     readWaitlist(),
+    readSignup(),
   ]);
 
   return (
@@ -54,6 +58,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       <MarketSection report={market} now={now} notice={notice} />
       <BehaviourSection report={behaviour} />
       <WaitlistSection report={waitlist} now={now} />
+      <SignupSection report={signup} now={now} notice={signupNotice} />
     </>
   );
 }

@@ -9,7 +9,8 @@ import { createSupabaseAdminClient } from "@/lib/supabase-admin";
  * POST /api/waitlist — the one way onto the waitlist (Phase 28).
  *
  * Body: { email, source?: "landing_hero" | "landing_footer", utm?: {source,
- * medium, campaign, content, term}, referrer?, website? }. `website` is the
+ * medium, campaign, content, term}, referrer?, ref?, website? }. `ref` is a
+ * member's referral code from the visitor's link (Phase 32). `website` is the
  * honeypot: a person never sees the field, so anything in it is a bot and
  * the request is dropped behind a success that gives nothing away.
  *
@@ -48,6 +49,7 @@ export async function POST(request: NextRequest) {
       p_source: submission.source,
       p_utm: submission.utm,
       p_referrer: submission.referrer ?? undefined,
+      p_ref: submission.ref ?? undefined,
     });
     if (error) throw new Error(error.message);
     const record = (data ?? {}) as Record<string, unknown>;

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -47,6 +47,21 @@ afterEach(async () => {
 async function open(before?: string): Promise<TestDatabase> {
   const database = await createTestDatabase(before ? { before } : {});
   databases.push(database);
+  return database;
+}
+
+/**
+ * The one correction to "what Phase 28 left". Phase 27 revoked
+ * trade_history_for() only from PUBLIC, so under Supabase's default grants
+ * anon and authenticated kept it until the 2026-09-26 revoke. The down file
+ * has always restored it to the service role alone, which is the corrected
+ * state, so Phase 28 is compared with that revoke applied.
+ */
+const REVOKE_TRADE_HISTORY_FOR = readFileSync(join(MIGRATIONS_DIR, readdirSync(MIGRATIONS_DIR).find((name) => name.endsWith("_revoke_trade_history_for.sql")) ?? ""), "utf8");
+
+async function openPhase28(): Promise<TestDatabase> {
+  const database = await open(PHASE29);
+  await database.exec(REVOKE_TRADE_HISTORY_FOR);
   return database;
 }
 
@@ -162,7 +177,7 @@ async function preexistingRows(database: TestDatabase, columns: Snapshot["column
 
 describe("the Phase 29 rollback", () => {
   it("takes the schema back to exactly what Phase 28 left", async () => {
-    const before = await snapshot(await open(PHASE29));
+    const before = await snapshot(await openPhase28());
     const database = await open(THROUGH_29B);
     // The comparison is not blind: with Phase 29 applied it sees the difference everywhere it should.
     expect(Object.keys(difference(before, await snapshot(database)))).toEqual(expect.arrayContaining(["columns", "constraints", "indexes", "functions", "triggers", "policies", "tables"]));
@@ -172,7 +187,7 @@ describe("the Phase 29 rollback", () => {
   }, 180_000);
 
   it("keeps every row: data from before Phase 29 and from while it ran flat survives, and the Phase 28 place_order trades again", async () => {
-    const database = await open(PHASE29);
+    const database = await openPhase28();
     const pre = await snapshot(database);
     await database.exec("update public.platform_settings set close_cooldown_seconds = 0 where id");
     const drake = await personId(database, "drake");

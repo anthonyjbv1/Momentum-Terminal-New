@@ -182,47 +182,73 @@ export const OG = {
 // ---------------------------------------------------------------------------
 
 /**
- * ╔══════════════════════════════════════════════════════════════════════╗
- * ║  PLACEHOLDER — SWAP THIS BEFORE ANY STRANGER SEES THE PAGE.          ║
- * ║                                                                      ║
- * ║  Where a person writes to have their address removed, shown on       ║
- * ║  /privacy as a mailto link. The operator chose (2026-09-23) to ship  ║
- * ║  a clearly flagged placeholder rather than an address; `.example`   ║
- * ║  is a reserved domain and can receive nothing. To go live: put the  ║
- * ║  real address here and set PRIVACY_CONTACT_IS_PLACEHOLDER to false. ║
- * ║  lib/landing/copy.test.ts holds the two in step.                     ║
- * ╚══════════════════════════════════════════════════════════════════════╝
+ * Where a person writes about their data, shown on /privacy as a mailto
+ * link. Phase 28 shipped a flagged placeholder here; Phase 32 set the real
+ * address (it forwards to the operator). The invitations and the Terms use
+ * info@ instead (lib/invites/email.ts, lib/legal/terms.ts).
+ * lib/landing/copy.test.ts holds the flag and the value in step.
  */
-export const PRIVACY_CONTACT_EMAIL = "privacy@placeholder.example";
-export const PRIVACY_CONTACT_IS_PLACEHOLDER = true;
+export const PRIVACY_CONTACT_EMAIL = "privacy@momentumterminal.app";
+export const PRIVACY_CONTACT_IS_PLACEHOLDER = false;
 
+/**
+ * The Privacy notice (Phase 28, rewritten in Phase 32 to cover accounts).
+ * One section differs with the beta switch: while BETA_SIGNUP_ENABLED is off
+ * there is no self-serve deletion in the app, so the page says to write in
+ * (PRIVACY_DELETION.byEmail); once it is on, the profile's Delete account is
+ * the way (PRIVACY_DELETION.inApp). Both describe the same outcome.
+ */
 export const PRIVACY = {
   title: "Privacy",
-  intro: "This page covers the landing page and the waitlist. The app itself is in closed beta and has its own terms.",
+  intro: "What Momentum Terminal collects, why, who handles it, how long it is kept, and how to have it deleted. It covers the landing page, the waitlist and accounts in the closed beta.",
   sections: [
     {
       title: "What is collected",
       body: [
-        "When you join the waitlist: your email address, the time you joined, which form you used, any campaign parameters in the link you arrived by (utm_source and the like), and the page that referred you, if your browser sent one.",
+        "When you join the waitlist: your email address, the time you joined, which form you used, any campaign parameters in the link you arrived by (utm_source and the like), the page that referred you, if your browser sent one, and the referral link you arrived by, if there was one.",
         "When you visit the landing page: an anonymous page-view event with a random session id that is not tied to you, the referring site, and the campaign parameters above. No name, no account, no third-party trackers, no analytics scripts.",
+        "When you accept an invitation: your email address, the username and display name you choose, the date you joined, who invited you and when, and a record that you confirmed you are 18 or older and accepted the beta Terms and this notice, with the version of each and the time.",
+        "When you use the app: your paper trades, positions and paper balance, your forecasts, the people you follow, your email preference, a photo if you upload one, and a record of what you open and tap in the app, tied to your account.",
+        "When you place a paper trade: a one-way hash of your network address and browser, used only to spot one person trading from several accounts. The address itself is not stored.",
       ],
     },
     {
       title: "Why",
       body: [
-        "To invite you to the beta by email. That is the only use. Your address is not sold, rented or shared, and the platform sends nothing else to it in this phase.",
+        "To run the beta: to send your invitation and sign-in links, to show you your portfolio and forecasts, to keep the paper market fair, and to learn how the product is used so it can be improved.",
+        "Your data is not sold, rented or shared for advertising. Beyond invitations and sign-in links, nothing is emailed to you unless you turn on email updates in your profile.",
+      ],
+    },
+    {
+      title: "Who handles it",
+      body: [
+        "Supabase stores the database and runs sign-in. Vercel hosts the site. Resend delivers the emails. If you choose to continue with Google, Google confirms your address. Each handles the data only to provide that service.",
       ],
     },
     {
       title: "How long",
-      body: ["Until the beta invites are done, or until you ask for it to go — whichever comes first."],
+      body: [
+        "A waitlist entry: until the beta invites are done, or until you ask for it to go, whichever comes first.",
+        "An account: for as long as you keep it. Database backups are kept for seven days, so anything deleted is gone from the backups within seven days.",
+      ],
     },
     {
       title: "Deletion",
-      /** {contact} is PRIVACY_CONTACT_EMAIL. */
-      body: ["Email {contact} from the address you signed up with, and the row is deleted. Nothing else is needed."],
+      /** {deletion} is PRIVACY_DELETION.inApp or .byEmail, by the beta switch. {contact} is PRIVACY_CONTACT_EMAIL. */
+      body: [
+        "{deletion}",
+        "What is deleted: your email address, username, display name and photo, the people you follow, the record of what you opened and tapped, the network hash on your trades, your waitlist entry and invitation details, and your sign-in.",
+        "What is kept, without your name: your paper trades, the paper ledger and your forecasts stay under an anonymous “Deleted account” with no link back to you, so the market’s history and every other member’s balance still add up. So do the consent record (versions and times only) and any review of trading on the account.",
+        "To have only a waitlist entry removed, email {contact} from the address you signed up with, and the row is deleted. Nothing else is needed.",
+      ],
     },
   ],
+} as const;
+
+/** The first line of the Deletion section, by whether the app offers self-serve deletion (BETA_SIGNUP_ENABLED). */
+export const PRIVACY_DELETION = {
+  inApp: "You can delete your account yourself, from your profile. It explains what happens before you confirm, and it cannot be undone. Any open positions need to be sold first.",
+  byEmail: "To delete an account, email {contact} from its address.",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -237,7 +263,7 @@ export function allCopyStrings(): string[] {
     else if (Array.isArray(value)) value.forEach(walk);
     else if (value && typeof value === "object") Object.values(value).forEach(walk);
   };
-  walk({ FEATURED, HEADLINES, HERO, HOW, WHY, WAITLIST, CHROME, META, OG, PRIVACY });
+  walk({ FEATURED, HEADLINES, HERO, HOW, WHY, WAITLIST, CHROME, META, OG, PRIVACY, PRIVACY_DELETION });
   return out;
 }
 

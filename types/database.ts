@@ -318,6 +318,39 @@ export type Database = {
           },
         ]
       }
+      follows: {
+        Row: {
+          created_at: string
+          person_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          person_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          person_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "follows_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "follows_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       forecast_votes: {
         Row: {
           created_at: string
@@ -355,6 +388,13 @@ export type Database = {
             columns: ["person_id"]
             isOneToOne: false
             referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "forecast_votes_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
@@ -502,6 +542,123 @@ export type Database = {
             columns: ["person_b_id"]
             isOneToOne: false
             referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      invites: {
+        Row: {
+          accepted_at: string | null
+          accepted_user_id: string | null
+          age_attested: boolean
+          attested_at: string | null
+          created_at: string
+          desired_display_name: string | null
+          desired_username: string | null
+          email: string | null
+          expires_at: string
+          id: string
+          invited_by: string
+          join_nonce_hash: string | null
+          last_send_error: string | null
+          privacy_version: string | null
+          referrer_user_id: string | null
+          revoke_note: string | null
+          revoked_at: string | null
+          revoked_by: string | null
+          send_count: number
+          sent_at: string | null
+          source: Json | null
+          terms_version: string | null
+          token_hash: string
+          waitlist_id: string | null
+        }
+        Insert: {
+          accepted_at?: string | null
+          accepted_user_id?: string | null
+          age_attested?: boolean
+          attested_at?: string | null
+          created_at?: string
+          desired_display_name?: string | null
+          desired_username?: string | null
+          email?: string | null
+          expires_at: string
+          id?: string
+          invited_by: string
+          join_nonce_hash?: string | null
+          last_send_error?: string | null
+          privacy_version?: string | null
+          referrer_user_id?: string | null
+          revoke_note?: string | null
+          revoked_at?: string | null
+          revoked_by?: string | null
+          send_count?: number
+          sent_at?: string | null
+          source?: Json | null
+          terms_version?: string | null
+          token_hash: string
+          waitlist_id?: string | null
+        }
+        Update: {
+          accepted_at?: string | null
+          accepted_user_id?: string | null
+          age_attested?: boolean
+          attested_at?: string | null
+          created_at?: string
+          desired_display_name?: string | null
+          desired_username?: string | null
+          email?: string | null
+          expires_at?: string
+          id?: string
+          invited_by?: string
+          join_nonce_hash?: string | null
+          last_send_error?: string | null
+          privacy_version?: string | null
+          referrer_user_id?: string | null
+          revoke_note?: string | null
+          revoked_at?: string | null
+          revoked_by?: string | null
+          send_count?: number
+          sent_at?: string | null
+          source?: Json | null
+          terms_version?: string | null
+          token_hash?: string
+          waitlist_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "invites_accepted_user_id_fkey"
+            columns: ["accepted_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invites_invited_by_fkey"
+            columns: ["invited_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invites_referrer_user_id_fkey"
+            columns: ["referrer_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invites_revoked_by_fkey"
+            columns: ["revoked_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invites_waitlist_id_fkey"
+            columns: ["waitlist_id"]
+            isOneToOne: false
+            referencedRelation: "waitlist"
             referencedColumns: ["id"]
           },
         ]
@@ -2234,51 +2391,114 @@ export type Database = {
           },
         ]
       }
+      user_consents: {
+        Row: {
+          accepted_at: string
+          id: number
+          invite_id: string | null
+          kind: string
+          recorded_at: string
+          user_id: string
+          version: string
+        }
+        Insert: {
+          accepted_at: string
+          id?: never
+          invite_id?: string | null
+          kind: string
+          recorded_at?: string
+          user_id: string
+          version: string
+        }
+        Update: {
+          accepted_at?: string
+          id?: never
+          invite_id?: string | null
+          kind?: string
+          recorded_at?: string
+          user_id?: string
+          version?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_consents_invite_id_fkey"
+            columns: ["invite_id"]
+            isOneToOne: false
+            referencedRelation: "invites"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "user_consents_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       users: {
         Row: {
+          avatar_path: string | null
           avatar_url: string | null
           buying_power_cents: number
           created_at: string
+          deleted_at: string | null
           display_name: string
           email: string
+          email_updates: boolean
           frozen_at: string | null
           frozen_reason: string | null
           id: string
           identity_verified_at: string | null
           is_admin: boolean
+          onboarded_at: string | null
+          referral_code: string | null
           referred_by: string | null
+          signup_source: Json | null
           username: string
           verified_identity_key: string | null
           wallet_balance_cents: number
         }
         Insert: {
+          avatar_path?: string | null
           avatar_url?: string | null
           buying_power_cents?: number
           created_at?: string
+          deleted_at?: string | null
           display_name: string
           email: string
+          email_updates?: boolean
           frozen_at?: string | null
           frozen_reason?: string | null
           id: string
           identity_verified_at?: string | null
           is_admin?: boolean
+          onboarded_at?: string | null
+          referral_code?: string | null
           referred_by?: string | null
+          signup_source?: Json | null
           username: string
           verified_identity_key?: string | null
           wallet_balance_cents?: number
         }
         Update: {
+          avatar_path?: string | null
           avatar_url?: string | null
           buying_power_cents?: number
           created_at?: string
+          deleted_at?: string | null
           display_name?: string
           email?: string
+          email_updates?: boolean
           frozen_at?: string | null
           frozen_reason?: string | null
           id?: string
           identity_verified_at?: string | null
           is_admin?: boolean
+          onboarded_at?: string | null
+          referral_code?: string | null
           referred_by?: string | null
+          signup_source?: Json | null
           username?: string
           verified_identity_key?: string | null
           wallet_balance_cents?: number
@@ -2299,6 +2519,7 @@ export type Database = {
           created_at: string
           email: string
           id: string
+          ref_code: string | null
           referrer: string | null
           source: string | null
           utm_campaign: string | null
@@ -2312,6 +2533,7 @@ export type Database = {
           created_at?: string
           email: string
           id?: string
+          ref_code?: string | null
           referrer?: string | null
           source?: string | null
           utm_campaign?: string | null
@@ -2325,6 +2547,7 @@ export type Database = {
           created_at?: string
           email?: string
           id?: string
+          ref_code?: string | null
           referrer?: string | null
           source?: string | null
           utm_campaign?: string | null
@@ -2441,9 +2664,41 @@ export type Database = {
         }
         Returns: Json
       }
+      admin_invite_list: {
+        Args: { p_limit?: number }
+        Returns: {
+          accepted_at: string
+          accepted_username: string
+          created_at: string
+          email: string
+          expires_at: string
+          from_waitlist: boolean
+          id: string
+          invited_by_username: string
+          last_send_error: string
+          referrer_username: string
+          revoked_at: string
+          send_count: number
+          sent_at: string
+          status: string
+        }[]
+      }
+      admin_issue_invites: {
+        Args: {
+          p_emails: string[]
+          p_expires_days?: number
+          p_from_waitlist: number
+          p_token_hashes: string[]
+        }
+        Returns: Json
+      }
       admin_lift_halt: {
         Args: { p_alert_id?: string; p_note: string; p_person_id: string }
         Returns: Json
+      }
+      admin_record_invite_send: {
+        Args: { p_error?: string; p_invite_id: string; p_ok: boolean }
+        Returns: undefined
       }
       admin_remove_excluded_party: {
         Args: {
@@ -2453,8 +2708,20 @@ export type Database = {
         }
         Returns: Json
       }
+      admin_resend_invite: {
+        Args: {
+          p_expires_days?: number
+          p_invite_id: string
+          p_token_hash: string
+        }
+        Returns: Json
+      }
       admin_resolve_alert: {
         Args: { p_alert_id: string; p_note: string; p_status: string }
+        Returns: Json
+      }
+      admin_revoke_invite: {
+        Args: { p_invite_id: string; p_note?: string }
         Returns: Json
       }
       admin_set_trading_mode: {
@@ -2469,6 +2736,25 @@ export type Database = {
       admin_unfreeze_account: {
         Args: { p_alert_id?: string; p_note: string; p_user_id: string }
         Returns: Json
+      }
+      admin_user_list: {
+        Args: { p_limit?: number }
+        Returns: {
+          deleted_at: string
+          display_name: string
+          email_confirmed_at: string
+          frozen_at: string
+          id: string
+          invited_at: string
+          invited_by_username: string
+          is_admin: boolean
+          joined_at: string
+          last_sign_in_at: string
+          onboarded_at: string
+          referred_by_username: string
+          signup_source: Json
+          username: string
+        }[]
       }
       apply_engine_tick: { Args: { p_tick: Json }; Returns: Json }
       apply_market_decay: {
@@ -2538,6 +2824,7 @@ export type Database = {
         Args: { p_amount_cents: number; p_user_id: string }
         Returns: Json
       }
+      delete_my_account: { Args: never; Returns: Json }
       evaluate_price_breakers: {
         Args: { p_at: string; p_tick_number: number }
         Returns: number
@@ -2594,15 +2881,38 @@ export type Database = {
         Args: { p_at: string; p_person_id: string }
         Returns: number
       }
+      invite_attest: {
+        Args: {
+          p_age_attested: boolean
+          p_display_name: string
+          p_join_nonce_hash: string
+          p_privacy_version: string
+          p_terms_version: string
+          p_token_hash: string
+          p_username: string
+        }
+        Returns: Json
+      }
+      invite_for_token: { Args: { p_token_hash: string }; Returns: Json }
+      invite_status: {
+        Args: {
+          p_accepted_at: string
+          p_expires_at: string
+          p_revoked_at: string
+        }
+        Returns: string
+      }
       join_waitlist: {
         Args: {
           p_email: string
+          p_ref?: string
           p_referrer?: string
           p_source?: string
           p_utm?: Json
         }
         Returns: Json
       }
+      mark_onboarded: { Args: never; Returns: string }
       market_average_cents: {
         Args: {
           p_base_cents: number
@@ -2744,6 +3054,7 @@ export type Database = {
         Args: { p_person_id: string; p_user_id: string }
         Returns: number
       }
+      new_referral_code: { Args: never; Returns: string }
       person_market_series: {
         Args: { p_person_id: string; p_points?: number; p_since?: string }
         Returns: {
