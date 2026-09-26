@@ -7,12 +7,22 @@ import { Card, CardContent } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { PhaseNotice } from "@/components/ui/phase-notice";
 import { SkeletonStat } from "@/components/ui/skeleton";
+import { MemberProfile } from "@/components/profile/member-profile";
 import { getCurrentProfile, requireUser } from "@/lib/auth";
+import { isBetaSignupEnabled } from "@/lib/env";
+import { getMyProfileView } from "@/lib/profile/server";
 
 export const metadata: Metadata = { title: "Profile" };
 
 export default async function ProfilePage() {
   const user = await requireUser("/profile");
+
+  // Phase 32: the member profile, behind the beta switch. While it is off,
+  // everything below is the page exactly as it was.
+  if (isBetaSignupEnabled()) {
+    const view = await getMyProfileView();
+    if (view) return <MemberProfile view={view} />;
+  }
 
   let profile: Awaited<ReturnType<typeof getCurrentProfile>> = null;
   try {
