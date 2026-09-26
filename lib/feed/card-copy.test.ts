@@ -7,6 +7,9 @@ import {
   KNOWN_OUTLETS,
   SOURCE_NOUNS,
   engineLead,
+  evidenceSource,
+  isNarrativeEvidence,
+  isTwitchGame,
   namesPerson,
   narrativeCard,
   outletName,
@@ -17,6 +20,7 @@ import {
   signalCard,
   signedMove,
   sourceNoun,
+  streamHeadline,
   type CardCopy,
   type CardEvidenceInput,
   type CardSubject,
@@ -65,6 +69,10 @@ function evidence(over: Partial<CardEvidenceInput> = {}): CardEvidenceInput {
 
 const BANNED = /\bRSS\b|signal read|Finnhub|σ|\bvia\b|Observed via|gravity target|API-Sports|\bsigma\b/i;
 
+/** Kai Cenat's went-live payloads as production stored them: 09-26 in a non-game category, 09-15 in a game. */
+const KAI_0926 = { kind: "stream", source: "twitch", stream_id: "320393470558", channel: "kaicenat", title: "🇮🇸EXPLORING ICELAND🇮🇸[Exploring The Unexplored]", game: "IRL", viewer_count: 0, started_at: "2026-09-26T11:16:20.000Z", observed_at: "2026-09-26T11:16:38.000Z" };
+const KAI_0915 = { kind: "stream", source: "twitch", stream_id: "320000000001", channel: "kaicenat", title: "🎮WOLVERINE MARATHON🎮CLICK HERE🎮", game: "Marvel's Wolverine", viewer_count: 40327, started_at: "2026-09-15T17:03:56.000Z", observed_at: "2026-09-15T17:04:10.000Z" };
+
 /** Every string a card puts in front of a reader. */
 function words(copy: CardCopy): string[] {
   return [copy.label, copy.headline, copy.line, copy.attribution].filter((text): text is string => text !== null);
@@ -94,6 +102,9 @@ function everyCard(): Array<{ copy: CardCopy; subject: CardSubject; why: string 
     out.push({ subject, why: `${subject.name} trending`, copy: signal(subject, { sourceName: "YouTube Trending", headline: `${subject.name} is trending at #1 on YouTube: "A video".`, detail: { kind: "trending", outlet: null, domain: null, link: null, digest: null } }) });
     out.push({ subject, why: `${subject.name} game`, copy: signal(subject, { sourceName: "API-Sports", headline: "Week 2: Kansas City Chiefs beat Indianapolis Colts 33-30.", detail: { kind: "game_result", outlet: null, domain: null, link: null, digest: null } }) });
     out.push({ subject, why: `${subject.name} filing`, copy: signal(subject, { sourceName: "Finnhub", headline: `${subject.name} bought shares.`, detail: { kind: "insider_filing", outlet: null, domain: null, link: null, digest: null } }) });
+    for (const payload of [KAI_0926, KAI_0915]) {
+      out.push({ subject, why: `${subject.name} went live (${payload.game})`, copy: signal(subject, { sourceName: "Twitch", headline: `${subject.name} is live on Twitch playing ${payload.game} to 0 viewers: "${payload.title}".`, payload, detail: projectSignalDetail(payload), impact: 0.2 }) });
+    }
     out.push({ subject, why: `${subject.name} unread`, copy: signal(subject, { processed: false, impact: null, detail: article("Forbes", "forbes.com") }) });
     for (const key of Object.keys(METRIC_VOICE)) {
       for (const sigma of [-3, 2.2, 2.8, 4.1]) {
@@ -352,5 +363,90 @@ describe("the server's projection of a payload", () => {
     expect(engineLead([evidence({ detail: article("ESPN", "espn.com") }), evidence({ id: "2", detail: article("MARCA", "marca.com") }), evidence({ id: "3", detail: article("Yahoo Sports", "sports.yahoo.com") })])).toBe("The Engine, from 3 stories in ESPN and 2 others");
     expect(engineLead([evidence({ sourceName: "YouTube comments", detail: { kind: "comment_digest", outlet: null, domain: null, link: null, digest: null } }), evidence({ id: "2", sourceName: "YouTube comments", detail: { kind: "comment_digest", outlet: null, domain: null, link: null, digest: null } })])).toBe("The Engine, from 2 comment digests");
     expect(engineLead([evidence({ sourceName: "Finnhub", payload: metric("company_news_volume_24h", 2.2) })])).toBe("The Engine, from company news");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PHASE 31 (Kai Cenat, 2026-09-26): the went-live line, and one card per fact
+// ---------------------------------------------------------------------------
+
+describe("the went-live line", () => {
+  const twitch = (payload: Record<string, unknown>, over: Partial<Parameters<typeof signalCard>[0]> = {}) =>
+    signal(cenat, { sourceName: "Twitch", headline: `Kai Cenat is live on Twitch playing ${String(payload.game)} to 0 viewers: "${String(payload.title)}".`, payload, detail: projectSignalDetail(payload), impact: 0, ...over });
+
+  it("reads the 09-26 stream as proposed: the title, the category in brackets, no count", () => {
+    const copy = twitch(KAI_0926);
+    expect(copy.headline).toBe("Kai Cenat went live on Twitch: “🇮🇸EXPLORING ICELAND🇮🇸[Exploring The Unexplored]” (IRL).");
+    expect(copy.quoted).toBe(false);
+    // The name is in the headline, so the line carries only the source and the move (rule 7).
+    expect(copy.line).toBe("Twitch · 0.0.");
+    expect(copy.attribution).toBe("Twitch");
+  });
+
+  it("says playing only for a game", () => {
+    expect(twitch(KAI_0915).headline).toBe("Kai Cenat went live on Twitch playing Marvel's Wolverine: “🎮WOLVERINE MARATHON🎮CLICK HERE🎮”.");
+    for (const category of ["IRL", "Just Chatting", "just chatting", "Music", "Travel & Outdoors", "Talk Shows & Podcasts", "Special Events", "Sports"]) {
+      expect(isTwitchGame(category), category).toBe(false);
+      expect(streamHeadline("Kai Cenat", { title: "t", category }), category).not.toMatch(/playing/);
+    }
+    for (const category of ["Fortnite", "Grand Theft Auto V", "Minecraft", "NBA 2K26", "Chess"]) {
+      expect(isTwitchGame(category), category).toBe(true);
+      expect(streamHeadline("Kai Cenat", { title: "t", category }), category).toBe(`Kai Cenat went live on Twitch playing ${category}: “t”.`);
+    }
+  });
+
+  it("never prints a viewer count, whatever the payload holds", () => {
+    for (const viewers of [0, 18, 40327]) {
+      for (const base of [KAI_0926, KAI_0915]) {
+        const copy = twitch({ ...base, viewer_count: viewers });
+        for (const text of words(copy)) expect(text).not.toMatch(/viewers?|\b40,?327\b|\bto 0\b/);
+      }
+    }
+    expect(projectSignalDetail(KAI_0915)).toEqual({ kind: "stream", outlet: null, domain: null, link: null, digest: null, stream: { title: KAI_0915.title, category: "Marvel's Wolverine" } });
+    expect(JSON.stringify(projectSignalDetail(KAI_0915))).not.toContain("40327");
+  });
+
+  it("holds when the title or the category is missing", () => {
+    expect(streamHeadline("Kai Cenat", { title: null, category: "IRL" })).toBe("Kai Cenat went live on Twitch (IRL).");
+    expect(streamHeadline("Kai Cenat", { title: null, category: "Fortnite" })).toBe("Kai Cenat went live on Twitch playing Fortnite.");
+    expect(streamHeadline("Kai Cenat", { title: "  A title  ", category: null })).toBe("Kai Cenat went live on Twitch: “A title”.");
+    expect(streamHeadline("Kai Cenat", { title: null, category: null })).toBe("Kai Cenat went live on Twitch.");
+    // No name to put on it: the stored headline stands in rather than a sentence about nobody.
+    expect(streamHeadline(" ", { title: "t", category: "IRL" })).toBeNull();
+    const stored = 'Kai Cenat is live on Twitch playing IRL to 0 viewers: "x".';
+    expect(signal({ name: "", category: null, company: null }, { sourceName: "Twitch", headline: stored, payload: KAI_0926, detail: projectSignalDetail(KAI_0926) }).headline).toBe(stored);
+  });
+
+  it("un-nests a template that quoted the stored went-live line into the new one", () => {
+    const stored = 'Kai Cenat is live on Twitch playing IRL to 0 viewers: "🇮🇸EXPLORING ICELAND🇮🇸[Exploring The Unexplored]".';
+    const copy = narrativeCard({
+      subject: cenat,
+      text: `Kai Cenat's momentum climbed on "${stored}".`,
+      impact: 0.4,
+      evidence: [evidence({ headline: stored, sourceName: "Twitch", payload: KAI_0926, detail: projectSignalDetail(KAI_0926) })],
+    });
+    expect(copy.headline).toBe("Kai Cenat went live on Twitch: “🇮🇸EXPLORING ICELAND🇮🇸[Exploring The Unexplored]” (IRL).");
+    expect(copy.line).toBe("Twitch · +0.4.");
+  });
+
+  it("names one piece of evidence by its source, never 'from 1 signals'", () => {
+    const live = evidence({ sourceName: "Twitch", payload: KAI_0926, detail: projectSignalDetail(KAI_0926) });
+    expect(engineLead([live])).toBe("The Engine, from Twitch");
+    expect(engineLead([live, evidence({ id: "2", sourceName: "YouTube", detail: { kind: "trending", outlet: null, domain: null, link: null, digest: null } })])).toBe("The Engine, from 2 signals");
+    expect(evidenceSource(live)).toBe("Twitch");
+    expect(evidenceSource(evidence({ detail: article("Forbes - Business", "forbes.com") }))).toBe("Forbes");
+    expect(evidenceSource(evidence({ sourceName: "Finnhub", payload: metric("company_news_volume_24h", 2.2) }))).toBe("Company news");
+  });
+});
+
+describe("rule 8: one card per fact", () => {
+  it("counts a direct link, and only a direct link", () => {
+    expect(isNarrativeEvidence([{ relation: "direct" }])).toBe(true);
+    expect(isNarrativeEvidence([{ relation: "inverse_pair" }, { relation: "direct" }])).toBe(true);
+    // An inverse pair's narrative is about the other person; the signal is still news about its own.
+    expect(isNarrativeEvidence([{ relation: "inverse_pair" }])).toBe(false);
+    expect(isNarrativeEvidence([])).toBe(false);
+    expect(isNarrativeEvidence(null)).toBe(false);
+    expect(isNarrativeEvidence(undefined)).toBe(false);
   });
 });

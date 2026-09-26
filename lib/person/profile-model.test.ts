@@ -258,6 +258,53 @@ describe("mergeSignals", () => {
   it("is empty when there is nothing, not a placeholder", () => {
     expect(mergeSignals([], [])).toEqual([]);
   });
+
+  it("lists a narrative's direct evidence inside it, never as its own item (Phase 31, rule 8)", () => {
+    const cenat = { name: "Kai Cenat", category: "creator", company: null };
+    const surge = {
+      id: "surge",
+      headline: "Kai Cenat's live audience jumped 22% in ten minutes.",
+      occurred_at: "2026-09-26T15:24:00Z",
+      impact_score: "0.54",
+      sentiment_label: null,
+      sentiment_confidence: null,
+      processed: true,
+      raw_payload: { kind: "live_moment", source: "twitch" },
+      data_sources: { display_name: "Twitch" },
+      narrative_signals: [{ relation: "direct" }],
+    };
+    const wentLive = {
+      id: "live",
+      headline: 'Kai Cenat is live on Twitch playing IRL to 0 viewers: "🇮🇸EXPLORING ICELAND🇮🇸[Exploring The Unexplored]".',
+      occurred_at: "2026-09-26T11:16:20Z",
+      impact_score: "0",
+      sentiment_label: null,
+      sentiment_confidence: null,
+      processed: true,
+      raw_payload: { kind: "stream", source: "twitch", title: "🇮🇸EXPLORING ICELAND🇮🇸[Exploring The Unexplored]", game: "IRL", viewer_count: 0 },
+      data_sources: { display_name: "Twitch" },
+      // Linked to someone else's narrative as the other half of a pair: still Kai's own news.
+      narrative_signals: [{ relation: "inverse_pair" }],
+    };
+    const narrative = {
+      id: "n-surge",
+      text: "Kai Cenat's momentum climbed as his Iceland stream drew a sudden crowd.",
+      created_at: "2026-09-26T15:30:00Z",
+      score_before: "61.0",
+      score_after: "61.5",
+      narrative_signals: [{ relation: "direct", signals: { id: "surge", headline: surge.headline, occurred_at: surge.occurred_at, impact_score: "0.54", raw_payload: surge.raw_payload, data_sources: { display_name: "Twitch" } } }],
+    };
+
+    const items = mergeSignals([surge, wentLive], [narrative], 30, cenat);
+    expect(items.map((item) => item.id)).toEqual(["narrative:n-surge", "signal:live"]);
+
+    const [card, live] = items;
+    expect(card.line).toBe("The Engine, from Twitch · +0.5.");
+    expect(card.evidence).toEqual([{ id: "surge", source: "Twitch", headline: surge.headline, link: null, impact: 0.54, personName: null, lines: [] }]);
+    expect(live.evidence).toEqual([]);
+    // The went-live line is rendered from the payload: no count, and no "playing" for IRL.
+    expect(live.headline).toBe("Kai Cenat went live on Twitch: “🇮🇸EXPLORING ICELAND🇮🇸[Exploring The Unexplored]” (IRL).");
+  });
 });
 
 describe("slugs and formatting", () => {

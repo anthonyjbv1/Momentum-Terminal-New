@@ -30,6 +30,11 @@ import { detailForPayload, readMetricPayload, sentenceForPayload, type MetricDet
  *      panels.
  *   7. The person is named ONCE in the body: our headline or the line, never
  *      both. An article's title is the publisher's text and does not count.
+ *   8. One card per fact (Phase 31). A signal the Engine linked to a
+ *      narrative as direct evidence is never its own card: the narrative is
+ *      the card and the signal is listed inside it (`isNarrativeEvidence`).
+ *      The Feed has done this in SQL since Phase 6d+; the profile's Signals
+ *      list and Home's rail do it with the same rule.
  */
 
 // ---------------------------------------------------------------------------
@@ -55,6 +60,14 @@ export interface SignalDetail {
   domain: string | null;
   link: string | null;
   digest: { lean: "positive" | "negative" | "mixed" | null; videoTitle: string | null; sampled: number | null } | null;
+  /**
+   * A broadcast's public shape: its title and its Twitch category (Phase 31).
+   * Present only on a stream signal. The viewer count the payload also holds
+   * is not read: a went-live line is written seconds into the stream, when
+   * the count is still zero or close to it, and the audience belongs to the
+   * live moments and the closing summary.
+   */
+  stream?: { title: string | null; category: string | null } | null;
 }
 
 export const NO_DETAIL: SignalDetail = { kind: null, outlet: null, domain: null, link: null, digest: null };
@@ -81,6 +94,7 @@ export function projectSignalDetail(payload: unknown): SignalDetail {
     domain: detailText(record.publisher_domain, 253),
     link: link && /^https?:\/\//i.test(link) ? link : null,
     digest: kind === "comment_digest" ? { lean, videoTitle: detailText(record.videoTitle, 200), sampled } : null,
+    ...(kind === "stream" ? { stream: { title: detailText(record.title, 300), category: detailText(record.game, 120) } } : {}),
   };
 }
 
@@ -301,6 +315,17 @@ export function showsAsCard(impact: number | null, processed: boolean | null): b
 }
 
 /**
+ * Rule 8: whether a signal is direct evidence of a narrative, from its
+ * narrative_signals links. Such a signal is never its own card on any
+ * surface; it is listed inside the narrative. An inverse-pair link does not
+ * count: that narrative is about the other person, and the signal is still
+ * news about its own. The same test as the NOT EXISTS in feed_entries().
+ */
+export function isNarrativeEvidence(links: ReadonlyArray<{ relation: string | null }> | null | undefined): boolean {
+  return (links ?? []).some((link) => link.relation === "direct");
+}
+
+/**
  * The line: a lead, then the move, with the surname between them when our
  * headline did not name the person (rule 7). "Company news · Musk +0.8."
  * where the headline said Tesla; "YouTube · +0.9." where it said MrBeast.
@@ -330,11 +355,74 @@ function digestHeadline(input: { headline: string; detail: SignalDetail | null }
   return input.headline;
 }
 
+/**
+ * Twitch categories that are not games (Phase 31), as Helix names them in a
+ * stream's `game_name`. A broadcast in one of these is not "playing"
+ * anything: the category goes in brackets after the title instead. Twitch's
+ * catalogue is overwhelmingly games and this list is short and stable, so a
+ * category not on it is read as a game. Compared case-insensitively.
+ */
+export const TWITCH_NON_GAME_CATEGORIES: ReadonlySet<string> = new Set(
+  [
+    "Just Chatting",
+    "IRL",
+    "Music",
+    "Art",
+    "Sports",
+    "Travel & Outdoors",
+    "Food & Drink",
+    "Talk Shows & Podcasts",
+    "Special Events",
+    "ASMR",
+    "Makers & Crafting",
+    "Science & Technology",
+    "Software and Game Development",
+    "Politics",
+    "Beauty & Body Art",
+    "Fitness & Health",
+    "Animals, Aquariums, and Zoos",
+    "Pools, Hot Tubs, and Beaches",
+    "Co-working & Studying",
+    "Crypto",
+    "DJs",
+    "Always On",
+  ].map((name) => name.toLowerCase()),
+);
+
+/** Whether a Twitch category is a game, for "playing". */
+export function isTwitchGame(category: string): boolean {
+  return !TWITCH_NON_GAME_CATEGORIES.has(category.trim().toLowerCase());
+}
+
+/**
+ * The went-live sentence (Phase 31), rendered from the broadcast's title and
+ * category rather than the stored headline:
+ *
+ *   Kai Cenat went live on Twitch: “EXPLORING ICELAND” (IRL).
+ *   Kai Cenat went live on Twitch playing Fortnite: “Squads with the boys”.
+ *
+ * No viewer count, ever: the stored line was written when the stream was
+ * seconds old and read "to 0 viewers". "Playing" only for a game. Null when
+ * there is no name to put on it; the stored headline stands in.
+ */
+export function streamHeadline(name: string, stream: { title: string | null; category: string | null }): string | null {
+  const who = name.trim();
+  if (!who) return null;
+  const title = stream.title?.trim() ? `“${stream.title.trim()}”` : null;
+  const category = stream.category?.trim() || null;
+  if (category && isTwitchGame(category)) return title ? `${who} went live on Twitch playing ${category}: ${title}.` : `${who} went live on Twitch playing ${category}.`;
+  const bracket = category ? ` (${category})` : "";
+  return title ? `${who} went live on Twitch: ${title}${bracket}.` : `${who} went live on Twitch${bracket}.`;
+}
+
 /** What a signal's headline is, in our voice or the publisher's, and whether it is ours. */
 export function signalHeadline(input: Pick<SignalCardInput, "subject" | "headline" | "payload" | "detail" | "occurredAt" | "sourceName">): { headline: string; quoted: boolean } {
   const metric = sentenceForPayload(input.payload, input.subject.name, input.occurredAt, { category: input.subject.category, company: input.subject.company });
   if (metric) return { headline: metric, quoted: false };
   if (input.detail?.kind === "comment_digest") return { headline: digestHeadline(input), quoted: false };
+  if (input.detail?.kind === "stream" && input.detail.stream) {
+    return { headline: streamHeadline(input.subject.name, input.detail.stream) ?? input.headline, quoted: false };
+  }
   return { headline: input.headline, quoted: isArticle(input) };
 }
 
@@ -393,6 +481,13 @@ export function evidenceSentence(item: CardEvidenceInput, subject: CardSubject):
   return signalHeadline({ subject: about, headline: item.headline, payload: item.payload, detail: item.detail, occurredAt: item.occurredAt, sourceName: item.sourceName });
 }
 
+/** Where one piece of evidence came from, above its sentence: the outlet for an article, the source noun for anything else. */
+export function evidenceSource(item: CardEvidenceInput): string {
+  const metric = readMetricPayload(item.payload) !== null;
+  const article = !metric && isArticle(item);
+  return (article ? outletName(item.detail?.outlet, item.detail?.domain) : null) ?? sourceNoun(item.sourceName, metric ? "metric" : item.detail?.kind);
+}
+
 /** "Forbes and Yahoo Finance", "ESPN and 2 others". */
 function outletList(names: string[]): string {
   const unique = [...new Set(names)];
@@ -428,6 +523,8 @@ export function engineLead(evidence: CardEvidenceInput[]): string {
     return `The Engine, from ${nouns.join(" and ")}`;
   }
   if (all("comment_digest")) return `The Engine, from ${direct.length} comment digest${direct.length === 1 ? "" : "s"}`;
+  // One piece of evidence is named by its source ("The Engine, from Twitch"), never "from 1 signals".
+  if (direct.length === 1) return `The Engine, from ${sourceNoun(direct[0].sourceName, direct[0].detail?.kind)}`;
   return `The Engine, from ${direct.length} signals`;
 }
 

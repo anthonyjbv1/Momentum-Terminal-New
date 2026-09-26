@@ -588,8 +588,14 @@ describe("the application", () => {
     // texts are never read into the projection), and lib/home/board.ts, which
     // does the same for the rail through the same projection. Both go
     // through the service-role client; neither is a page or a component.
+    //
+    // Phase 31 moves the rail's merge out of board.ts into
+    // lib/home/feed-preview-model.ts, a pure module beside it (as
+    // profile-model.ts sits beside profile.ts), so it can be tested. It reads
+    // the rows board.ts selected and projects them the same way; no read and
+    // no field was added.
     const root = join(__dirname, "..", "..");
-    const allowed = ["lib/feed/enrich.ts", "lib/home/board.ts", "lib/person/profile-model.ts", "lib/person/profile.ts"];
+    const allowed = ["lib/feed/enrich.ts", "lib/home/board.ts", "lib/home/feed-preview-model.ts", "lib/person/profile-model.ts", "lib/person/profile.ts"];
     const selectors = sourceFiles(root)
       .filter((file) => /^(app|components|lib\/(feed|person|home|portfolio))\//.test(relative(root, file)))
       .filter((file) => /raw_payload|rawPayload/.test(readFileSync(file, "utf8")))

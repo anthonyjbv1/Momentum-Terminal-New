@@ -54,6 +54,13 @@ const PERSON_COLUMNS =
 /** Most signal / narrative items the page lists. */
 const SIGNAL_LIMIT = 30;
 
+/**
+ * How many times SIGNAL_LIMIT signals are read, so the list stays full after
+ * the ones a narrative carries fall out (rule 8). Production, 2026-09-26: at
+ * most 23 of any person's newest 90 signals were direct evidence.
+ */
+const SIGNAL_READ_DEPTH = 3;
+
 /** The request's render time; lives in lib/render-time.ts, re-exported for the profile routes. */
 export { getRenderedAt } from "@/lib/render-time";
 
@@ -213,13 +220,15 @@ export const getPersonSignals = cache(async (person: SignalsSubject): Promise<Pr
   const supabase = createSupabaseAdminClient();
 
   const [signals, narratives, companies] = await Promise.all([
+    // Read deeper than the list shows: a signal a narrative links as direct
+    // evidence is not an item of its own (rule 8) and falls out in the merge.
     supabase
       .from("signals")
-      .select("id, headline, occurred_at, impact_score, sentiment_label, sentiment_confidence, processed, raw_payload, data_sources(display_name)")
+      .select("id, headline, occurred_at, impact_score, sentiment_label, sentiment_confidence, processed, raw_payload, data_sources(display_name), narrative_signals(relation)")
       .eq("person_id", person.id)
       .order("occurred_at", { ascending: false })
       .order("id", { ascending: false })
-      .limit(SIGNAL_LIMIT),
+      .limit(SIGNAL_LIMIT * SIGNAL_READ_DEPTH),
     supabase
       .from("narratives")
       .select("id, text, created_at, score_before, score_after, narrative_signals(relation, signals(id, headline, occurred_at, impact_score, raw_payload, data_sources(display_name), people(display_name)))")

@@ -5,7 +5,7 @@ import { useState } from "react";
 
 import { cn } from "@/lib/cn";
 import { relativeTime } from "@/lib/home/relative-time";
-import { FORCE_IMPACT_DECIMALS, formatSigned, signalIdOf, type ProfileSignal } from "@/lib/person/profile-model";
+import { FORCE_IMPACT_DECIMALS, formatSigned, signalIdOf, type ProfileEvidence, type ProfileSignal } from "@/lib/person/profile-model";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { directionAtPrecision } from "@/components/ui/direction-indicator";
@@ -169,9 +169,66 @@ function SignalItem({ item, personId, loggingEnabled, renderedAt }: { item: Prof
               </a>
             </Detail>
           ) : null}
+          {/*
+            Phase 31, rule 8: a signal the Engine linked to this narrative is
+            not an item of its own in the list, so it is read here, as the
+            Feed's "What the Engine saw" lists it.
+          */}
+          {item.kind === "narrative" && item.evidence.length > 0 ? (
+            <div className="col-span-2 flex flex-col gap-1">
+              <dt className="text-label text-fg-faint">What the Engine saw</dt>
+              <dd>
+                <ul className="flex flex-col divide-y divide-line">
+                  {item.evidence.map((evidence) => (
+                    <EvidenceRow key={evidence.id} evidence={evidence} />
+                  ))}
+                </ul>
+              </dd>
+            </div>
+          ) : null}
         </dl>
       ) : null}
     </article>
+  );
+}
+
+function EvidenceRow({ evidence }: { evidence: ProfileEvidence }) {
+  const lines = evidence.lines;
+  return (
+    <li className="flex items-start gap-3 py-2.5 first:pt-1 last:pb-0">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="text-xs text-fg-muted">
+          {evidence.personName ? (
+            <>
+              <span className="text-fg-secondary">{evidence.personName}</span>
+              <span className="text-fg-faint"> · </span>
+            </>
+          ) : null}
+          {evidence.source}
+        </span>
+        {evidence.link ? (
+          <a href={evidence.link} target="_blank" rel="noopener noreferrer" className="text-sm leading-relaxed text-fg-secondary underline-offset-4 hover:underline">
+            {evidence.headline}
+          </a>
+        ) : (
+          <span className="text-sm leading-relaxed text-fg-secondary">{evidence.headline}</span>
+        )}
+        {lines.length > 0 ? (
+          <span className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-muted">
+            {lines.map((line) => (
+              <span key={line.label}>
+                <span className="text-fg-faint">{line.label}:</span> {line.value}
+              </span>
+            ))}
+          </span>
+        ) : null}
+      </div>
+      {evidence.impact !== null ? (
+        <span className={cn("num shrink-0 text-xs font-medium", impactTones[directionAtPrecision(evidence.impact, FORCE_IMPACT_DECIMALS, 0)])}>
+          {formatSigned(evidence.impact, FORCE_IMPACT_DECIMALS)}
+        </span>
+      ) : null}
+    </li>
   );
 }
 

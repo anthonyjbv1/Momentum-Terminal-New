@@ -1,5 +1,15 @@
-import { narrativeCard, projectSignalDetail, signalCard, signalDetailLines, type CardEvidenceInput, type CardSubject } from "@/lib/feed/card-copy";
-import type { MetricDetailLine } from "@/lib/signals/metric-language";
+import {
+  evidenceSentence,
+  evidenceSource,
+  isNarrativeEvidence,
+  narrativeCard,
+  projectSignalDetail,
+  signalCard,
+  signalDetailLines,
+  type CardEvidenceInput,
+  type CardSubject,
+} from "@/lib/feed/card-copy";
+import { detailForPayload, type MetricDetailLine } from "@/lib/signals/metric-language";
 import { directionAtPrecision, directionOf, type Direction } from "@/components/ui/direction-indicator";
 
 /** Decimals a force's contribution is shown to, everywhere it is shown. Its colour follows the same rounding. */
@@ -702,6 +712,27 @@ export interface ProfileSignal {
    * window and sample behind it (Phase 21+). Empty for a narrative.
    */
   detail: MetricDetailLine[];
+  /**
+   * Narratives only: the signals the Engine linked to it, as the Feed's
+   * "What the Engine saw" lists them. A signal linked as direct evidence is
+   * not its own item in the list (rule 8 in lib/feed/card-copy.ts), so this
+   * is where it is read. Empty for a signal.
+   */
+  evidence: ProfileEvidence[];
+}
+
+/** One signal behind a narrative, rendered for the narrative's expand. */
+export interface ProfileEvidence {
+  id: string;
+  /** The outlet for an article, the source noun for anything else. */
+  source: string;
+  headline: string;
+  link: string | null;
+  impact: number | null;
+  /** The paired person, for inverse-pair evidence; null otherwise. */
+  personName: string | null;
+  /** A metric's arithmetic, as the signal's own expand shows it. */
+  lines: MetricDetailLine[];
 }
 
 export interface SignalRow {
@@ -719,6 +750,8 @@ export interface SignalRow {
    * the link (Phase 30). Read on the server; only the projection leaves it.
    */
   raw_payload?: unknown;
+  /** The narratives that link this signal, by relation (rule 8: direct evidence is not its own item). */
+  narrative_signals?: Array<{ relation: string | null }> | null;
 }
 
 /** A signal the Engine linked to a narrative, as the nested select returns it. */
@@ -760,11 +793,16 @@ function toSubject(subject: CardSubject | string | undefined): CardSubject {
  * outlet, a template narrative un-nested. `subject` carries the person's name,
  * category and company; absent, stored headlines are shown as they are and
  * no one is named in a line.
+ *
+ * ONE CARD PER FACT (Phase 31, rule 8). A signal the Engine linked to a
+ * narrative as direct evidence is not an item of its own, as on the Feed:
+ * the narrative is the item, and the signal is listed in its expand. Kai
+ * Cenat's 09-26 surge read as a narrative and again as the surge beneath it.
  */
 export function mergeSignals(signals: SignalRow[], narratives: NarrativeRow[], limit = 30, subject?: CardSubject | string): ProfileSignal[] {
   const about = toSubject(subject);
   const items: ProfileSignal[] = [
-    ...signals.map((row) => {
+    ...signals.filter((row) => !isNarrativeEvidence(row.narrative_signals)).map((row) => {
       const detail = projectSignalDetail(row.raw_payload);
       const input = {
         subject: about,
@@ -793,6 +831,7 @@ export function mergeSignals(signals: SignalRow[], narratives: NarrativeRow[], l
         scoreBefore: null,
         scoreAfter: null,
         processed: row.processed ?? null,
+        evidence: [],
       };
     }),
     ...narratives.map((row) => {
@@ -834,11 +873,26 @@ export function mergeSignals(signals: SignalRow[], narratives: NarrativeRow[], l
         scoreAfter: after,
         processed: null,
         detail: [],
+        evidence: evidence.map((item) => profileEvidence(item, about)),
       };
     }),
   ];
   // Newest first, then id, so items at the same instant keep one order on every load.
   return items.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || b.id.localeCompare(a.id)).slice(0, limit);
+}
+
+/** A narrative's evidence as its expand lists it: the Feed's evidence row, in the profile's shape. */
+function profileEvidence(item: CardEvidenceInput, subject: CardSubject): ProfileEvidence {
+  const about: CardSubject = item.personName ? { name: item.personName, category: null, company: null } : subject;
+  return {
+    id: item.id,
+    source: evidenceSource(item),
+    headline: evidenceSentence(item, subject).headline,
+    link: item.detail?.link ?? null,
+    impact: item.impact,
+    personName: item.personName,
+    lines: detailForPayload(item.payload, about.name, { category: about.category, company: about.company }),
+  };
 }
 
 /** The raw signal id behind a merged item, for the expand_signal event. Null for narratives. */
