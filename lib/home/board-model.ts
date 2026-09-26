@@ -149,6 +149,33 @@ export function categoryOptions(people: Array<{ category: string }>): CategoryOp
   return [{ value: "all", label: "All", count: people.length }, ...options];
 }
 
+/** The Home filter value for the people the viewer follows (Phase 32). */
+export const FOLLOWING_FILTER = "following";
+
+/**
+ * The filter options with "Following" after All, counting the followed
+ * people on the board, when the viewer follows anyone there. Without follows
+ * (signed out, the beta switch off, nobody picked) the options are unchanged.
+ */
+export function withFollowing(options: CategoryOption[], people: Array<{ id: string }>, followingIds: readonly string[] | undefined): CategoryOption[] {
+  if (!followingIds || followingIds.length === 0) return options;
+  const followed = new Set(followingIds);
+  const count = people.filter((person) => followed.has(person.id)).length;
+  if (count === 0) return options;
+  const [all, ...rest] = options;
+  return [all, { value: FOLLOWING_FILTER, label: "Following", count }, ...rest];
+}
+
+/** The people a filter value shows: everyone, the followed, or one category. */
+export function filterPeople<T extends { id: string; category: string }>(people: T[], value: string, followingIds: readonly string[] | undefined): T[] {
+  if (value === "all") return people;
+  if (value === FOLLOWING_FILTER) {
+    const followed = new Set(followingIds ?? []);
+    return people.filter((person) => followed.has(person.id));
+  }
+  return people.filter((person) => person.category === value);
+}
+
 /** The newest tick across the board, or null before the Engine has run. */
 export function latestTickAt(rows: PersonRow[]): string | null {
   let latest: string | null = null;

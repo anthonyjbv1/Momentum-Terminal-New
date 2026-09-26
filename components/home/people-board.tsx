@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { pickMovers, type HomeBoard } from "@/lib/home/board-model";
+import { filterPeople, pickMovers, withFollowing, type HomeBoard } from "@/lib/home/board-model";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/page-header";
@@ -22,18 +22,18 @@ export interface PeopleBoardProps {
   board: HomeBoard;
   /** Behavioural logging runs only for a signed-in user. */
   loggingEnabled: boolean;
+  /** The people the viewer follows (Phase 32, behind the beta switch). Adds a Following filter when anyone on the board is followed. */
+  followingIds?: string[];
 }
 
 const SURFACE = "home";
 
-export function PeopleBoard({ board, loggingEnabled }: PeopleBoardProps) {
+export function PeopleBoard({ board, loggingEnabled, followingIds }: PeopleBoardProps) {
   const [category, setCategory] = useState("all");
   const listRef = useRef<HTMLDivElement>(null);
 
-  const people = useMemo(
-    () => (category === "all" ? board.people : board.people.filter((person) => person.category === category)),
-    [board.people, category],
-  );
+  const options = useMemo(() => withFollowing(board.categories, board.people, followingIds), [board.categories, board.people, followingIds]);
+  const people = useMemo(() => filterPeople(board.people, category, followingIds), [board.people, category, followingIds]);
 
   // Featured people follow the filter, so "Creator" shows the top creators.
   const movers = useMemo(
@@ -56,7 +56,7 @@ export function PeopleBoard({ board, loggingEnabled }: PeopleBoardProps) {
 
   return (
     <div ref={listRef} className="flex flex-col gap-10">
-      <CategoryFilter options={board.categories} value={category} onChange={setCategory} />
+      <CategoryFilter options={options} value={category} onChange={setCategory} />
 
       {people.length === 0 ? (
         <Card tone="ghost">

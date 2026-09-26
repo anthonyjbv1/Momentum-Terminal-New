@@ -36,12 +36,18 @@ export const BEHAVIORAL_EVENT_TYPES = [
   "reject_trade",
   "view_portfolio",
   "cast_forecast",
+  // Phase 32: the onboarding screens, one row per screen shown and per way out of it.
+  "onboarding_step",
   // Public pages (Phase 28): logged server-side with no user, a session id only.
   "view_landing",
   "join_waitlist",
 ] as const;
 
 export const TRADE_SHEET_STEPS = ["compose", "confirm", "result"] as const;
+
+/** Phase 32: the onboarding screens, in order, and what a person did on one. */
+export const ONBOARDING_STEPS = ["what", "paper", "follow", "forecast"] as const;
+export const ONBOARDING_ACTIONS = ["view", "next", "skip", "finish"] as const;
 export type TradeSheetStep = (typeof TRADE_SHEET_STEPS)[number];
 
 export type BehavioralEventType = (typeof BEHAVIORAL_EVENT_TYPES)[number];
@@ -153,6 +159,11 @@ export const BEHAVIORAL_EVENT_DEFINITIONS: Record<BehavioralEventType, Behaviora
     description: "Opened the portfolio.",
     requiresPerson: false,
     metadata: "{ positions?: integer >= 0, orders?: integer >= 0 }  what it showed on arrival",
+  },
+  onboarding_step: {
+    description: "An onboarding screen was shown, or left by Next, Skip or Finish (Phase 32). Skipping is recorded, never discouraged.",
+    requiresPerson: false,
+    metadata: "{ step: 'what' | 'paper' | 'follow' | 'forecast', action: 'view' | 'next' | 'skip' | 'finish', followed?: integer >= 0 }",
   },
   view_landing: {
     description: "A visitor loaded the public landing page (Phase 28). Anonymous: no user, a one-off session id.",
@@ -428,6 +439,14 @@ const TYPE_CHECKS: Partial<Record<BehavioralEventType, TypeCheck>> = {
       return { ok: false, reason: "cast_forecast requires metadata.reason (one of the seven tags)" };
     }
     return { ok: true, metadata: { ...metadata, direction, reason } };
+  },
+  onboarding_step: (metadata) => {
+    const step = typeof metadata?.step === "string" ? metadata.step.trim().toLowerCase() : "";
+    if (!(ONBOARDING_STEPS as readonly string[]).includes(step)) return { ok: false, reason: `onboarding_step requires metadata.step (${ONBOARDING_STEPS.join(" | ")})` };
+    const action = typeof metadata?.action === "string" ? metadata.action.trim().toLowerCase() : "";
+    if (!(ONBOARDING_ACTIONS as readonly string[]).includes(action)) return { ok: false, reason: `onboarding_step requires metadata.action (${ONBOARDING_ACTIONS.join(" | ")})` };
+    if (metadata?.followed !== undefined && !isNonNegativeInteger(metadata.followed)) return { ok: false, reason: "metadata.followed must be an integer >= 0" };
+    return { ok: true, metadata: { ...metadata, step, action } };
   },
   view_entry: (metadata) => {
     const entryId = typeof metadata?.entry_id === "string" ? metadata.entry_id.trim() : "";

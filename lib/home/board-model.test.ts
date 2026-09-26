@@ -4,6 +4,8 @@ import {
   buildBoard,
   categoryLabel,
   categoryOptions,
+  filterPeople,
+  withFollowing,
   latestTickAt,
   pickMovers,
   rankPeople,
@@ -101,6 +103,30 @@ describe("pickMovers", () => {
   it("falls back to the top of the ranking when nothing has moved", () => {
     const flat = rankPeople([DRAKE, MRBEAST, KAI, ELON], []);
     expect(pickMovers(flat, 2).map((p) => p.slug)).toEqual(["mrbeast", "drake"]);
+  });
+});
+
+describe("the Following filter (Phase 32)", () => {
+  const ranked = rankPeople([DRAKE, MRBEAST, KAI, ELON], []);
+  const options = categoryOptions(ranked);
+
+  it("is absent without follows, so the board is unchanged for everyone else", () => {
+    expect(withFollowing(options, ranked, undefined)).toEqual(options);
+    expect(withFollowing(options, ranked, [])).toEqual(options);
+    expect(withFollowing(options, ranked, ["not-on-the-board"])).toEqual(options);
+  });
+
+  it("sits after All and counts only the followed people on the board", () => {
+    const withIt = withFollowing(options, ranked, [KAI.id, ELON.id, "gone"]);
+    expect(withIt[0]).toEqual(options[0]);
+    expect(withIt[1]).toEqual({ value: "following", label: "Following", count: 2 });
+    expect(withIt.slice(2)).toEqual(options.slice(1));
+  });
+
+  it("filters to the followed, to a category, or to everyone", () => {
+    expect(filterPeople(ranked, "following", [KAI.id]).map((p) => p.id)).toEqual([KAI.id]);
+    expect(filterPeople(ranked, "creator", undefined).every((p) => p.category === "creator")).toBe(true);
+    expect(filterPeople(ranked, "all", undefined)).toHaveLength(4);
   });
 });
 
