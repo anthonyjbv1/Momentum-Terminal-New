@@ -80,6 +80,16 @@ describe("the join page's state", () => {
     expect(looked).toBe(false);
   });
 
+  it("says the invite could not be checked, rather than failing, when the lookup throws", async () => {
+    const state = await joinPageState("a".repeat(43), {
+      enabled: true,
+      lookup: async () => {
+        throw new Error("fetch failed");
+      },
+    });
+    expect(state).toEqual({ kind: "unavailable" });
+  });
+
   it("refuses a malformed token without asking the database, and names each way an invite stops working", async () => {
     let looked = 0;
     const lookup = (value: InviteView | null) => async () => {

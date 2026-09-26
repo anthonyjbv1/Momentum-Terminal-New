@@ -131,7 +131,8 @@ function pillFace(shape: string): string {
   return cn(
     shape,
     "bg-surface text-fg transition-colors hover:bg-surface-raised",
-    "peer-checked:bg-surface-inverse peer-checked:text-fg-inverse",
+    // Chosen stays chosen under the pointer: without the stacked variant, hover's grey would win over the inverse fill.
+    "peer-checked:bg-surface-inverse peer-checked:text-fg-inverse peer-checked:hover:bg-surface-inverse",
     "peer-focus-visible:ring-2 peer-focus-visible:ring-ring/60",
   );
 }

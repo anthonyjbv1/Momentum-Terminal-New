@@ -98,7 +98,7 @@ export function MemberProfile({ view }: { view: ProfileView }) {
           <SignOutButton />
           {view.isOperator ? null : (
             <div className="flex flex-col gap-2 sm:items-end">
-              <Link href="/profile/delete" className={buttonClassName("ghost", "sm", "self-start text-negative sm:self-end")}>
+              <Link href="/profile/delete" className={buttonClassName("ghost", "sm", "self-start sm:self-end")}>
                 {PROFILE.account.delete}
               </Link>
               <p className="text-xs text-fg-muted sm:text-right">{PROFILE.account.deleteHint}</p>

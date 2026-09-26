@@ -74,13 +74,13 @@ export function SignupSection({ report, now, notice }: { report: SignupReport; n
                 <tr>
                   <th>Email</th>
                   <th>Status</th>
+                  <th />
                   <th>Issued</th>
                   <th>By</th>
                   <th>From</th>
                   <th>Sent</th>
                   <th>Expires</th>
                   <th>Accepted</th>
-                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -90,21 +90,7 @@ export function SignupSection({ report, now, notice }: { report: SignupReport; n
                     <td>
                       <Badge tone={STATUS_TONE[row.status]}>{row.status}</Badge>
                     </td>
-                    <td>
-                      {age(row.createdAt, now)} <span className="adm-dim adm-k">{stamp(row.createdAt)}</span>
-                    </td>
-                    <td className="adm-k">{row.invitedBy ?? "—"}</td>
-                    <td className="adm-k">
-                      {row.fromWaitlist ? "waitlist" : "typed"}
-                      {row.referrer ? <span className="adm-dim"> · referred by {row.referrer}</span> : null}
-                    </td>
-                    <td className="adm-k">
-                      {row.sentAt ? `${num(row.sendCount)}× · ${age(row.sentAt, now)}` : "not sent"}
-                      {row.lastSendError ? <div style={{ color: "var(--adm-bad)" }}>{row.lastSendError}</div> : null}
-                    </td>
-                    <td className="adm-k">{stamp(row.expiresAt)}</td>
-                    <td className="adm-k">{row.acceptedAt ? `${row.acceptedUsername ?? "deleted"} · ${stamp(row.acceptedAt)}` : "—"}</td>
-                    <td>
+                    <td style={{ whiteSpace: "nowrap" }}>
                       {row.status === "pending" || row.status === "expired" ? (
                         <span style={{ display: "inline-flex", gap: 4 }}>
                           <form action={resendInviteAction} className="adm-form">
@@ -123,6 +109,20 @@ export function SignupSection({ report, now, notice }: { report: SignupReport; n
                         </span>
                       ) : null}
                     </td>
+                    <td>
+                      {age(row.createdAt, now)} <span className="adm-dim adm-k">{stamp(row.createdAt)}</span>
+                    </td>
+                    <td className="adm-k">{row.invitedBy ?? "—"}</td>
+                    <td className="adm-k">
+                      {row.fromWaitlist ? "waitlist" : "typed"}
+                      {row.referrer ? <span className="adm-dim"> · referred by {row.referrer}</span> : null}
+                    </td>
+                    <td className="adm-k">
+                      {row.sentAt ? `${num(row.sendCount)}× · ${age(row.sentAt, now)}` : "not sent"}
+                      {row.lastSendError ? <div style={{ color: "var(--adm-bad)" }}>{row.lastSendError}</div> : null}
+                    </td>
+                    <td className="adm-k">{stamp(row.expiresAt)}</td>
+                    <td className="adm-k">{row.acceptedAt ? `${row.acceptedUsername ?? "deleted"} · ${stamp(row.acceptedAt)}` : "—"}</td>
                   </tr>
                 ))}
               </tbody>

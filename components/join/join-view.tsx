@@ -31,7 +31,7 @@ export function JoinView({ state, token, googleEnabled }: { state: Exclude<JoinP
         {expires ? (
           <p className="mt-6 px-1 text-sm text-fg-muted">
             This invitation works once, until{" "}
-            <span className="num">{new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(expires)}</span>.
+            <span className="tabular-nums">{new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(expires)}</span>.
           </p>
         ) : null}
       </>
@@ -43,6 +43,7 @@ export function JoinView({ state, token, googleEnabled }: { state: Exclude<JoinP
     used: { title: "Already used", body: JOIN_MESSAGES.used },
     revoked: { title: "Invitation withdrawn", body: JOIN_MESSAGES.revoked },
     expired: { title: "Invitation expired", body: JOIN_MESSAGES.expired },
+    unavailable: { title: "Try again in a moment", body: JOIN_MESSAGES.lookupUnavailable },
   };
   const { title, body } = copy[state.kind];
   return (

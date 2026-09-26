@@ -15,11 +15,11 @@ import { TERMS, TERMS_CONTACT_EMAIL } from "@/lib/legal/terms";
  * lib/legal/terms.ts.
  */
 
-export const metadata: Metadata = {
-  title: "Beta Terms",
-  alternates: { canonical: "/terms" },
-  robots: { index: false, follow: false },
-};
+/** The title follows the switch: while it is off, the 404 says nothing about what would have been here. */
+export function generateMetadata(): Metadata {
+  const base: Metadata = { robots: { index: false, follow: false } };
+  return isBetaSignupEnabled() ? { ...base, title: "Beta Terms", alternates: { canonical: "/terms" } } : base;
+}
 
 export default function TermsPage() {
   if (!isBetaSignupEnabled()) notFound();

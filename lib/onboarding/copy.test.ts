@@ -85,7 +85,7 @@ describe("onboarding copy", () => {
   });
 
   it("offers Skip on every screen", () => {
-    const page = readFileSync(join(root, "app", "start", "page.tsx"), "utf8");
+    const page = readFileSync(join(root, "components", "onboarding", "onboarding-screen.tsx"), "utf8");
     const steps = readFileSync(join(root, "components", "onboarding", "steps.tsx"), "utf8");
     // The frame carries Skip; every onboarding screen renders inside it.
     expect(steps).toMatch(/StepFrame[\s\S]*skipAction[\s\S]*ONBOARDING\.skip/);

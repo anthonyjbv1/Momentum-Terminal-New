@@ -16,11 +16,11 @@ import { lookupInvite } from "@/lib/invites/server";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "Your invitation",
-  robots: { index: false, follow: false },
-  referrer: "no-referrer",
-};
+/** The title follows the switch: while it is off, the 404 says nothing about what would have been here. */
+export function generateMetadata(): Metadata {
+  const base: Metadata = { robots: { index: false, follow: false }, referrer: "no-referrer" };
+  return isBetaSignupEnabled() ? { ...base, title: "Your invitation" } : base;
+}
 
 export default async function JoinPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;

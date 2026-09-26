@@ -42,7 +42,9 @@ export type JoinPageState =
   | { kind: "open"; invite: InviteView }
   | { kind: "used" }
   | { kind: "revoked" }
-  | { kind: "expired" };
+  | { kind: "expired" }
+  /** The invite could not be checked (the database did not answer). Nothing was used up. */
+  | { kind: "unavailable" };
 
 export function readInviteView(value: unknown): InviteView | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -63,7 +65,13 @@ export function readInviteView(value: unknown): InviteView | null {
 export async function joinPageState(token: string, deps: { enabled: boolean; lookup: (token: string) => Promise<InviteView | null> }): Promise<JoinPageState> {
   if (!deps.enabled) return { kind: "closed" };
   if (!isInviteTokenShape(token)) return { kind: "not_found" };
-  const invite = await deps.lookup(token);
+  let invite: InviteView | null;
+  try {
+    invite = await deps.lookup(token);
+  } catch (error) {
+    console.warn("[join] invite lookup failed:", error instanceof Error ? error.message : error);
+    return { kind: "unavailable" };
+  }
   if (!invite) return { kind: "not_found" };
   if (invite.status === "accepted") return { kind: "used" };
   if (invite.status === "revoked") return { kind: "revoked" };
@@ -126,6 +134,7 @@ export const JOIN_MESSAGES = {
   usernameTaken: "That username is taken. Try another.",
   rateLimited: "Too many attempts from your connection. Please wait a few minutes and try again.",
   unavailable: "Something went wrong on our side. Please try again in a moment.",
+  lookupUnavailable: "The invitation could not be checked just now. Nothing has been used up: open the same link again in a few minutes.",
   googleOff: "Google sign-in is not available yet. Use the email link instead.",
 } as const;
 
