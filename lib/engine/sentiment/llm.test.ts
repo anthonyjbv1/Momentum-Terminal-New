@@ -381,10 +381,18 @@ describe("prompt version 2 (Phase 31)", () => {
   }
 
   it("asks with the version-2 prompt and schema and reads salience and the note's direction; version 1 asks as before and reads neither", async () => {
-    const complete = answering((id) => (id === "s2" ? "incidental" : id === "s3" ? "unrelated" : "relevant"));
+    const complete = answering((id) => (id === "s2" ? "incidental" : id === "s3" ? "unrelated" : id === "s5" ? "wealth_ranking" : "relevant"));
     const { scorer } = makeScorer(complete, { promptVersion: 2 });
     expect(scorer.promptVersion).toBe(2);
-    const [a, b, c] = (await Promise.all([scorer.scoreSignal(signal("s1", "p-drake", "Drake drops surprise album")), scorer.scoreSignal(signal("s2", "p-drake", "Drake among guests at gala")), scorer.scoreSignal(signal("s3", "p-drake", "Drake University wins"))])).map(scored);
+    const [a, b, c, e] = (
+      await Promise.all([
+        scorer.scoreSignal(signal("s1", "p-drake", "Drake drops surprise album")),
+        scorer.scoreSignal(signal("s2", "p-drake", "Drake among guests at gala")),
+        scorer.scoreSignal(signal("s3", "p-drake", "Drake University wins")),
+        scorer.scoreSignal(signal("s5", "p-drake", "Drake climbs the hip-hop rich list as catalogue value rises")),
+      ])
+    ).map(scored);
+    expect(e.salience).toBe("wealth_ranking");
     const request = complete.mock.calls[0][0];
     expect(request.systemPrompt).toBe(SENTIMENT_SYSTEM_PROMPT_V2);
     expect(request.responseFormat).toMatchObject({ type: "json", name: "sentiment_assessment_v2" });

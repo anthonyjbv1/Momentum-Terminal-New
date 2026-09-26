@@ -39,10 +39,11 @@ describe("the switch", () => {
     expect(describeEngineOverrides(DEFAULT_ENGINE_CONFIG)).toEqual([]);
   });
 
-  it("names the proposed values: 1.0 / 0.3 / 0 salience, a 48-hour story window, confirmations at a fifth capped at 0.15", () => {
+  it("names the decided values: 1.0 / 0.3 / 0.3 / 0 salience, a 48-hour story window, confirmations at a fifth capped at 0.15", () => {
     expect(DEFAULT_ENGINE_CONFIG.signalQuality).toEqual({
       enabled: false,
-      salienceMultipliers: { relevant: 1, incidental: 0.3, unrelated: 0 },
+      // wealth_ranking sits at incidental's weight until counsel rules (decided 2026-09-26).
+      salienceMultipliers: { relevant: 1, wealth_ranking: 0.3, incidental: 0.3, unrelated: 0 },
       storyWindowHours: 48,
       storyAnchorThreshold: 0.25,
       storyConfirmationShare: 0.2,
@@ -63,6 +64,7 @@ describe("salience", () => {
     expect(salienceWeight(sentiment("incidental"), off)).toBe(1);
     expect(salienceWeight(sentiment("incidental"), undefined)).toBe(1);
     expect(salienceWeight(sentiment("incidental"), on)).toBe(0.3);
+    expect(salienceWeight(sentiment("wealth_ranking"), on)).toBe(0.3);
     expect(salienceWeight(sentiment("unrelated"), on)).toBe(0);
     expect(salienceWeight(sentiment("relevant"), on)).toBe(1);
     expect(salienceWeight(sentiment(), on)).toBe(1);

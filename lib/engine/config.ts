@@ -515,10 +515,13 @@ export interface EngineConfig {
    *
    * SALIENCE. The model labels every event signal by what the story SAYS
    * about this person's trajectory, not by whether they are its main
-   * subject: relevant (it carries information about them, even as the party
-   * overtaken or the donor named), incidental (named without anything said
-   * about them: an attendee list, a passing comparison), unrelated (a
-   * namesake). The label multiplies the impact. 1.0 / 0.3 / 0 as proposed.
+   * subject: relevant (it carries information about them, even as the donor
+   * named or the founder whose company is in the news), wealth_ranking (the
+   * only information is a net-worth or rich-list change driven by a stock
+   * price; decided 2026-09-26, weighted like incidental until counsel rules),
+   * incidental (named without anything said about them: an attendee list, a
+   * passing comparison), unrelated (a namesake). The label multiplies the
+   * impact: 1.0 / 0.3 / 0.3 / 0.
    *
    * STORIES. One event, one signal. A new event signal that tells the same
    * story as one already scored for the person inside storyWindowHours (or
@@ -539,7 +542,7 @@ export interface EngineConfig {
   signalQuality: {
     /** The switch. Ships false. SIGNAL_QUALITY_ENABLED=true turns it on deliberately, ingestion included. */
     enabled: boolean;
-    salienceMultipliers: { relevant: number; incidental: number; unrelated: number };
+    salienceMultipliers: { relevant: number; wealth_ranking: number; incidental: number; unrelated: number };
     /** How far back a scored story is compared against a new one, in hours. The ingestion lookback, so the two agree on what "the same day's story" means. */
     storyWindowHours: number;
     /** The Dice coefficient from which two headlines sharing an anchor are one story. Below the ingestion threshold on purpose: the anchor carries the rest. */
@@ -634,7 +637,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   },
   signalQuality: {
     enabled: false,
-    salienceMultipliers: { relevant: 1, incidental: 0.3, unrelated: 0 },
+    salienceMultipliers: { relevant: 1, wealth_ranking: 0.3, incidental: 0.3, unrelated: 0 },
     storyWindowHours: 48,
     storyAnchorThreshold: 0.25,
     storyConfirmationShare: 0.2,

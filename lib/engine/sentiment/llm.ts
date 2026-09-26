@@ -111,7 +111,7 @@ interface ParsedResponse {
 
 const LABELS = new Set(["positive", "negative", "neutral"]);
 const ANOMALIES = new Set(["routine", "notable", "anomalous"]);
-const SALIENCES = new Set(["relevant", "incidental", "unrelated"]);
+const SALIENCES = new Set(["relevant", "wealth_ranking", "incidental", "unrelated"]);
 const DIRECTIONS = new Set(["up", "down", "flat"]);
 
 /**

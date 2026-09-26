@@ -48,10 +48,16 @@ export type SentimentAnomaly = "routine" | "notable" | "anomalous";
 /**
  * SALIENCE BY INFORMATION, NOT PROMINENCE (Phase 31). Not "is this person the
  * main subject" but "does this story say something about this person's
- * trajectory": "Zuckerberg overtakes Dell" is relevant, and negative, for
- * Dell; a name in an attendee list is incidental; a namesake is unrelated.
+ * trajectory": funding a campaign is relevant for the donor; a name in an
+ * attendee list is incidental; a namesake is unrelated. WEALTH_RANKING is the
+ * fourth label (decided 2026-09-26): the only thing the story says about the
+ * person is that their net worth or their place in a rich list changed, and
+ * the change is a stock price moving. Weighted like incidental until counsel
+ * rules on where such stories sit against the no-security-price rule; a story
+ * in which the person ACTED (a deal, a donation, a statement, a filing) stays
+ * relevant whatever dollar figure it carries.
  */
-export type SentimentSalience = "relevant" | "incidental" | "unrelated";
+export type SentimentSalience = "relevant" | "wealth_ranking" | "incidental" | "unrelated";
 
 export type NarrativeDirection = "up" | "down" | "flat";
 

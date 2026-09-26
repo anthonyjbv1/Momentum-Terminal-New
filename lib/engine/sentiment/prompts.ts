@@ -58,9 +58,11 @@ export const SENTIMENT_RESPONSE_SCHEMA: LLMJsonSchema = {
  * rules are on; version 1 above is what production runs and is not touched.
  *
  * Salience asks what the story says about this person's TRAJECTORY, not
- * whether they are its main subject: the party overtaken in a wealth
- * ranking is told something about; a name in an attendee list is not. The
- * Signals force multiplies by it (1.0 / 0.3 / 0).
+ * whether they are its main subject: the donor named is told something
+ * about; a name in an attendee list is not; and a rich-list change driven by
+ * a stock price is its own label, wealth_ranking, weighted like incidental
+ * until counsel rules. The Signals force multiplies by it (1.0 / 0.3 / 0.3 /
+ * 0).
  *
  * The narrative is written for the reader who follows the person, not
  * about the Engine's weighing: the prompt bans the vocabulary of weighing
@@ -78,7 +80,7 @@ For every signal return:
 - confidence: a number from 0 to 1 combining how sure you are of the direction and how much the signal matters for this person. Routine noise gets low confidence even when the direction is clear.
 - direction: 1 for positive, -1 for negative, 0 for neutral.
 - anomaly: "routine" (normal for this person), "notable" (worth a real move), or "anomalous" (out of pattern for this person; rare, a genuine surprise). Judge against the person's own baseline: a 2% net worth move is noise for Elon Musk but notable for Warren Buffett; a daily upload is routine for a creator, a record-breaking video is not. The person block gives today's date and dated recent events: an event weeks old is context, not the current picture, and does not make a similar event today routine.
-- salience: what the story says about THIS person's trajectory, whether or not they are its main subject. "relevant" when it carries information about their momentum even as a secondary party: being overtaken in a ranking is relevant for the person overtaken, funding a campaign is relevant for the donor, a company's news is relevant for the founder who runs it. "incidental" when the person is named without anything being said about them: a name in an attendee list, a passing comparison, an essay crediting several people generically. "unrelated" when the story is about a different person or thing that shares the name. Keep the label and confidence honest either way; salience is judged separately.
+- salience: what the story says about THIS person's trajectory, whether or not they are its main subject. "relevant" when it carries information about their momentum even as a secondary party: funding a campaign is relevant for the donor, a company's news is relevant for the founder who runs it, and anything the person DID (a deal, a donation, a statement, a sale, a pledge, a filing) is relevant whatever dollar figure is attached. "wealth_ranking" when the only thing the story says about the person is that their net worth or their place in a wealth ranking changed and the change is a stock price moving: a richest-list update, an overtaking, a fortune rising or falling with shares. "incidental" when the person is named without anything being said about them: a name in an attendee list, a passing comparison, an essay crediting several people generically. "unrelated" when the story is about a different person or thing that shares the name. Keep the label and confidence honest either way; salience is judged separately.
 - rationale: one short sentence.
 
 Duplicate or overlapping headlines must not be double counted: give the strongest one its due and mark the rest routine with low confidence. Baseline or status-only signals that report a number without a change are neutral.
@@ -107,7 +109,7 @@ export const SENTIMENT_RESPONSE_SCHEMA_V2: LLMJsonSchema = {
           confidence: { type: "number" },
           direction: { type: "integer" },
           anomaly: { type: "string", enum: ["routine", "notable", "anomalous"] },
-          salience: { type: "string", enum: ["relevant", "incidental", "unrelated"] },
+          salience: { type: "string", enum: ["relevant", "wealth_ranking", "incidental", "unrelated"] },
           rationale: { type: "string" },
         },
       },
