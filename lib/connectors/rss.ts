@@ -1,11 +1,12 @@
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
-import { applyQueryExclusions, excludeReason, hasRules, readDisambiguation, type ExclusionVerdict } from "@/lib/ingest/disambiguation";
+import { EMPTY_DISAMBIGUATION, applyQueryExclusions, excludeReason, hasRules, obituaryReason, readDisambiguation, subjectNames, type ExclusionVerdict } from "@/lib/ingest/disambiguation";
 import { publisherDomainOf, type PublisherPolicy } from "@/lib/ingest/publishers";
 import { collapseStories, personNames, storyTokens, stripOutletSuffix } from "@/lib/ingest/stories";
+import type { Person } from "@/types";
 import type { Json } from "@/types/database";
 
-import { ConnectorError, type ConnectorContext, type DataConnector, type MetricReading, type RawSignal } from "./types";
+import { ConnectorError, type ConnectorContext, type ConnectorQuality, type DataConnector, type MetricReading, type RawSignal } from "./types";
 
 /**
  * RSS connector — a curated, person-scoped news feed.
@@ -209,6 +210,24 @@ export function hasBelievableDate(item: FeedItem, now: Date): boolean {
   return at >= EARLIEST_PLAUSIBLE_PUBLISHED_AT && at <= now.getTime() + FUTURE_TOLERANCE_MS;
 }
 
+/**
+ * STALE ON ARRIVAL (Phase 31). Google News resurfaces old items with their
+ * original dates: a first poll for a subject returns their evergreen
+ * profiles, and a quiet week returns July. The Engine already weights such an
+ * item at exactly zero past freshnessMaxAgeHours and never sends it to the
+ * model, so storing it moves no score; what it does is fill the person's
+ * recent lists and, when it is less than the volume window old, their volume
+ * series. Measured before this rule: 44 of Adin Ross's 47 stored articles in
+ * the week of 09-14 were older than seven days when stored, every one at
+ * 0.00. With the quality rules on, an item published more than
+ * `maxAgeHours` before the poll is not stored at all, and the poll row says
+ * how many were refused, as it does for undated items.
+ */
+export function isStaleItem(item: FeedItem, now: Date, quality: ConnectorQuality | undefined): boolean {
+  if (!quality || item.publishedAt === null) return false;
+  return now.getTime() - item.publishedAt.getTime() > quality.maxAgeHours * 3_600_000;
+}
+
 export function articleSignal(item: FeedItem, now: Date): RawSignal | null {
   const key = item.guid ?? item.link;
   if (!key) return null;
@@ -292,7 +311,7 @@ export function resetFeedCache(): void {
  * work; the second caller reads the cache and reports nothing, so each refused
  * item is counted once per poll rather than twice.
  */
-async function loadFeed(identifier: string, context: ConnectorContext): Promise<ReturnType<typeof parseFeed>> {
+async function loadFeed(person: Person, identifier: string, context: ConnectorContext): Promise<ReturnType<typeof parseFeed>> {
   const rules = readDisambiguation(context.personConfig);
   // Query level first: what the feed never sends costs nothing to discard, and
   // it leaves room in a fixed-size window for items that are about the subject.
@@ -311,11 +330,29 @@ async function loadFeed(identifier: string, context: ConnectorContext): Promise<
   // Post-fetch, over the title as the feed wrote it — which on Google News
   // still carries the outlet suffix, so an outlet's own name ("Drake
   // Athletics") counts as evidence too.
+  //
+  // With the quality rules on (Phase 31) every item is judged against the
+  // SUBJECT as well: the name-conditional exclusions, the namesake guard for
+  // an unknown publisher, and the obituary guard, which needs no rules at all.
+  // The subject is judged on the headline alone, without the outlet suffix: an
+  // outlet's name is evidence for an exclusion, never evidence of naming.
+  const quality = context.quality;
+  const names = quality ? subjectNames(person, rules) : [];
   const items: FeedItem[] = [];
   const refused: Array<{ item: FeedItem; verdict: ExclusionVerdict }> = [];
-  if (hasRules(rules)) {
+  if (hasRules(rules) || quality) {
     for (const item of parsed.items) {
-      const verdict = excludeReason(`${item.title} ${item.outlet ?? ""}`, rules);
+      // The Phase 10 rules, exactly as before: substring, title and outlet.
+      let verdict = excludeReason(`${item.title} ${item.outlet ?? ""}`, rules);
+      if (!verdict && quality) {
+        const headline = stripOutletSuffix(item.title, item.outlet);
+        const publisher = publisherDomainOf(item);
+        const resolution = context.publishers?.resolve(publisher.domain) ?? { status: "unknown" as const };
+        const subject = { names, unknownPublisher: resolution.status === "unknown" };
+        verdict =
+          excludeReason(headline, { ...EMPTY_DISAMBIGUATION, exclude_unless_named: rules.exclude_unless_named, namesake_guard: rules.namesake_guard, aliases: rules.aliases }, subject) ??
+          obituaryReason({ headline, outlet: item.outlet, domain: publisher.domain });
+      }
       if (verdict) refused.push({ item, verdict });
       else items.push(item);
     }
@@ -339,20 +376,23 @@ export const rssConnector: DataConnector = {
     if (typeof window !== "undefined") throw new Error("The RSS connector is server-only.");
     if (!identifier.trim()) throw new ConnectorError(`No feed configured for ${person.slug}`);
     const config = readRssConfig(context.config);
-    const feed = await loadFeed(identifier, context);
+    const feed = await loadFeed(person, identifier, context);
     const considered = feed.items.slice(0, config.max_items);
-    const signals = considered.map((item) => articleSignal(item, context.now)).filter((signal): signal is RawSignal => signal !== null);
+    const fresh = considered.filter((item) => !isStaleItem(item, context.now, context.quality));
+    const signals = fresh.map((item) => articleSignal(item, context.now)).filter((signal): signal is RawSignal => signal !== null);
     // A refusal that is only a missing row is a refusal nobody sees: the one
     // epoch-dated item of 2026-09-17 sat in production for a day unnoticed.
     const undated = considered.filter((item) => !hasBelievableDate(item, context.now)).length;
     if (undated > 0) context.note?.(`${undated} of ${considered.length} items refused: no believable publication date`);
+    const stale = considered.length - fresh.length;
+    if (stale > 0) context.note?.(`${stale} of ${considered.length} items refused: published more than ${context.quality?.maxAgeHours} h before the poll`);
     return signals;
   },
 
   async fetchMetrics(person, identifier, context): Promise<MetricReading[]> {
     if (!identifier.trim()) throw new ConnectorError(`No feed configured for ${person.slug}`);
     const config = readRssConfig(context.config);
-    const feed = await loadFeed(identifier, context);
+    const feed = await loadFeed(person, identifier, context);
     const value = newsVolume(feed.items, context.now, config.volume_window_hours, { publishers: context.publishers, personNames: personNames(person) });
     return [{ metricKey: "news_volume_24h", value }];
   },

@@ -61,6 +61,32 @@ export interface ScoredSignal {
   freshness: number;
   /** The person's volume weight applied (Phase 15): 1 for a metric signal, and 1 until the person's baseline is sufficient. */
   volumeWeight: number;
+  /** The salience multiplier applied (Phase 31): 1 while the quality rules are off or the scorer gave no label. */
+  salienceWeight?: number;
+  /** Set when this signal confirmed a story already scored (Phase 31): its impact was bounded to a confirmation. */
+  story?: StoryConfirmation;
+}
+
+/** How a confirming copy of an already-scored story was bounded (Phase 31). */
+export interface StoryConfirmation {
+  /** The signal whose story this one repeats: a recently scored one, or the strongest copy in this tick. */
+  leaderId: string;
+  /** Where the leader was found. */
+  leader: "recent" | "tick";
+  similarity: number;
+  /** The shared anchor that made the match below the plain threshold, when there was one. */
+  anchor: string | null;
+  /** The impact this copy would have carried on its own. */
+  fullImpact: number;
+}
+
+/** An event signal the Engine already scored, as story confirmation compares against it (Phase 31). */
+export interface RecentStory {
+  id: string;
+  personId: string;
+  headline: string;
+  occurredAt: Date;
+  impact: number;
 }
 
 /** A Buy or Sell on the trade tape. */
@@ -94,6 +120,8 @@ export interface TickContext {
   signalActivityByPerson: Map<string, SignalActivity>;
   /** Each active person's event-signal volume: the trailing 24 hours and the complete days since their newest mapping (Phase 15). */
   signalVolumeByPerson: Map<string, PersonSignalVolume>;
+  /** Event signals scored inside the story window, per person (Phase 31). Loaded only while the quality rules are on. */
+  recentStoriesByPerson?: Map<string, RecentStory[]>;
   /** Trade events inside the Trading Activity history window. */
   tradeEvents: TradeEvent[];
   /**
@@ -234,8 +262,16 @@ export interface TickSummary {
     scorer?: string;
     rationale?: string;
     anomaly?: SentimentResult["anomaly"];
+    /** What the story says about this person (Phase 31, version-2 prompt only). */
+    salience?: SentimentResult["salience"];
+    /** The salience multiplier the impact carries (Phase 31). Absent on summaries written before. */
+    salienceWeight?: number;
+    /** Set when the impact was bounded as a confirmation of an already-scored story (Phase 31). */
+    story?: StoryConfirmation;
     /** The Engine's one-sentence explanation from LLM reasoning, reused by narratives. */
     narrative?: string;
+    /** The direction the narrative claims (Phase 31), checked against the Signals force before it is published. */
+    narrativeDirection?: SentimentResult["narrativeDirection"];
   }>;
   /** Signals the tick selected but did not attempt; they stay unprocessed. */
   deferred: Array<{ id: string; personSlug: string; reason: DeferralReason; detail: string }>;

@@ -116,10 +116,22 @@ export function signalVolumeWeight(signal: Pick<EngineSignal, "rawPayload">, vol
   return isMetricSignal(signal.rawPayload) || isPrescoredSignal(signal.rawPayload) || isUncountedSignal(signal.rawPayload) ? 1 : volumeWeight;
 }
 
-export function signalImpact(signal: EngineSignal, sentiment: SentimentResult, config: EngineConfig["signals"], now: Date, volumeWeight = 1): number {
+/**
+ * SALIENCE (Phase 31). The scorer's answer to "does this story say something
+ * about this person's trajectory" multiplies the impact: relevant 1.0,
+ * incidental 0.3, unrelated 0. Exactly 1 while the quality rules are off,
+ * whatever label a result happens to carry, and 1 for a result with no label
+ * (the rules scorer, a metric, the version-1 prompt).
+ */
+export function salienceWeight(sentiment: Pick<SentimentResult, "salience">, quality: EngineConfig["signalQuality"] | undefined): number {
+  if (!quality?.enabled || !sentiment.salience) return 1;
+  return quality.salienceMultipliers[sentiment.salience];
+}
+
+export function signalImpact(signal: EngineSignal, sentiment: SentimentResult, config: EngineConfig["signals"], now: Date, volumeWeight = 1, quality?: EngineConfig["signalQuality"]): number {
   const confidence = clamp(sentiment.confidence, 0, 1);
   const { weight: freshness } = signalFreshness(signal, now, config);
-  return config.baseImpact * tierMultiplier(signal.sourceTier, config) * confidence * sentiment.direction * freshness * signalVolumeWeight(signal, volumeWeight);
+  return config.baseImpact * tierMultiplier(signal.sourceTier, config) * confidence * sentiment.direction * freshness * signalVolumeWeight(signal, volumeWeight) * salienceWeight(sentiment, quality);
 }
 
 export function scoreSignals(
@@ -128,11 +140,20 @@ export function scoreSignals(
   config: EngineConfig["signals"],
   now: Date,
   volumeWeight = 1,
+  quality?: EngineConfig["signalQuality"],
 ): ScoredSignal[] {
   return signals.map((signal) => {
     const sentiment = sentiments.get(signal.id) ?? { label: "neutral", confidence: 0, direction: 0 };
     const { ageHours, weight } = signalFreshness(signal, now, config);
-    return { signal, sentiment, impact: signalImpact(signal, sentiment, config, now, volumeWeight), ageHours, freshness: weight, volumeWeight: signalVolumeWeight(signal, volumeWeight) };
+    return {
+      signal,
+      sentiment,
+      impact: signalImpact(signal, sentiment, config, now, volumeWeight, quality),
+      ageHours,
+      freshness: weight,
+      volumeWeight: signalVolumeWeight(signal, volumeWeight),
+      ...(quality?.enabled ? { salienceWeight: salienceWeight(sentiment, quality) } : {}),
+    };
   });
 }
 
@@ -240,6 +261,9 @@ export function signalsForce(scored: ScoredSignal[], config: EngineConfig["signa
         // A member folded into a moment names the reading it joined; the reading names what it contributed.
         ...(foldedInto.has(s.signal.id) ? { foldedInto: foldedInto.get(s.signal.id) } : {}),
         ...(momentImpact.has(s.signal.id) ? { momentImpact: momentImpact.get(s.signal.id) } : {}),
+        // Phase 31, present only while the quality rules are on.
+        ...(s.salienceWeight !== undefined ? { salience: s.sentiment.salience ?? null, salienceWeight: s.salienceWeight } : {}),
+        ...(s.story ? { story: s.story } : {}),
         scorer: s.sentiment.scorer,
         anomaly: s.sentiment.anomaly,
         rationale: s.sentiment.rationale,

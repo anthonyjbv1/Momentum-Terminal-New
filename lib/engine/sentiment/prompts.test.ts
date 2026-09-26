@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type { PersonMemory } from "@/lib/engine/memory/types";
 
-import { PAYLOAD_KEYS, SENTIMENT_SYSTEM_PROMPT, buildPersonBlock, buildSentimentUserPrompt } from "./prompts";
+import { createHash } from "node:crypto";
+
+import { PAYLOAD_KEYS, SENTIMENT_RESPONSE_SCHEMA, SENTIMENT_RESPONSE_SCHEMA_V2, SENTIMENT_SYSTEM_PROMPT, buildPersonBlock, buildSentimentUserPrompt, sentimentPrompt } from "./prompts";
 import type { SentimentInput } from "./types";
 
 /**
@@ -112,5 +114,27 @@ describe("the person block and today's date (Phase 12+)", () => {
     const undated = buildPersonBlock({ ...person, memory: withEvents });
     expect(undated).not.toContain("Today:");
     expect(undated).toContain("  - 2026-06-12: Dramatic scandal (negative, -3.50)");
+  });
+});
+
+describe("the two prompt versions (Phase 31)", () => {
+  it("version 1 is the production prompt, unchanged to the byte; version 2 adds salience and the analyst's note and is chosen only by the switch", () => {
+    expect(createHash("sha256").update(SENTIMENT_SYSTEM_PROMPT).digest("hex")).toBe("edbe095f4d6759e2d8078eccdbe0449fce3a98d661a4f5f56116a2b284f40c14");
+    expect(SENTIMENT_SYSTEM_PROMPT).not.toContain("salience");
+    expect(SENTIMENT_SYSTEM_PROMPT).toContain("in the Engine's voice explaining the net effect of these signals");
+    expect(sentimentPrompt(1)).toEqual({ systemPrompt: SENTIMENT_SYSTEM_PROMPT, schema: SENTIMENT_RESPONSE_SCHEMA, name: "sentiment_assessment" });
+    expect(SENTIMENT_RESPONSE_SCHEMA.required).toEqual(["signals", "narrative"]);
+
+    const v2 = sentimentPrompt(2);
+    expect(v2.name).toBe("sentiment_assessment_v2");
+    expect(v2.systemPrompt).toContain('- salience: what the story says about THIS person\'s trajectory');
+    expect(v2.systemPrompt).toContain("as an analyst's note for a reader who follows this person");
+    for (const banned of ['"signal"', '"noise"', '"digest"', '"routine"', '"adds no"', '"offset"', '"priced in"', '"net effect"']) expect(v2.systemPrompt).toContain(banned);
+    expect(v2.systemPrompt).toContain("Never mention multiples, baselines, averages, comment volume or view counts.");
+    expect(v2.systemPrompt).toContain('"narrative_direction"');
+    expect(v2.schema.required).toEqual(["signals", "narrative", "narrative_direction"]);
+    expect(SENTIMENT_RESPONSE_SCHEMA_V2.properties).toMatchObject({ signals: { items: { required: ["id", "label", "confidence", "direction", "anomaly", "salience", "rationale"] } } });
+    // The user prompt is shared: the same person block and signals block feed both versions.
+    expect(buildSentimentUserPrompt(person, [])).toContain("Assess every signal above for MrBeast");
   });
 });

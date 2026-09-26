@@ -189,6 +189,7 @@ export function getEngineEnvOverrides(): {
   volumeReference: string | undefined;
   moodWindowMinutes: string | undefined;
   moodRatePerHour: string | undefined;
+  signalQualityEnabled: string | undefined;
 } {
   return {
     tradingMinPopulatedWindows: process.env.ENGINE_TRADING_MIN_POPULATED_WINDOWS,
@@ -196,7 +197,20 @@ export function getEngineEnvOverrides(): {
     volumeReference: process.env.ENGINE_VOLUME_REFERENCE,
     moodWindowMinutes: process.env.ENGINE_MOOD_WINDOW_MINUTES,
     moodRatePerHour: process.env.ENGINE_MOOD_RATE_PER_HOUR,
+    signalQualityEnabled: process.env.SIGNAL_QUALITY_ENABLED,
   };
+}
+
+/**
+ * THE ONE SWITCH of the Phase 31 signal-quality changes, in both halves of
+ * the pipeline: ingestion (the namesake and obituary guards, the stale-article
+ * refusal) and the Engine (the salience label, story clustering, the analyst's
+ * note narrative with its direction check). Only the exact string "true" turns
+ * them on, like the two cron flags; it ships unset, which is off, and off
+ * means every one of them is dormant and nothing that moves a score changes.
+ */
+export function isSignalQualityEnabled(): boolean {
+  return process.env.SIGNAL_QUALITY_ENABLED?.trim() === "true";
 }
 
 /**

@@ -3,7 +3,7 @@ import { NO_DEADLINE, type TickDeadline } from "@/lib/engine/deadline";
 import type { MemoryStore } from "@/lib/engine/memory/store";
 import type { MemoryNotableEvent } from "@/lib/engine/memory/types";
 import { mergeNotableEvents, refreshRecentContext } from "@/lib/engine/memory/update";
-import { buildNarratives, type NarrativeStore } from "@/lib/engine/narratives";
+import { buildNarrativesDetailed, type NarrativeStore } from "@/lib/engine/narratives";
 import { CALL_OVERHEAD_MS } from "@/lib/engine/sentiment/llm";
 import type { TickSummary } from "@/lib/engine/types";
 import { resolveRoute, type RoutedRequest } from "@/lib/llm/routing";
@@ -63,7 +63,9 @@ export async function runPostTick(summary: TickSummary, deps: PostTickDeps): Pro
 
   // 1. Narratives for meaningful moves -----------------------------------------
   try {
-    const rows = buildNarratives(summary, config.narratives);
+    const { rows, replaced } = buildNarrativesDetailed(summary, config.narratives, config.signalQuality);
+    // Phase 31: a replaced sentence is a finding about the prompt, not an error; it is logged and the template is published.
+    for (const entry of replaced) log(`narrative replaced by the template for ${entry.personId} (${entry.reason}): ${entry.text}`);
     result.narratives = await deps.narrativeStore.insert(rows);
   } catch (error) {
     const message = `narratives failed: ${error instanceof Error ? error.message : String(error)}`;

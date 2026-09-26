@@ -1,3 +1,4 @@
+import type { ExclusionReason } from "@/lib/ingest/disambiguation";
 import type { PublisherPolicy } from "@/lib/ingest/publishers";
 import type { DataSource, Person } from "@/types";
 import type { Json } from "@/types/database";
@@ -138,6 +139,20 @@ export interface ConnectorContext {
    * own request timeouts.
    */
   remainingBudgetMs?(): number | null;
+  /**
+   * The Phase 31 signal-quality rules, present only while SIGNAL_QUALITY_ENABLED
+   * is on: a news connector then refuses items published more than
+   * `maxAgeHours` before the poll (they would score at zero freshness anyway
+   * and only fill the person's recent lists), applies the namesake and
+   * obituary guards, and judges the name-conditional exclusions. Absent, none
+   * of it runs and the connector behaves exactly as before.
+   */
+  quality?: ConnectorQuality;
+}
+
+export interface ConnectorQuality {
+  /** Items published more than this many hours before the poll are refused as stale. The Engine's freshnessMaxAgeHours. */
+  maxAgeHours: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -199,11 +214,11 @@ export interface LiveCapability {
   liveSignal(person: Person, stream: LiveStream, now: Date): RawSignal;
 }
 
-/** An item a connector refused as being about somebody else. */
+/** An item a connector refused as being about somebody else (or, Phase 31, as a namesake's obituary). */
 export interface ExcludedItem {
   /** The headline as the feed carried it, so an over-filtered item is recognisable in the log. */
   headline: string;
-  reason: "excluded_term" | "missing_context";
+  reason: ExclusionReason;
   /** The term that matched; null when the item simply carried none of the required context. */
   term: string | null;
 }

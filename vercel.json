@@ -13,5 +13,10 @@
       "path": "/api/ingest/live",
       "schedule": "* * * * *"
     }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "phase31-matching-narrative": false
+    }
+  }
 }

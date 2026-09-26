@@ -158,25 +158,76 @@ export function producingSignals(person: PersonSummary, summary: TickSummary, ll
   return [];
 }
 
-export function buildNarratives(summary: TickSummary, config: EngineConfig["narratives"]): NarrativeRow[] {
+// ---------------------------------------------------------------------------
+// The analyst's note, checked before it is published (Phase 31)
+// ---------------------------------------------------------------------------
+
+/**
+ * The vocabulary of the Engine weighing its own inputs, which the version-2
+ * prompt bans and this check enforces: a sentence about "signals" and
+ * "noise" is a sentence about the Engine, not about the person. Multiples
+ * and sigma are the internals the copy rules already keep off every surface.
+ */
+const REASONING_VOICE = /\b(signals?|noise|digests?|routine|adds? no|offset|priced in(?:to)?|net effect|baseline|sigma|momentum score)\b|σ|\b\d+(?:\.\d+)?x\b/i;
+
+export type NarrativeCheck = { ok: true } | { ok: false; reason: "direction" | "voice" };
+
+/**
+ * Whether an LLM narrative may be published as written. Its declared
+ * direction must agree with the Signals force this tick (a note that says
+ * "up" beside a negative force is replaced, and so is "flat" beside a force
+ * that moved the score by a narrative's worth), and its voice must be the
+ * analyst's, not the Engine's. Without a declared direction (a version-1
+ * answer) only the voice is checked.
+ */
+export function checkNarrative(text: string, direction: TickSummary["signals"][number]["narrativeDirection"], signalsImpact: number, minAbsChange: number): NarrativeCheck {
+  if (REASONING_VOICE.test(text)) return { ok: false, reason: "voice" };
+  if (direction === "up" && signalsImpact < 0) return { ok: false, reason: "direction" };
+  if (direction === "down" && signalsImpact > 0) return { ok: false, reason: "direction" };
+  if (direction === "flat" && Math.abs(signalsImpact) >= minAbsChange) return { ok: false, reason: "direction" };
+  return { ok: true };
+}
+
+export interface NarrativeBuild {
+  rows: NarrativeRow[];
+  /** LLM sentences the check replaced with the template, and why (Phase 31, only while the quality rules are on). */
+  replaced: Array<{ personId: string; reason: "direction" | "voice"; text: string }>;
+}
+
+export function buildNarrativesDetailed(summary: TickSummary, config: EngineConfig["narratives"], quality?: EngineConfig["signalQuality"]): NarrativeBuild {
   const candidates = summary.people
     .filter((person) => Math.abs(person.change) >= config.minAbsChange)
     .sort((a, b) => Math.abs(b.change) - Math.abs(a.change) || a.id.localeCompare(b.id))
     .slice(0, config.maxPerTick);
 
-  return candidates.map((person) => {
-    const llmNarrative = signalsFor(summary, person.slug).find((s) => s.scorer === "llm" && s.narrative)?.narrative ?? null;
-    const useLlm = Boolean(llmNarrative) && (person.forces.signals ?? 0) !== 0;
+  const replaced: NarrativeBuild["replaced"] = [];
+  const rows = candidates.map((person) => {
+    const llmSignal = signalsFor(summary, person.slug).find((s) => s.scorer === "llm" && s.narrative);
+    let llmNarrative = llmSignal?.narrative ?? null;
+    const signalsImpact = person.forces.signals ?? 0;
+    if (llmNarrative && quality?.enabled) {
+      const check = checkNarrative(llmNarrative, llmSignal?.narrativeDirection, signalsImpact, config.minAbsChange);
+      if (!check.ok) {
+        replaced.push({ personId: person.id, reason: check.reason, text: llmNarrative });
+        llmNarrative = null;
+      }
+    }
+    const useLlm = Boolean(llmNarrative) && signalsImpact !== 0;
     return {
       personId: person.id,
       tickNumber: summary.tickNumber,
       text: useLlm ? (llmNarrative as string) : templateNarrative(person, summary),
       scoreBefore: person.previousScore,
       scoreAfter: person.newScore,
-      source: useLlm ? "llm" : "template",
+      source: useLlm ? ("llm" as const) : ("template" as const),
       signals: producingSignals(person, summary, useLlm ? llmNarrative : null),
     };
   });
+  return { rows, replaced };
+}
+
+export function buildNarratives(summary: TickSummary, config: EngineConfig["narratives"], quality?: EngineConfig["signalQuality"]): NarrativeRow[] {
+  return buildNarrativesDetailed(summary, config, quality).rows;
 }
 
 /**

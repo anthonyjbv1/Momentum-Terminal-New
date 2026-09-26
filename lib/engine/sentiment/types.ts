@@ -28,13 +28,32 @@ export interface SentimentResult {
   rationale?: string;
   /** How unusual this signal is for THIS person (LLM scorer). */
   anomaly?: SentimentAnomaly;
+  /**
+   * What the story says about THIS person's trajectory (Phase 31, the
+   * version-2 prompt only): relevant, incidental or unrelated. The Signals
+   * force multiplies by it when the quality rules are on. Absent from the
+   * version-1 prompt, so nothing changes while they are off.
+   */
+  salience?: SentimentSalience;
   /** One-sentence explanation of the person's net movement, in the Engine's voice (LLM scorer, per batch). */
   narrative?: string;
+  /** The direction the narrative claims (Phase 31, version 2): checked against the Signals force before the sentence is published. */
+  narrativeDirection?: NarrativeDirection;
   /** Which scorer produced the result: "rules", "llm", "prefilter", "rules-fallback". */
   scorer?: string;
 }
 
 export type SentimentAnomaly = "routine" | "notable" | "anomalous";
+
+/**
+ * SALIENCE BY INFORMATION, NOT PROMINENCE (Phase 31). Not "is this person the
+ * main subject" but "does this story say something about this person's
+ * trajectory": "Zuckerberg overtakes Dell" is relevant, and negative, for
+ * Dell; a name in an attendee list is incidental; a namesake is unrelated.
+ */
+export type SentimentSalience = "relevant" | "incidental" | "unrelated";
+
+export type NarrativeDirection = "up" | "down" | "flat";
 
 /**
  * THE SECOND OUTCOME. A scorer that did not ATTEMPT a signal this tick says

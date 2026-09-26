@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { getCronSecretOrNull, getIngestSecretOrNull, isIngestCronEnabled } from "@/lib/env";
 import { INGEST_CRON_DEFAULTS, authorizeIngestCronRequest, runScheduledIngestion } from "@/lib/ingest/cron";
+import { ingestQualityFromEnv } from "@/lib/ingest/quality";
 import { runIngestion } from "@/lib/ingest/runner";
 import { createSupabaseIngestStore } from "@/lib/ingest/store";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
@@ -55,6 +56,7 @@ export async function GET(request: NextRequest) {
           budgetMs: INGEST_CRON_DEFAULTS.runBudgetMs,
           timeoutMs: INGEST_CRON_DEFAULTS.fetchTimeoutMs,
           sharedFetchGraceMs: INGEST_CRON_DEFAULTS.sharedFetchGraceMs,
+          quality: ingestQualityFromEnv(),
         }),
     });
     return NextResponse.json(result, { status: result.error ? 500 : 200 });

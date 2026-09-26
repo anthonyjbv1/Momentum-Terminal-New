@@ -508,6 +508,47 @@ export interface EngineConfig {
     /** Tightening weights (should sum to 1). */
     weights: { concentration: number; depth: number; confidence: number };
   };
+  /**
+   * SIGNAL QUALITY (Phase 31): salience, story clustering and the analyst's
+   * note, behind one switch. Designed and replayed on a branch; nothing here
+   * moves a score until `enabled` is true, and it ships false.
+   *
+   * SALIENCE. The model labels every event signal by what the story SAYS
+   * about this person's trajectory, not by whether they are its main
+   * subject: relevant (it carries information about them, even as the party
+   * overtaken or the donor named), incidental (named without anything said
+   * about them: an attendee list, a passing comparison), unrelated (a
+   * namesake). The label multiplies the impact. 1.0 / 0.3 / 0 as proposed.
+   *
+   * STORIES. One event, one signal. A new event signal that tells the same
+   * story as one already scored for the person inside storyWindowHours (or
+   * as a stronger one in the same tick) is a CONFIRMATION: it contributes
+   * storyConfirmationShare of its own impact, never more than
+   * storyConfirmationCap points, and never the full impact again. Two
+   * headlines are one story at the ingestion threshold (Dice 0.4), or from
+   * storyAnchorThreshold when they share an ANCHOR: a number ("$9 billion")
+   * or a capitalised name that is not the person's own ("Martha Stewart",
+   * "Goldman Sachs"). Word overlap alone misses rewrites that share little
+   * vocabulary (lib/engine/stories.ts says what it still misses).
+   *
+   * NARRATIVE. The prompt asks for an analyst's note and a declared
+   * direction; a note whose direction disagrees with the Signals force this
+   * tick, or that describes the Engine's own weighing, is replaced by the
+   * template sentence (lib/engine/narratives.ts).
+   */
+  signalQuality: {
+    /** The switch. Ships false. SIGNAL_QUALITY_ENABLED=true turns it on deliberately, ingestion included. */
+    enabled: boolean;
+    salienceMultipliers: { relevant: number; incidental: number; unrelated: number };
+    /** How far back a scored story is compared against a new one, in hours. The ingestion lookback, so the two agree on what "the same day's story" means. */
+    storyWindowHours: number;
+    /** The Dice coefficient from which two headlines sharing an anchor are one story. Below the ingestion threshold on purpose: the anchor carries the rest. */
+    storyAnchorThreshold: number;
+    /** The share of its own impact a confirming copy contributes. */
+    storyConfirmationShare: number;
+    /** The most a confirming copy contributes, in points, whatever its own impact. */
+    storyConfirmationCap: number;
+  };
 }
 
 export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
@@ -591,6 +632,14 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     depthSaturationSignals: 10,
     weights: { concentration: 0.5, depth: 0.3, confidence: 0.2 },
   },
+  signalQuality: {
+    enabled: false,
+    salienceMultipliers: { relevant: 1, incidental: 0.3, unrelated: 0 },
+    storyWindowHours: 48,
+    storyAnchorThreshold: 0.25,
+    storyConfirmationShare: 0.2,
+    storyConfirmationCap: 0.15,
+  },
 };
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
@@ -661,6 +710,12 @@ export interface EngineEnvOverrides {
    * number, decimals allowed; anything else is ignored.
    */
   moodRatePerHour?: string | undefined;
+  /**
+   * SIGNAL_QUALITY_ENABLED. The switch of the Phase 31 signal-quality changes
+   * (signalQuality.enabled, default false). Only the exact string "true"
+   * turns it on, like the two cron flags; anything else leaves it off.
+   */
+  signalQualityEnabled?: string | undefined;
 }
 
 /** A strictly positive integer from a raw environment string, or null. */
@@ -692,6 +747,8 @@ export function engineConfigFromEnv(env: EngineEnvOverrides, base: EngineConfig 
   const minPopulatedWindows = parsePositiveInteger(env.tradingMinPopulatedWindows);
   if (minPopulatedWindows !== null) overrides.tradingActivity = { minPopulatedWindows };
   if (parseExactTrue(env.targetDriftEnabled)) overrides.targetDrift = { enabled: true };
+  // Handed over whole, like the volume block below: the section carries nested tunables.
+  if (parseExactTrue(env.signalQualityEnabled)) overrides.signalQuality = { ...base.signalQuality, enabled: true };
   const volumeReference = parsePositiveNumber(env.volumeReference);
   // withEngineConfig merges ONE level deep, so a nested section has to be
   // handed over whole: `{ volume: { referenceSignalsPerDay } }` alone would
@@ -719,6 +776,9 @@ export function describeEngineOverrides(config: EngineConfig, base: EngineConfig
   }
   if (config.signals.volume.referenceSignalsPerDay !== base.signals.volume.referenceSignalsPerDay) {
     out.push(`signals.volume.referenceSignalsPerDay = ${config.signals.volume.referenceSignalsPerDay} (default ${base.signals.volume.referenceSignalsPerDay})`);
+  }
+  if (config.signalQuality.enabled !== base.signalQuality.enabled) {
+    out.push(`signalQuality.enabled = ${config.signalQuality.enabled} (default ${base.signalQuality.enabled})`);
   }
   return out;
 }

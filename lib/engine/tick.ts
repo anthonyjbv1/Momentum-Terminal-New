@@ -10,6 +10,8 @@ import { clamp, round } from "@/lib/engine/math";
 import { isFreeSignal, selectTickSignals } from "@/lib/engine/selection";
 import { getSentimentScorer } from "@/lib/engine/sentiment";
 import { volumeWeight } from "@/lib/engine/signal-volume";
+import { confirmStories, storyOptions } from "@/lib/engine/stories";
+import { personNames } from "@/lib/ingest/stories";
 import { DORMANT_TARGET_DRIFT, advanceTargetDrift, effectiveTarget, readTargetDriftState, type TargetDriftState } from "@/lib/engine/target-drift";
 import { TickCallBudget, type DeferralReason } from "@/lib/engine/sentiment/budget";
 import { isMetricSignal, metricScorer as defaultMetricScorer } from "@/lib/engine/sentiment/metric";
@@ -181,8 +183,19 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     const deltaHours = deltaHoursFor(person, startedAt, config);
     // The person's volume weight (Phase 15): 1 until their own baseline is sufficient.
     const volume = volumeWeight(context.signalVolumeByPerson.get(person.id), config.signals.volume);
-    const scoredSignals = scoreSignals(signalsByPerson.get(person.id) ?? [], sentiments, config.signals, startedAt, volume.weight);
-    const signals = roundForce(signalsForce(scoredSignals, config.signals, volume));
+    const quality = config.signalQuality.enabled ? config.signalQuality : undefined;
+    let scoredSignals = scoreSignals(signalsByPerson.get(person.id) ?? [], sentiments, config.signals, startedAt, volume.weight, quality);
+    // Phase 31: a copy of a story already scored (recently, or by a stronger
+    // copy in this tick) contributes a bounded confirmation, never the full
+    // impact again. Off, this is not run and nothing is loaded for it.
+    let storyClusters: ReturnType<typeof confirmStories>["clusters"] = [];
+    if (quality) {
+      const confirmed = confirmStories(scoredSignals, context.recentStoriesByPerson?.get(person.id) ?? [], storyOptions(quality, personNames(person)));
+      scoredSignals = confirmed.scored;
+      storyClusters = confirmed.clusters;
+    }
+    const signalsEntry = signalsForce(scoredSignals, config.signals, volume);
+    const signals = roundForce(quality ? { ...signalsEntry, details: { ...signalsEntry.details, salienceMultipliers: quality.salienceMultipliers, storyClusters } } : signalsEntry);
     // The target: the seed, plus the drift's offset when the drift is on.
     // Off, the dormant state is written back so nothing accumulates unseen.
     const seedTarget = Number(person.revert_target);
@@ -368,7 +381,11 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       scorer: s.sentiment.scorer,
       rationale: s.sentiment.rationale,
       anomaly: s.sentiment.anomaly,
+      ...(s.sentiment.salience ? { salience: s.sentiment.salience } : {}),
+      ...(s.salienceWeight !== undefined ? { salienceWeight: s.salienceWeight } : {}),
+      ...(s.story ? { story: s.story } : {}),
       narrative: s.sentiment.narrative,
+      ...(s.sentiment.narrativeDirection ? { narrativeDirection: s.sentiment.narrativeDirection } : {}),
     })),
     deferred,
   };

@@ -5,7 +5,7 @@ import { fakeFetchRoutes, makePerson, makeSource } from "@/lib/__tests__/fixture
 import { buildPublisherPolicy } from "@/lib/ingest/publishers";
 import { personNames } from "@/lib/ingest/stories";
 
-import { EARLIEST_PLAUSIBLE_PUBLISHED_AT, FUTURE_TOLERANCE_MS, articleSignal, feedUrlFor, hasBelievableDate, newsVolume, parseFeed, readRssConfig, resetFeedCache, rssConnector, type FeedItem } from "./rss";
+import { EARLIEST_PLAUSIBLE_PUBLISHED_AT, FUTURE_TOLERANCE_MS, articleSignal, feedUrlFor, hasBelievableDate, isStaleItem, newsVolume, parseFeed, readRssConfig, resetFeedCache, rssConnector, type FeedItem } from "./rss";
 import { ConnectorError } from "./types";
 
 const NOW = new Date("2026-09-12T12:00:00.000Z");
@@ -291,5 +291,127 @@ describe("entity disambiguation", () => {
     expect(signals).toHaveLength(3);
     // The feed URL is untouched — no negative terms appended at all.
     expect(fetch.calls[0]).toBe(feedUrlFor('"Drake"'));
+  });
+});
+
+describe("the signal-quality rules (Phase 31)", () => {
+  beforeEach(() => resetFeedCache());
+
+  const larry = makePerson({ id: "p-ellison", slug: "larry-ellison", display_name: "Larry Ellison", full_name: "Lawrence Joseph Ellison", category: "executive" });
+
+  /** Seven real items from Larry Ellison's feed in September 2026, plus one from July. */
+  const ELLISON = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>"Larry Ellison" - Google News</title>
+    <item>
+      <title><![CDATA[Ellison Pledges $9.2 Billion More in Oracle Shares as Collateral - Bloomberg.com]]></title>
+      <link>https://news.google.com/rss/articles/pledge</link><guid isPermaLink="false">pledge</guid>
+      <pubDate>Fri, 25 Sep 2026 21:53:00 GMT</pubDate><source url="https://www.bloomberg.com">Bloomberg.com</source>
+    </item>
+    <item>
+      <title><![CDATA[Paramount's David Ellison Attends Trump White House State Dinner for Chinese President - Variety]]></title>
+      <link>https://news.google.com/rss/articles/variety</link><guid isPermaLink="false">variety</guid>
+      <pubDate>Fri, 25 Sep 2026 03:53:00 GMT</pubDate><source url="https://variety.com">Variety</source>
+    </item>
+    <item>
+      <title><![CDATA[Larry and David Ellison have all the money, and a boost from Trump. Now they're going to own Warner Bros. - Business Insider]]></title>
+      <link>https://news.google.com/rss/articles/both</link><guid isPermaLink="false">both</guid>
+      <pubDate>Mon, 21 Sep 2026 18:58:00 GMT</pubDate><source url="https://www.businessinsider.com">Business Insider</source>
+    </item>
+    <item>
+      <title><![CDATA[Larry Dean Ellison Obituary Sep 22, 2026 - Reynolds-Love Funeral Home]]></title>
+      <link>https://news.google.com/rss/articles/obit</link><guid isPermaLink="false">obit</guid>
+      <pubDate>Tue, 22 Sep 2026 07:00:00 GMT</pubDate><source url="https://www.reynoldslovefuneralhome.com">Reynolds-Love Funeral Home</source>
+    </item>
+    <item>
+      <title><![CDATA[Oracle leaders receive subpoenas to appear before House VA Committee - Healthcare IT News]]></title>
+      <link>https://news.google.com/rss/articles/subpoena</link><guid isPermaLink="false">subpoena</guid>
+      <pubDate>Thu, 17 Sep 2026 12:00:00 GMT</pubDate><source url="https://www.healthcareitnews.com">Healthcare IT News</source>
+    </item>
+    <item>
+      <title><![CDATA[Oracle Falls 4.7% Despite Ellison Scrapping a 50 Million-Share Sale - Barron's]]></title>
+      <link>https://news.google.com/rss/articles/barrons</link><guid isPermaLink="false">barrons</guid>
+      <pubDate>Wed, 23 Sep 2026 12:00:00 GMT</pubDate><source url="https://www.barrons.com">Barron's</source>
+    </item>
+    <item>
+      <title><![CDATA[Larry Ellison's Lanai: a look inside the island - Forbes]]></title>
+      <link>https://news.google.com/rss/articles/lanai</link><guid isPermaLink="false">lanai</guid>
+      <pubDate>Sat, 04 Jul 2026 07:00:00 GMT</pubDate><source url="https://www.forbes.com">Forbes</source>
+    </item>
+  </channel>
+</rss>`;
+
+  const POLL = new Date("2026-09-26T00:00:00.000Z");
+  const policy = buildPublisherPolicy([
+    { domain: "bloomberg.com", status: "allowed", tier: 1 },
+    { domain: "variety.com", status: "allowed", tier: 1 },
+    { domain: "businessinsider.com", status: "allowed", tier: 2 },
+    { domain: "barrons.com", status: "allowed", tier: 1 },
+    { domain: "forbes.com", status: "allowed", tier: 1 },
+  ]);
+  const rules = { disambiguation: { exclude_unless_named: ["David Ellison", "Skydance", "Paramount"], namesake_guard: true, aliases: ["Larry"] } };
+
+  const ctx = (fetch: typeof globalThis.fetch, on: boolean, excluded: unknown[] = [], notes: string[] = []) => ({
+    source: makeSource({ name: "rss" }),
+    config: {} as Record<string, never>,
+    snapshots: { latest: async () => null, record: () => undefined },
+    now: POLL,
+    fetch,
+    publishers: policy,
+    personConfig: rules,
+    exclude: (item: unknown) => excluded.push(item),
+    note: (message: string) => notes.push(message),
+    ...(on ? { quality: { maxAgeHours: 168 } } : {}),
+  });
+
+  it("off: the new configuration keys are inert, every item is stored, the July item too", async () => {
+    const excluded: unknown[] = [];
+    const notes: string[] = [];
+    const fetch = fakeFetchRoutes([{ match: "news.google.com/rss/search", body: ELLISON }]);
+    const signals = await rssConnector.fetchForPerson(larry, feedUrlFor('"Larry Ellison"'), ctx(fetch, false, excluded, notes));
+    expect(signals).toHaveLength(7);
+    expect(excluded).toEqual([]);
+    expect(notes).toEqual([]);
+  });
+
+  it("on: the David Ellison story, the obituary and the unknown publisher's unnamed item are refused with their reasons; the story about both and the pledge are kept", async () => {
+    const excluded: Array<{ headline: string; reason: string; term: string | null }> = [];
+    const notes: string[] = [];
+    const fetch = fakeFetchRoutes([{ match: "news.google.com/rss/search", body: ELLISON }]);
+    const signals = await rssConnector.fetchForPerson(larry, feedUrlFor('"Larry Ellison"'), ctx(fetch, true, excluded, notes));
+    expect(signals.map((s) => s.headline)).toEqual([
+      // Known publisher, surname only: kept — the namesake guard is for unknown publishers.
+      "Ellison Pledges $9.2 Billion More in Oracle Shares as Collateral",
+      "Larry and David Ellison have all the money, and a boost from Trump. Now they're going to own Warner Bros.",
+      "Oracle Falls 4.7% Despite Ellison Scrapping a 50 Million-Share Sale",
+    ]);
+    expect(excluded.map((e) => [e.reason, e.term])).toEqual([
+      ["excluded_unless_named", "david ellison"],
+      ["obituary", "obituary"],
+      ["namesake_unnamed", null],
+    ]);
+    // The July item is stale, not somebody else's: refused with a note, like an undated item, and not counted as an
+    // exclusion. The note counts among the items the entity rules admitted (four of the seven).
+    expect(notes).toEqual(["1 of 4 items refused: published more than 168 h before the poll"]);
+  });
+
+  it("on: the refusals leave news_volume_24h as well, the stale rule does not touch it", async () => {
+    const fetch = fakeFetchRoutes([{ match: "news.google.com/rss/search", body: ELLISON }]);
+    const c = ctx(fetch, true);
+    await rssConnector.fetchForPerson(larry, feedUrlFor('"Larry Ellison"'), c);
+    const [reading] = await rssConnector.fetchMetrics!(larry, feedUrlFor('"Larry Ellison"'), c);
+    // Inside the trailing 24 h of the poll: the pledge (21:53 on the 25th) and the Variety item (03:53 on the 25th): the Variety item is refused.
+    expect(reading).toEqual({ metricKey: "news_volume_24h", value: 1 });
+    expect(fetch.calls).toHaveLength(1);
+  });
+
+  it("isStaleItem: past the horizon, not at it; undated items are not stale (the date rule owns them)", () => {
+    const item = (publishedAt: Date | null): FeedItem => ({ title: "x", link: null, guid: "g", publishedAt, outlet: null, sourceUrl: null });
+    const quality = { maxAgeHours: 168 };
+    expect(isStaleItem(item(new Date(POLL.getTime() - 168 * 3_600_000)), POLL, quality)).toBe(false);
+    expect(isStaleItem(item(new Date(POLL.getTime() - 168 * 3_600_000 - 1)), POLL, quality)).toBe(true);
+    expect(isStaleItem(item(null), POLL, quality)).toBe(false);
+    expect(isStaleItem(item(new Date(2020, 0, 1)), POLL, undefined)).toBe(false);
   });
 });

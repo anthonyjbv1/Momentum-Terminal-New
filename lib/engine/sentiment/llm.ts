@@ -1,7 +1,8 @@
-import { DEFAULT_ENGINE_CONFIG, type EngineConfig } from "@/lib/engine/config";
+import { DEFAULT_ENGINE_CONFIG, engineConfigFromEnv, type EngineConfig } from "@/lib/engine/config";
 import { NO_DEADLINE } from "@/lib/engine/deadline";
 import { createMemoryMemoryStore, type MemoryStore } from "@/lib/engine/memory/store";
 import type { PersonMemory } from "@/lib/engine/memory/types";
+import { getEngineEnvOverrides } from "@/lib/env";
 import { resolveRoute, routedComplete, type RoutedRequest } from "@/lib/llm/routing";
 import { LLMError, type LLMResponse } from "@/lib/llm/types";
 import { noopUsageLogger, recordedCall, type LLMUsageLogger } from "@/lib/llm/usage";
@@ -10,9 +11,9 @@ import type { Json } from "@/types/database";
 import { TickCallBudget, type DeferralReason } from "./budget";
 import { metricScorer as defaultMetricScorer } from "./metric";
 import { LIVE_MOMENT_KIND, prescoredScorer } from "./prescored";
-import { SENTIMENT_RESPONSE_SCHEMA, SENTIMENT_SYSTEM_PROMPT, buildSentimentUserPrompt } from "./prompts";
+import { buildSentimentUserPrompt, sentimentPrompt, type SentimentPromptVersion } from "./prompts";
 import { rulesBasedScorer } from "./rules";
-import type { ScoringContext, ScoringOutcome, SentimentAnomaly, SentimentInput, SentimentResult, SentimentScorer } from "./types";
+import type { NarrativeDirection, ScoringContext, ScoringOutcome, SentimentAnomaly, SentimentInput, SentimentResult, SentimentSalience, SentimentScorer } from "./types";
 
 /**
  * LLMScorer — the Phase 4 SentimentScorer.
@@ -77,6 +78,12 @@ export interface LLMScorerDeps {
   batchDelayMs?: number;
   now?: () => number;
   log?: (message: string, meta?: Record<string, unknown>) => void;
+  /**
+   * Which prompt the model is asked with (Phase 31). Version 1 is production.
+   * Version 2 adds the salience label and the analyst's note, and is selected
+   * by createDefaultLLMScorer only while the quality rules are on.
+   */
+  promptVersion?: SentimentPromptVersion;
 }
 
 interface Pending {
@@ -90,11 +97,22 @@ interface ParsedSignalAssessment {
   label: SentimentResult["label"];
   confidence: number;
   anomaly: SentimentAnomaly;
+  /** Version 2 only; absent from a version-1 answer. */
+  salience?: SentimentSalience;
   rationale: string;
+}
+
+interface ParsedResponse {
+  signals: ParsedSignalAssessment[];
+  narrative?: string;
+  /** Version 2 only. */
+  narrativeDirection?: NarrativeDirection;
 }
 
 const LABELS = new Set(["positive", "negative", "neutral"]);
 const ANOMALIES = new Set(["routine", "notable", "anomalous"]);
+const SALIENCES = new Set(["relevant", "incidental", "unrelated"]);
+const DIRECTIONS = new Set(["up", "down", "flat"]);
 
 /**
  * Time a call needs on top of its own timeout before it is truly under way:
@@ -141,6 +159,7 @@ export class LLMScorer implements SentimentScorer {
   private readonly batchDelayMs: number;
   private readonly now: () => number;
   private readonly log: (message: string, meta?: Record<string, unknown>) => void;
+  readonly promptVersion: SentimentPromptVersion;
 
   private pending: Pending[] = [];
   private flushScheduled = false;
@@ -161,6 +180,7 @@ export class LLMScorer implements SentimentScorer {
     this.batchDelayMs = deps.batchDelayMs ?? 0;
     this.now = deps.now ?? Date.now;
     this.log = deps.log ?? ((message, meta) => console.warn(`[llm-scorer] ${message}`, meta ?? ""));
+    this.promptVersion = deps.promptVersion ?? 1;
   }
 
   // ---------------------------------------------------------------- public
@@ -324,18 +344,19 @@ export class LLMScorer implements SentimentScorer {
     const route = resolveRoute("sentiment");
     const attempt = { provider: route.providerName, model: route.model ?? "provider-default", taskType: "sentiment" as const, personId, tickNumber };
 
+    const prompt = sentimentPrompt(this.promptVersion);
     let response: LLMResponse;
     try {
       this.stats.llmCalls += 1;
       response = await recordedCall(logger, attempt, () =>
         this.complete({
           taskType: "sentiment",
-          systemPrompt: SENTIMENT_SYSTEM_PROMPT,
+          systemPrompt: prompt.systemPrompt,
           userPrompt: buildSentimentUserPrompt(
             { displayName: person.displayName, slug: person.slug, category: person.category, memory: memoryForPrompt, today: new Date(this.now()), eventMaxAgeDays: this.memoryEventMaxAgeDays },
             signals,
           ),
-          responseFormat: { type: "json", schema: SENTIMENT_RESPONSE_SCHEMA, name: "sentiment_assessment" },
+          responseFormat: { type: "json", schema: prompt.schema, name: prompt.name },
           timeoutMs: this.config.timeoutMs,
         }),
       );
@@ -359,12 +380,12 @@ export class LLMScorer implements SentimentScorer {
         unmatched.push(item);
         continue;
       }
-      item.resolve(this.toResult(assessment, parsed.narrative));
+      item.resolve(this.toResult(assessment, parsed));
     }
     if (unmatched.length > 0) await this.fallbackFor(unmatched, "LLM omitted the signal from its response");
   }
 
-  private toResult(assessment: ParsedSignalAssessment, narrative: string | undefined): SentimentResult {
+  private toResult(assessment: ParsedSignalAssessment, parsed: Pick<ParsedResponse, "narrative" | "narrativeDirection">): SentimentResult {
     const multiplier = {
       routine: this.config.routineConfidenceMultiplier,
       notable: this.config.notableConfidenceMultiplier,
@@ -378,12 +399,16 @@ export class LLMScorer implements SentimentScorer {
       confidence,
       anomaly: assessment.anomaly,
       rationale: assessment.rationale,
-      narrative: narrative?.trim() || undefined,
+      narrative: parsed.narrative?.trim() || undefined,
       scorer: this.name,
+      // Version 2 fields only. A version-2 answer that leaves salience out is
+      // read as relevant: the absence of a label must never zero a signal.
+      ...(this.promptVersion === 2 ? { salience: assessment.salience ?? "relevant" } : {}),
+      ...(this.promptVersion === 2 && parsed.narrativeDirection ? { narrativeDirection: parsed.narrativeDirection } : {}),
     };
   }
 
-  private parseResponse(data: unknown): { signals: ParsedSignalAssessment[]; narrative?: string } | null {
+  private parseResponse(data: unknown): ParsedResponse | null {
     if (!data || typeof data !== "object" || Array.isArray(data)) return null;
     const record = data as Record<string, unknown>;
     if (!Array.isArray(record.signals)) return null;
@@ -394,15 +419,22 @@ export class LLMScorer implements SentimentScorer {
       if (typeof e.id !== "string" || typeof e.label !== "string" || !LABELS.has(e.label)) continue;
       const confidence = typeof e.confidence === "number" && Number.isFinite(e.confidence) ? clamp01(e.confidence) : 0.5;
       const anomaly = typeof e.anomaly === "string" && ANOMALIES.has(e.anomaly) ? (e.anomaly as SentimentAnomaly) : "notable";
+      const salience = typeof e.salience === "string" && SALIENCES.has(e.salience) ? (e.salience as SentimentSalience) : undefined;
       signals.push({
         id: e.id,
         label: e.label as SentimentResult["label"],
         confidence,
         anomaly,
+        ...(salience ? { salience } : {}),
         rationale: typeof e.rationale === "string" ? e.rationale.slice(0, 300) : "",
       });
     }
-    return { signals, narrative: typeof record.narrative === "string" ? record.narrative.slice(0, 400) : undefined };
+    const narrativeDirection = typeof record.narrative_direction === "string" && DIRECTIONS.has(record.narrative_direction) ? (record.narrative_direction as NarrativeDirection) : undefined;
+    return {
+      signals,
+      narrative: typeof record.narrative === "string" ? record.narrative.slice(0, 400) : undefined,
+      ...(narrativeDirection ? { narrativeDirection } : {}),
+    };
   }
 
   /** The signals were NOT attempted: they stay unprocessed and a later tick scores them. */
@@ -438,9 +470,12 @@ export class LLMScorer implements SentimentScorer {
 
 /**
  * Production LLM scorer: memory + usage logging through the service-role
- * client (created lazily so importing this module never touches env/Supabase).
+ * client (created lazily so importing this module never touches Supabase).
+ * The config defaults to the environment's, so the Phase 31 switch selects
+ * the prompt version here exactly as it selects the force's behaviour in
+ * the tick: one flag, both halves.
  */
-export function createDefaultLLMScorer(config: EngineConfig = DEFAULT_ENGINE_CONFIG): LLMScorer {
+export function createDefaultLLMScorer(config: EngineConfig = engineConfigFromEnv(getEngineEnvOverrides())): LLMScorer {
   let adminPromise: Promise<import("@/types").TypedSupabaseClient> | null = null;
   const admin = () => {
     adminPromise ??= import("@/lib/supabase-admin").then(({ createSupabaseAdminClient }) => createSupabaseAdminClient());
@@ -454,6 +489,7 @@ export function createDefaultLLMScorer(config: EngineConfig = DEFAULT_ENGINE_CON
     config: config.llm,
     tickIntervalSeconds: config.tick.intervalSeconds,
     memoryEventMaxAgeDays: config.memory.maxEventAgeDays,
+    promptVersion: config.signalQuality.enabled ? 2 : 1,
     memoryStore: () => {
       memoryStorePromise ??= Promise.all([admin(), import("@/lib/engine/memory/store")]).then(([client, mod]) =>
         mod.withMemoryCache(mod.createSupabaseMemoryStore(client), config.llm.memoryCacheTtlMs),

@@ -1,5 +1,5 @@
 import { connectorRegistry, type ConnectorRegistry } from "@/lib/connectors/registry";
-import type { ConnectorContext, ExcludedItem, FeedCatalog, FeedCatalogEntry, FeedHealthReport, MetricReading, RawSignal, SnapshotStore } from "@/lib/connectors/types";
+import type { ConnectorContext, ConnectorQuality, ExcludedItem, FeedCatalog, FeedCatalogEntry, FeedHealthReport, MetricReading, RawSignal, SnapshotStore } from "@/lib/connectors/types";
 import type { DataSource } from "@/types";
 import type { Json } from "@/types/database";
 
@@ -100,6 +100,13 @@ export interface IngestOptions {
    * SHARED_FETCH_GRACE_MS; meaningless without a budget.
    */
   sharedFetchGraceMs?: number;
+  /**
+   * The Phase 31 signal-quality rules for the news connectors (stale refusal,
+   * namesake and obituary guards, name-conditional exclusions). Absent, which
+   * is the default and what SIGNAL_QUALITY_ENABLED unset means, none of them
+   * runs: lib/ingest/quality.ts reads the switch for the routes.
+   */
+  quality?: ConnectorQuality;
 }
 
 /** The default grace past the run budget for a shared-fetch source's people. */
@@ -261,6 +268,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
     clock = Date.now,
     pollConcurrency,
     sharedFetchGraceMs = SHARED_FETCH_GRACE_MS,
+    quality,
   } = options;
   const wallClockStart = clock();
   const requested = options.sources && options.sources.length > 0 ? [...options.sources] : null;
@@ -477,6 +485,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
           details[key] = value;
         },
         remainingBudgetMs: () => (budgetMs === undefined ? null : Math.max(0, budgetMs - elapsedMs())),
+        quality,
       };
       const poll: Omit<PollRow, "status" | "reason" | "latencyMs" | "finishedAt"> = {
         runId,

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { getIngestSecretOrNull } from "@/lib/env";
 import { authorizeIngestRequest } from "@/lib/ingest/auth";
+import { ingestQualityFromEnv } from "@/lib/ingest/quality";
 import { runIngestion } from "@/lib/ingest/runner";
 import { createSupabaseIngestStore } from "@/lib/ingest/store";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
@@ -41,6 +42,7 @@ async function handle(request: NextRequest) {
       sources: requestedSources.length > 0 ? requestedSources : undefined,
       force,
       trigger: "manual",
+      quality: ingestQualityFromEnv(),
     });
     return NextResponse.json(summary);
   } catch (error) {

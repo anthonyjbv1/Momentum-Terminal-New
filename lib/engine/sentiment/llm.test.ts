@@ -13,6 +13,7 @@ import type { Json } from "@/types/database";
 
 import { TickCallBudget } from "./budget";
 import { CALL_OVERHEAD_MS, LLMScorer, type LLMScorerPerson } from "./llm";
+import { SENTIMENT_SYSTEM_PROMPT, SENTIMENT_SYSTEM_PROMPT_V2 } from "./prompts";
 import { isDeferred, type ScoringContext, type ScoringOutcome, type SentimentInput, type SentimentResult } from "./types";
 
 const PEOPLE: Record<string, LLMScorerPerson> = {
@@ -356,5 +357,57 @@ describe("LLMScorer — the two outcomes", () => {
     ]);
     expect(complete).toHaveBeenCalledTimes(1);
     expect(outcomes.filter(isDeferred)).toEqual([expect.objectContaining({ reason: "rate_limit" })]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 31: prompt version 2
+// ---------------------------------------------------------------------------
+
+describe("prompt version 2 (Phase 31)", () => {
+  function answering(salienceFor: (id: string) => string | undefined, direction: string | undefined = "up") {
+    const prompts: string[] = [];
+    const fn = vi.fn(async (request: RoutedRequest): Promise<LLMResponse> => {
+      prompts.push(request.userPrompt);
+      const ids = [...request.userPrompt.matchAll(/id=([\w-]+)/g)].map((m) => m[1]);
+      const signals = ids.map((id) => {
+        const salience = salienceFor(id);
+        return { id, label: "positive", confidence: 0.9, direction: 1, anomaly: "notable", rationale: `about ${id}`, ...(salience ? { salience } : {}) };
+      });
+      const data = { signals, narrative: "Drake released a surprise album, his first in two years.", ...(direction ? { narrative_direction: direction } : {}) };
+      return { text: JSON.stringify(data), structuredData: data, usage: { inputTokens: 900, outputTokens: 120, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }, provider: "fake", model: "fake-model", stopReason: "end_turn", latencyMs: 3 };
+    });
+    return Object.assign(fn, { prompts });
+  }
+
+  it("asks with the version-2 prompt and schema and reads salience and the note's direction; version 1 asks as before and reads neither", async () => {
+    const complete = answering((id) => (id === "s2" ? "incidental" : id === "s3" ? "unrelated" : "relevant"));
+    const { scorer } = makeScorer(complete, { promptVersion: 2 });
+    expect(scorer.promptVersion).toBe(2);
+    const [a, b, c] = (await Promise.all([scorer.scoreSignal(signal("s1", "p-drake", "Drake drops surprise album")), scorer.scoreSignal(signal("s2", "p-drake", "Drake among guests at gala")), scorer.scoreSignal(signal("s3", "p-drake", "Drake University wins"))])).map(scored);
+    const request = complete.mock.calls[0][0];
+    expect(request.systemPrompt).toBe(SENTIMENT_SYSTEM_PROMPT_V2);
+    expect(request.responseFormat).toMatchObject({ type: "json", name: "sentiment_assessment_v2" });
+    expect([a.salience, b.salience, c.salience]).toEqual(["relevant", "incidental", "unrelated"]);
+    expect(a.narrativeDirection).toBe("up");
+    // The label and confidence are untouched by salience: the force multiplies later, and only while the switch is on.
+    expect(a).toMatchObject({ label: "positive", direction: 1, confidence: 0.9 });
+    expect(c).toMatchObject({ label: "positive", direction: 1, confidence: 0.9 });
+
+    const v1 = makeScorer(complete);
+    expect(v1.scorer.promptVersion).toBe(1);
+    const d = scored(await v1.scorer.scoreSignal(signal("s4", "p-drake", "Drake drops surprise album")));
+    expect(complete.mock.calls[1][0].systemPrompt).toBe(SENTIMENT_SYSTEM_PROMPT);
+    expect(complete.mock.calls[1][0].responseFormat).toMatchObject({ name: "sentiment_assessment" });
+    expect(d.salience).toBeUndefined();
+    expect(d.narrativeDirection).toBeUndefined();
+  });
+
+  it("a version-2 answer that leaves salience out reads as relevant, and an unknown direction is dropped: the absence of a label never zeroes a signal", async () => {
+    const complete = answering(() => undefined, "sideways");
+    const { scorer } = makeScorer(complete, { promptVersion: 2 });
+    const result = scored(await scorer.scoreSignal(signal("s1", "p-drake", "Drake drops surprise album")));
+    expect(result.salience).toBe("relevant");
+    expect(result.narrativeDirection).toBeUndefined();
   });
 });

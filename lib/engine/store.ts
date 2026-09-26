@@ -5,6 +5,7 @@ import { LIVE_MOMENT_KIND } from "@/lib/engine/sentiment/prescored";
 import { readSignalVolumeRow, type PersonSignalVolume, type PersonSignalVolumeRow } from "@/lib/engine/signal-volume";
 import type {
   EngineSignal,
+  RecentStory,
   SignalActivity,
   TickContext,
   TickPersistence,
@@ -72,6 +73,20 @@ export function aggregateSignalActivity(rows: Array<{ person_id: string; sentime
  * Rows belonging to people who have since left the board are dropped: the
  * mean is spread across the people on it now.
  */
+/** Recently scored event signals grouped by person, for story confirmation (Phase 31). Only articles that moved something. */
+export function groupRecentStories(rows: Array<{ id: string; person_id: string; headline: string; impact_score: number | string | null; occurred_at: string }>, activeIds: Set<string>): Map<string, RecentStory[]> {
+  const out = new Map<string, RecentStory[]>();
+  for (const row of rows) {
+    if (!activeIds.has(row.person_id)) continue;
+    const impact = Number(row.impact_score);
+    if (!Number.isFinite(impact) || impact === 0) continue;
+    const list = out.get(row.person_id) ?? [];
+    list.push({ id: row.id, personId: row.person_id, headline: row.headline, occurredAt: new Date(row.occurred_at), impact });
+    out.set(row.person_id, list);
+  }
+  return out;
+}
+
 export function readMoodWindowHistory(
   rows: Array<{ person_id: string; impact: number | string | null; tick_number: number | string }>,
   activeIds: Set<string>,
@@ -142,6 +157,26 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         .in("person_id", [...activeIds]);
       if (backlogCount.error) throw new Error(`Engine failed to load backlog: ${backlogCount.error.message}`);
 
+      // The stories already scored inside the story window (Phase 31), read
+      // only while the quality rules are on: off, the tick pays nothing for it.
+      let recentStoriesByPerson: Map<string, RecentStory[]> | undefined;
+      if (config.signalQuality.enabled) {
+        const storiesSince = new Date(now.getTime() - config.signalQuality.storyWindowHours * 3600 * 1000).toISOString();
+        const recent = await client
+          .from("signals")
+          .select("id, person_id, headline, impact_score, occurred_at")
+          .eq("processed", true)
+          .eq("raw_payload->>kind", "article")
+          .neq("impact_score", 0)
+          .gte("occurred_at", storiesSince)
+          .in("person_id", [...activeIds])
+          .order("occurred_at", { ascending: true })
+          .order("id")
+          .limit(2_000);
+        if (recent.error) throw new Error(`Engine failed to load recent stories: ${recent.error.message}`);
+        recentStoriesByPerson = groupRecentStories(recent.data ?? [], activeIds);
+      }
+
       const engineSignals: EngineSignal[] = (signals.data ?? [])
         .filter((row) => activeIds.has(row.person_id))
         .map((row) => ({
@@ -172,6 +207,7 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         openCapitalCentsByPerson: sumBy(positions.data ?? [], (p) => p.person_id, (p) => Number(p.amount_cents)),
         signalActivityByPerson: aggregateSignalActivity(activity.data ?? []),
         signalVolumeByPerson: new Map(((volume.data ?? []) as PersonSignalVolumeRow[]).map(readSignalVolumeRow)),
+        ...(recentStoriesByPerson ? { recentStoriesByPerson } : {}),
         tradeEvents,
         moodWindow: readMoodWindowHistory(moodEvents.data ?? [], activeIds),
         inversePairs: pairs.data ?? [],
@@ -281,6 +317,23 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
             .map((s) => ({ person_id: s.personId, sentiment_confidence: s.sentimentConfidence ?? null })),
         ),
         signalVolumeByPerson: new Map(Object.entries(seed.signalVolume ?? {})),
+        // Phase 31: the stories this store has already scored inside the window, as the Supabase store reads them back.
+        ...(config.signalQuality.enabled
+          ? {
+              recentStoriesByPerson: groupRecentStories(
+                signals
+                  .filter((s) => s.processed && activeIds.has(s.personId) && s.occurredAt.getTime() >= now.getTime() - config.signalQuality.storyWindowHours * 3600 * 1000)
+                  .map((s) => ({
+                    id: s.id,
+                    person_id: s.personId,
+                    headline: s.headline,
+                    impact_score: processedSignals.find((p) => p.id === s.id)?.impactScore ?? 0,
+                    occurred_at: s.occurredAt.toISOString(),
+                  })),
+                activeIds,
+              ),
+            }
+          : {}),
         tradeEvents: [...(seed.tradeEvents ?? [])],
         moodWindow: seed.moodWindow
           ? { totalImpact: seed.moodWindow.totalImpact, totalByPerson: new Map(Object.entries(seed.moodWindow.totalByPerson)), readings: seed.moodWindow.readings }
