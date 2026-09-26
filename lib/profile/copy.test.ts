@@ -14,7 +14,7 @@ import { DELETE_PAGE, PROFILE, allProfileStrings } from "./copy";
  */
 
 const root = join(__dirname, "..", "..");
-const migration = readFileSync(join(root, "supabase", "migrations", "20260926180000_phase32_signup_onboarding.sql"), "utf8");
+const migration = readFileSync(join(root, "supabase", "migrations", "20260926184118_phase32_signup_onboarding.sql"), "utf8");
 const deleteFn = migration.slice(migration.indexOf("create or replace function public.delete_my_account"), migration.indexOf("$$;", migration.indexOf("create or replace function public.delete_my_account")));
 
 describe("profile copy", () => {
