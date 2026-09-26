@@ -13,7 +13,9 @@
     "db:push": "npx supabase db push",
     "db:types": "npx supabase gen types typescript --linked --schema public > types/database.ts",
     "replay:stories": "tsx scripts/replay-stories.ts",
-    "replay:prompts": "tsx scripts/replay-prompts.ts"
+    "replay:prompts": "tsx scripts/replay-prompts.ts",
+    "replay:live": "tsx scripts/replay-live-session.ts",
+    "check:clips": "tsx scripts/check-clip-counts.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

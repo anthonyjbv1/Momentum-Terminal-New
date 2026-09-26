@@ -5,6 +5,7 @@ import { buildRegistry } from "@/lib/connectors/registry";
 import type { DataConnector, LiveStream } from "@/lib/connectors/types";
 import type { Json } from "@/types/database";
 
+import { LIVE_QUALITY_DEFAULTS, type LiveQualityRules, type LiveSession } from "./rules";
 import { runLiveMode, type LiveLogLine } from "./runner";
 import { createMemoryLiveStore, type MemoryLiveStore } from "./store";
 
@@ -78,7 +79,7 @@ function setup(w: World, mappings = [{ person: kai, externalIdentifier: "kaicena
   const connector = liveConnector(w);
   const registry = buildRegistry([connector]);
   const lines: LiveLogLine[] = [];
-  const fire = (now: Date, options: { budgetMs?: number; clock?: () => number } = {}) => runLiveMode({ store, registry, now, log: (line) => lines.push(line), ...options });
+  const fire = (now: Date, options: { budgetMs?: number; clock?: () => number; quality?: LiveQualityRules } = {}) => runLiveMode({ store, registry, now, log: (line) => lines.push(line), ...options });
   return { store, connector, fire, lines };
 }
 
@@ -271,6 +272,84 @@ describe("live mode — the moments", () => {
     expect(store.sessions[0].lastBurstAt).not.toBeNull();
   });
 });
+
+describe("live mode — the quality rules (Phase 31 switch)", () => {
+  const quality = LIVE_QUALITY_DEFAULTS;
+
+  it("samples at Helix's four-minute refresh: the fire two minutes after a sample records only the sighting", async () => {
+    const w = world({ streams: new Map([["kaicenat", stream({ startedAt: T0 })]]) });
+    const { store, fire } = setup(w);
+    for (const minute of [0, 2, 4, 6, 8]) await fire(at(minute), { quality });
+    expect(store.samples.map((s) => s.sampledAt)).toEqual([at(0), at(4), at(8)]);
+  });
+
+  it("fires one surge for a step that holds, none for the ramp or a spike that reverts, and counts the session's surges from what it stored", async () => {
+    const w = world({ streams: new Map([["kaicenat", stream({ startedAt: T0 })]]) });
+    const { store, fire, lines } = setup(w);
+    const audience = (minute: number) => (minute < 12 ? (minute / 12) * 40_000 : minute === 72 ? 60_000 : minute < 104 ? 40_000 : 52_000) + ((minute / 4) % 2) * 100;
+    for (let minute = 0; minute <= 160; minute += 4) {
+      w.streams.set("kaicenat", stream({ startedAt: T0, viewerCount: Math.round(audience(minute)) }));
+      await fire(at(minute), { quality });
+    }
+    const moments = store.ingest.signals.filter((s) => s.rawPayload.kind === "live_moment");
+    expect(moments).toHaveLength(1);
+    expect(moments[0].occurredAt).toEqual(at(112));
+    expect(moments[0].rawPayload).toMatchObject({ moment: "audience_surge", rule: "quality", direction: 1 });
+    // The spike at minute 72 sits in the base window at 112 and lifts it, so the step reads +22% rather than +30%.
+    expect(moments[0].headline).toMatch(/^Kai Cenat's live audience is up 22% on the half hour before: 52,\d{3} viewers against 42,\d{3} 30 to 60 minutes earlier, 1h 52m into the stream\.$/);
+    expect(store.sessions[0].lastSurgeAt).toEqual(at(112));
+    expect(await store.countSessionMoments({ personId: kai.id, dataSourceId: "src-twitch", sourceName: "twitch", streamId: "s-1" })).toEqual({ audience_surge: 1, audience_drop: 0, clip_burst: 0 });
+    // Every sample past the first hour logged what the rules read: the counts, and no shape (there are no past sessions).
+    const judged = lines.filter((line) => line.event === "sample" && line.quality);
+    expect(judged.length).toBeGreaterThan(20);
+    expect(judged.at(-1)?.quality).toMatchObject({ rule: "quality", counts: { audience_surge: 1 }, shape: null });
+  });
+
+  it("does not fire the Phase 16 clip burst of the same scenario: under an hour, and then against a pace that has caught up", async () => {
+    const w = world({ streams: new Map([["kaicenat", stream({ startedAt: T0 })]]), clips: (_b, from) => (from.getTime() < at(30).getTime() ? 2 : 20) });
+    const { store, fire } = setup(w);
+    for (let minute = 0; minute <= 120; minute += 4) await fire(at(minute), { quality });
+    expect(store.ingest.signals.filter((s) => (s.rawPayload as { moment?: string }).moment === "clip_burst")).toEqual([]);
+  });
+});
+
+describe("live mode — the store's reads for the quality rules", () => {
+  it("counts one broadcast's moments by kind, and reads past complete sessions at an elapsed minute, newest first", async () => {
+    const done = (id: string, startedAt: Date, complete = true): LiveSession => ({ ...openSessionRow(id, startedAt), endedAt: new Date(startedAt.getTime() + 3 * 3_600_000), complete });
+    const store: MemoryLiveStore = createMemoryLiveStore({
+      sources: [twitch],
+      sessions: [done("old", at(-3000)), done("newer", at(-1500)), done("partial", at(-1000), false), { ...openSessionRow("current", T0), endedAt: null }],
+      samples: [
+        ...[100, 104, 108, 112].map((minute) => sampleRow("old", new Date(at(-3000).getTime() + minute * 60_000), 30_000 + minute)),
+        ...[100, 106].map((minute) => sampleRow("newer", new Date(at(-1500).getTime() + minute * 60_000), 40_000 + minute)),
+        sampleRow("partial", new Date(at(-1000).getTime() + 105 * 60_000), 99_999),
+      ],
+    });
+    await store.insertSignals([
+      { personId: kai.id, dataSourceId: "src-twitch", headline: "a", rawPayload: { kind: "live_moment", moment: "audience_surge" }, occurredAt: at(1), dedupeKey: "twitch:live:s-1:audience_surge:1", tier: null },
+      { personId: kai.id, dataSourceId: "src-twitch", headline: "b", rawPayload: { kind: "live_moment", moment: "clip_burst" }, occurredAt: at(2), dedupeKey: "twitch:live:s-1:clip_burst:2", tier: null },
+      { personId: kai.id, dataSourceId: "src-twitch", headline: "c", rawPayload: { kind: "live_moment", moment: "audience_surge" }, occurredAt: at(3), dedupeKey: "twitch:live:s-2:audience_surge:3", tier: null },
+    ]);
+    expect(await store.countSessionMoments({ personId: kai.id, dataSourceId: "src-twitch", sourceName: "twitch", streamId: "s-1" })).toEqual({ audience_surge: 1, audience_drop: 0, clip_burst: 1 });
+    expect(await store.listShapeViewers({ personId: kai.id, dataSourceId: "src-twitch", excludeSessionId: "current", fromMinutes: 100, toMinutes: 110, sessions: 10 })).toEqual([
+      [40_100, 40_106],
+      [30_100, 30_104, 30_108],
+    ]);
+  });
+});
+
+function openSessionRow(id: string, startedAt: Date): LiveSession {
+  return {
+    id, personId: kai.id, dataSourceId: "src-twitch", streamId: `stream-${id}`, broadcasterId: "b-kai", channel: "kaicenat",
+    startedAt, firstSeenAt: startedAt, lastSeenAt: startedAt, lastSampledAt: null, endedAt: null, missedChecks: 0, complete: true,
+    sampleCount: 0, viewerSum: 0, viewerLatest: null, viewerPeak: null, peakAt: null, categoryLatest: null, categorySwitches: 0, titleLatest: null,
+    clipsTotal: 0, clipsCountedTo: null, lastSurgeAt: null, lastDropAt: null, lastBurstAt: null, largestDropFraction: null, signalsCreated: 0,
+  };
+}
+
+function sampleRow(sessionId: string, sampledAt: Date, viewerCount: number) {
+  return { sessionId, sampledAt, viewerCount, category: null, title: null, clipsWindowFrom: null, clipsWindowTo: null, clipsInWindow: 0, clipsTruncated: false, latencyMs: null, status: "ok" as const, error: null, signalsCreated: 0 };
+}
 
 describe("live mode — what it leaves alone", () => {
   it("ignores a source without a live block, and one with it off", async () => {

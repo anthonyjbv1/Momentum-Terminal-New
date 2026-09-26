@@ -1,7 +1,7 @@
 import type { TypedSupabaseClient } from "@/types";
 
 import { createMemoryIngestStore, createSupabaseIngestStore, type IngestStore, type MemoryIngestStore, type MemoryIngestStoreSeed } from "../store";
-import type { LiveSample, LiveSession } from "./rules";
+import type { LiveMomentKind, LiveSample, LiveSession } from "./rules";
 
 /**
  * Persistence for live mode (Phase 16). Sessions and samples are the live
@@ -25,6 +25,31 @@ export interface LiveStore extends LiveIngestStore {
   /** Samples of one session taken at or after `since`, oldest first. */
   listSamples(sessionId: string, since: Date): Promise<LiveSample[]>;
   insertSample(sample: LiveSample): Promise<void>;
+  /**
+   * The moments already stored for one broadcast, by kind (Phase 31 quality
+   * rules: the per-session caps). Read from the signals themselves, under the
+   * dedupe key every moment is stored with: `<source>:live:<stream id>:<moment>:`.
+   */
+  countSessionMoments(query: { personId: string; dataSourceId: string; sourceName: string; streamId: string }): Promise<Record<LiveMomentKind, number>>;
+  /**
+   * The viewer counts of the person's newest complete, ended sessions (not
+   * `excludeSessionId`) sampled between `fromMinutes` and `toMinutes` after
+   * each one's start: one array per session, newest session first (Phase 31
+   * quality rules: the session shape).
+   */
+  listShapeViewers(query: { personId: string; dataSourceId: string; excludeSessionId: string; fromMinutes: number; toMinutes: number; sessions: number }): Promise<number[][]>;
+}
+
+const NO_MOMENTS: Record<LiveMomentKind, number> = { audience_surge: 0, audience_drop: 0, clip_burst: 0 };
+
+function momentCounts(moments: Array<unknown>): Record<LiveMomentKind, number> {
+  const counts = { ...NO_MOMENTS };
+  for (const moment of moments) if (moment === "audience_surge" || moment === "audience_drop" || moment === "clip_burst") counts[moment] += 1;
+  return counts;
+}
+
+function momentKeyPrefix(sourceName: string, streamId: string): string {
+  return `${sourceName}:live:${streamId}:`;
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +226,38 @@ export function createSupabaseLiveStore(client: TypedSupabaseClient): LiveStore 
       });
       if (error) throw new Error(`Failed to record the live sample: ${error.message}`);
     },
+
+    async countSessionMoments({ personId, dataSourceId, sourceName, streamId }) {
+      const { data, error } = await client
+        .from("signals")
+        .select("raw_payload")
+        .eq("person_id", personId)
+        .eq("data_source_id", dataSourceId)
+        .like("dedupe_key", `${momentKeyPrefix(sourceName, streamId)}%`)
+        .limit(500);
+      if (error) throw new Error(`Failed to count the session's moments: ${error.message}`);
+      return momentCounts(data.map((row) => (row.raw_payload && typeof row.raw_payload === "object" && !Array.isArray(row.raw_payload) ? (row.raw_payload as Record<string, unknown>).moment : null)));
+    },
+
+    async listShapeViewers({ personId, dataSourceId, excludeSessionId, fromMinutes, toMinutes, sessions: limit }) {
+      const { data: sessions, error } = await client
+        .from("live_sessions")
+        .select("id, started_at")
+        .eq("person_id", personId)
+        .eq("data_source_id", dataSourceId)
+        .eq("complete", true)
+        .not("ended_at", "is", null)
+        .neq("id", excludeSessionId)
+        .order("started_at", { ascending: false })
+        .limit(limit);
+      if (error) throw new Error(`Failed to load past live sessions: ${error.message}`);
+      if (sessions.length === 0) return [];
+      const at = (startedAt: string, minutes: number) => new Date(new Date(startedAt).getTime() + minutes * 60_000).toISOString();
+      const windows = sessions.map((session) => `and(session_id.eq.${session.id},sampled_at.gte."${at(session.started_at, fromMinutes)}",sampled_at.lt."${at(session.started_at, toMinutes)}")`);
+      const { data: samples, error: samplesError } = await client.from("live_samples").select("session_id, viewer_count").or(windows.join(",")).not("viewer_count", "is", null).limit(5_000);
+      if (samplesError) throw new Error(`Failed to load past live samples: ${samplesError.message}`);
+      return sessions.map((session) => samples.filter((sample) => sample.session_id === session.id).map((sample) => Number(sample.viewer_count)));
+    },
   };
 }
 
@@ -255,6 +312,25 @@ export function createMemoryLiveStore(seed: MemoryLiveStoreSeed = {}): MemoryLiv
     },
     async insertSample(sample) {
       samples.push(sample);
+    },
+    async countSessionMoments({ personId, dataSourceId, sourceName, streamId }) {
+      const prefix = momentKeyPrefix(sourceName, streamId);
+      return momentCounts(
+        ingest.signals
+          .filter((signal) => signal.personId === personId && signal.dataSourceId === dataSourceId && (signal.dedupeKey ?? "").startsWith(prefix))
+          .map((signal) => (signal.rawPayload as Record<string, unknown>).moment),
+      );
+    },
+    async listShapeViewers({ personId, dataSourceId, excludeSessionId, fromMinutes, toMinutes, sessions: limit }) {
+      const past = sessions
+        .filter((session) => session.personId === personId && session.dataSourceId === dataSourceId && session.complete && session.endedAt !== null && session.id !== excludeSessionId)
+        .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
+        .slice(0, limit);
+      return past.map((session) => {
+        const from = session.startedAt.getTime() + fromMinutes * 60_000;
+        const to = session.startedAt.getTime() + toMinutes * 60_000;
+        return samples.filter((sample) => sample.sessionId === session.id && sample.viewerCount !== null && sample.sampledAt.getTime() >= from && sample.sampledAt.getTime() < to).map((sample) => sample.viewerCount as number);
+      });
     },
   };
 }

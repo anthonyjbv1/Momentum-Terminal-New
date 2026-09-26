@@ -12,16 +12,27 @@ import {
   audienceMoment,
   clipMoment,
   clipWindow,
+  CLIPS_PER_STREAM_HOUR_METRIC,
+  dropMoment,
   liveMomentSignal,
   minutesBetween,
   openSession,
+  qualityClipMoment,
+  qualitySurgeMoment,
   readLiveConfig,
   sampleDue,
   sessionAggregates,
   sessionMetricReadings,
+  sessionShape,
+  shapeBucket,
   streamSummarySignal,
+  usualClipsPerHour,
+  withLiveQuality,
   type LiveConfig,
+  type LiveMoment,
+  type LiveQualityRules,
   type LiveSession,
+  type SessionShape,
 } from "./rules";
 import type { LiveStore } from "./store";
 
@@ -89,6 +100,12 @@ export interface LiveRunOptions {
   budgetMs?: number;
   clock?: () => number;
   log?: (line: LiveLogLine) => void;
+  /**
+   * The Phase 31 quality rules (lib/ingest/live/rules.ts), present only while
+   * SIGNAL_QUALITY_ENABLED is on (liveQualityFromEnv). Absent, every session
+   * is sampled and judged exactly as before.
+   */
+  quality?: LiveQualityRules;
 }
 
 export interface LivePersonSummary {
@@ -165,7 +182,7 @@ function emptySummary(source: DataSource): LiveSourceSummary {
 }
 
 export async function runLiveMode(options: LiveRunOptions): Promise<LiveRunSummary> {
-  const { store, registry = connectorRegistry, now = new Date(), fetch: baseFetch = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS, budgetMs, clock = Date.now, log = defaultLog } = options;
+  const { store, registry = connectorRegistry, now = new Date(), fetch: baseFetch = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS, budgetMs, clock = Date.now, log = defaultLog, quality } = options;
   const wallClockStart = clock();
   const elapsedMs = () => clock() - wallClockStart;
   let budgetExhausted = false;
@@ -194,7 +211,8 @@ export async function runLiveMode(options: LiveRunOptions): Promise<LiveRunSumma
   for (const source of sources) {
     const connector = registry.get(source.name);
     const config = asConfigObject(source.config);
-    const live = readLiveConfig(config);
+    const sourceLive = readLiveConfig(config);
+    const live = sourceLive ? withLiveQuality(sourceLive, quality) : null;
     // No live block, or off: the source is polled on its interval and nothing else. Silent, by design.
     if (!connector?.live || !live) continue;
     const capability = connector.live;
@@ -262,7 +280,8 @@ export async function runLiveMode(options: LiveRunOptions): Promise<LiveRunSumma
     // 2. Reconcile, per broadcaster -------------------------------------------------
     for (const mapping of mappings) {
       const stream = statuses.get(mapping.externalIdentifier.trim().toLowerCase())?.stream ?? null;
-      const cfg = readLiveConfig(config, mapping.config) ?? live;
+      const personLive = readLiveConfig(config, mapping.config);
+      const cfg = personLive ? withLiveQuality(personLive, quality) : live;
       let session = open.find((candidate) => candidate.personId === mapping.person.id) ?? null;
       const personSummary: LivePersonSummary = { slug: mapping.person.slug, live: stream !== null, sampled: false, viewerCount: stream?.viewerCount ?? null, sessionId: session?.id ?? null };
       summary.people.push(personSummary);
@@ -414,14 +433,26 @@ async function sampleSession(input: SampleInput): Promise<{ signalsCreated: numb
     }
   }
 
-  const lookbackMinutes = Math.max(cfg.deltaWindowMinutes, cfg.clipWindowMinutes) + cfg.clipLagMinutes + cfg.sampleIntervalMinutes + 1;
+  // The quality rules compare with the half hour before the last half hour, and confirm against the previous sample's reading.
+  const qualityLookback = cfg.quality ? cfg.quality.baseFromMinutes + cfg.sampleIntervalMinutes : 0;
+  const lookbackMinutes = Math.max(cfg.deltaWindowMinutes, cfg.clipWindowMinutes, qualityLookback) + cfg.clipLagMinutes + cfg.sampleIntervalMinutes + 1;
   const prior = await store.listSamples(session.id, new Date(now.getTime() - lookbackMinutes * MINUTE_MS));
   const current = { sampledAt: now, viewerCount: stream.viewerCount };
 
   const signals: RawSignal[] = [];
-  const audience = audienceMoment(session, prior, current, cfg);
+  let audience: LiveMoment | null;
+  let burst: LiveMoment | null;
+  let qualityLog: Record<string, unknown> | null = null;
+  if (cfg.quality) {
+    const judged = await judgeWithQuality({ session, mapping, source, store, prior, current, clips, cfg, quality: cfg.quality, now });
+    audience = judged.audience;
+    burst = judged.burst;
+    qualityLog = judged.log;
+  } else {
+    audience = audienceMoment(session, prior, current, cfg);
+    burst = clips ? clipMoment(session, prior, clips, now, cfg) : null;
+  }
   if (audience) signals.push(liveMomentSignal(mapping.person, session, audience, now, source.name));
-  const burst = clips ? clipMoment(session, prior, clips, now, cfg) : null;
   if (burst) signals.push(liveMomentSignal(mapping.person, session, burst, now, source.name));
 
   let next = applySample(session, { now, stream, clips }, cfg);
@@ -469,12 +500,61 @@ async function sampleSession(input: SampleInput): Promise<{ signalsCreated: numb
     delta: delta ? { fraction: round3(delta.fraction), minutes: Math.round(delta.minutes) } : null,
     signals: stored.length,
     complete: next.complete,
+    ...(qualityLog ? { quality: qualityLog } : {}),
   });
   for (const signal of signals) {
     const payload = signal.rawPayload as { moment?: string; direction?: number; confidence?: number; rationale?: string };
     log({ event: "signal", source: source.name, person: mapping.person.slug, sessionId: session.id, kind: "live_moment", moment: payload.moment, direction: payload.direction, confidence: payload.confidence, rationale: payload.rationale, headline: signal.headline, stored: stored.some((row) => row.dedupeKey === signal.dedupeKey) });
   }
   return { signalsCreated: stored.length, requests, error };
+}
+
+/**
+ * The moments under the quality rules, with the three reads they need and the
+ * plain Phase 16 runner does not: the moments already stored for this
+ * broadcast (the per-session caps), the person's past sessions at this minute
+ * (the shape, off until there are enough), and their usual clips per stream
+ * hour (the per-session metric). Each read happens only once the session is
+ * old enough for the rule that uses it to fire.
+ */
+async function judgeWithQuality(input: {
+  session: LiveSession;
+  mapping: PersonMapping;
+  source: DataSource;
+  store: LiveStore;
+  prior: Awaited<ReturnType<LiveStore["listSamples"]>>;
+  current: { sampledAt: Date; viewerCount: number | null };
+  clips: { from: Date; to: Date; count: number } | null;
+  cfg: LiveConfig;
+  quality: LiveQualityRules;
+  now: Date;
+}): Promise<{ audience: LiveMoment | null; burst: LiveMoment | null; log: Record<string, unknown> }> {
+  const { session, mapping, source, store, prior, current, clips, cfg, quality, now } = input;
+  const elapsed = minutesBetween(session.startedAt, now);
+  const surgesPossible = elapsed >= quality.baseFromMinutes;
+  const burstsPossible = clips !== null && elapsed >= quality.burstMinSessionMinutes;
+  const counts = surgesPossible || burstsPossible ? await store.countSessionMoments({ personId: mapping.person.id, dataSourceId: source.id, sourceName: source.name, streamId: session.streamId }) : { audience_surge: 0, audience_drop: 0, clip_burst: 0 };
+
+  let shape: SessionShape | null = null;
+  if (surgesPossible && counts.audience_surge < quality.maxSurgesPerSession) {
+    const bucket = shapeBucket(elapsed, quality);
+    const viewers = await store.listShapeViewers({ personId: mapping.person.id, dataSourceId: source.id, excludeSessionId: session.id, fromMinutes: bucket.fromMinutes, toMinutes: bucket.toMinutes, sessions: quality.shapeSessions });
+    shape = sessionShape(viewers, bucket, quality);
+  }
+  const audience = qualitySurgeMoment(session, prior, current, { surgesSoFar: counts.audience_surge, shape }, cfg) ?? dropMoment(session, prior, current, cfg);
+
+  let usualPerHour: number | null = null;
+  if (burstsPossible && counts.clip_burst < quality.maxBurstsPerSession) {
+    const since = new Date(now.getTime() - quality.usualClipsWindowHours * HOUR_MS);
+    usualPerHour = usualClipsPerHour((await store.listSnapshots(mapping.person.id, source.id, CLIPS_PER_STREAM_HOUR_METRIC, since)).map((snapshot) => snapshot.value), quality);
+  }
+  const burst = clips ? qualityClipMoment(session, prior, clips, now, { burstsSoFar: counts.clip_burst, usualPerHour }, cfg) : null;
+
+  return {
+    audience,
+    burst,
+    log: { rule: "quality", counts, shape: shape ? { sessions: shape.sessions, median: Math.round(shape.median), bucket: [shape.bucketFromMinutes, shape.bucketToMinutes] } : null, usualClipsPerHour: usualPerHour },
+  };
 }
 
 interface CloseInput {

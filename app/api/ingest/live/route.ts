@@ -4,6 +4,7 @@ import { getCronSecretOrNull, getIngestSecretOrNull, isIngestCronEnabled } from 
 import { authorizeIngestCronRequest } from "@/lib/ingest/cron";
 import { LIVE_CRON_DEFAULTS, runScheduledLiveCheck } from "@/lib/ingest/live/cron";
 import { runLiveMode } from "@/lib/ingest/live/runner";
+import { liveQualityFromEnv } from "@/lib/ingest/quality";
 import { createSupabaseLiveStore } from "@/lib/ingest/live/store";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
@@ -42,7 +43,7 @@ export async function GET(request: NextRequest) {
     const store = createSupabaseLiveStore(createSupabaseAdminClient());
     const result = await runScheduledLiveCheck({
       enabled: true,
-      run: () => runLiveMode({ store, budgetMs: LIVE_CRON_DEFAULTS.budgetMs, timeoutMs: LIVE_CRON_DEFAULTS.fetchTimeoutMs }),
+      run: () => runLiveMode({ store, budgetMs: LIVE_CRON_DEFAULTS.budgetMs, timeoutMs: LIVE_CRON_DEFAULTS.fetchTimeoutMs, quality: liveQualityFromEnv() }),
     });
     return NextResponse.json(result, { status: result.error ? 500 : 200 });
   } catch (error) {

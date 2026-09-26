@@ -100,6 +100,8 @@ export interface LiveConfig {
   maxGapMinutes: number;
   /** Pages of clips read per window before the count is a floor. */
   clipMaxPages: number;
+  /** The Phase 31 quality rules, present only while SIGNAL_QUALITY_ENABLED is on (see withLiveQuality). */
+  quality?: LiveQualityRules;
 }
 
 export const DEFAULT_LIVE_CONFIG: Omit<LiveConfig, "enabled"> = {
@@ -125,6 +127,123 @@ export const DEFAULT_LIVE_CONFIG: Omit<LiveConfig, "enabled"> = {
 
 export const MIN_SAMPLE_INTERVAL_MINUTES = 1;
 export const MAX_SAMPLE_INTERVAL_MINUTES = 5;
+
+/**
+ * THE QUALITY RULES (Phase 31 switch, from Kai Cenat's stream of 2026-09-26).
+ * That session fired four audience surges and a clip burst; one of the five
+ * was real. The ramp read as a surge at minute 20, two single readings that
+ * reverted within minutes read as surges, and the burst compared 12 clips in
+ * ten minutes with a session pace of two clips in eight. What the session
+ * showed, and what each rule answers:
+ *
+ *   Helix refreshes viewer_count about every four minutes: 117 of 214
+ *   samples repeated the one before. Sampling every two minutes reads the
+ *   same number twice, so the quality cadence is four minutes.
+ *
+ *   A single reading is not a level. A surge compares the RECENT audience
+ *   (the mean of the samples in the last recentWindowMinutes, which must
+ *   hold at least minRecentDistinct different readings, so one stale number
+ *   repeated cannot stand for the present) with the BASE (the mean of the
+ *   samples from baseFromMinutes to baseToMinutes ago). Nothing is judged
+ *   before baseFromMinutes, and the base never takes a sample from the
+ *   session's warm-up (warmupMinutes): at minute 60 the base window is
+ *   minutes 0 to 30, and a base that averaged the ramp in would read the
+ *   plateau after it as a surge (the replay of 2026-09-26 did exactly that
+ *   until this was added).
+ *
+ *   Clip rates divide by the span the counted windows actually cover. The
+ *   Phase 16 rule counts every window reaching into the trailing minutes but
+ *   divides by the trailing minutes alone; at four-minute windows that
+ *   overstated a 2.8× hour as 3.7× in the same replay.
+ *
+ *   A surge must hold: the rule has to pass at the previous sample AND at
+ *   this one, this sample's own reading must clear the threshold against the
+ *   base (at a four-minute cadence one reading sits in two consecutive recent
+ *   windows, so the means alone would let a single spike confirm itself), and
+ *   the moment is stamped at the confirmation.
+ *
+ *   Once the person has shapeMinSessions complete sessions that reached this
+ *   point of a stream, the recent audience must also clear their usual
+ *   audience at this elapsed minute (the median across sessions of the mean
+ *   in the same shapeBucketMinutes bucket) by shapeFraction. Off until then:
+ *   one session is not a shape.
+ *
+ *   At most maxSurgesPerSession surges a session, surgeCooldownMinutes
+ *   apart, every one after the first at laterSurgeConfidenceFactor.
+ *
+ *   Confidence reads from the threshold, not from zero: a rise exactly at the
+ *   threshold is confidence 0 and fullConfidenceFraction is 1. Clip bursts
+ *   the same, from burstMultiple to fullConfidenceMultiple.
+ *
+ *   A clip burst needs burstMinSessionMinutes of session and
+ *   burstMinPriorClips clips before the window, at least burstMinClips in the
+ *   window, and is measured against the largest of the session's own pace,
+ *   the person's usual clips per stream hour (the median of the per-session
+ *   metric once usualClipsMinSessions exist) or, until then, a floor that
+ *   scales with the audience (clipsPerHourPerThousandViewers per thousand of
+ *   the session's average viewers). One burst a session.
+ */
+export interface LiveQualityRules {
+  sampleIntervalMinutes: number;
+  /** A gap longer than this makes the session incomplete (the cadence doubled, so the tolerance does too). */
+  maxGapMinutes: number;
+  recentWindowMinutes: number;
+  minRecentDistinct: number;
+  baseFromMinutes: number;
+  baseToMinutes: number;
+  minBaseSamples: number;
+  shapeMinSessions: number;
+  /** How many of the person's newest complete sessions the shape reads. */
+  shapeSessions: number;
+  shapeBucketMinutes: number;
+  shapeFraction: number;
+  maxSurgesPerSession: number;
+  surgeCooldownMinutes: number;
+  laterSurgeConfidenceFactor: number;
+  burstMinSessionMinutes: number;
+  burstMinPriorClips: number;
+  burstMinClips: number;
+  maxBurstsPerSession: number;
+  clipsPerHourPerThousandViewers: number;
+  usualClipsMinSessions: number;
+  /** The window the usual clips per stream hour is read over. */
+  usualClipsWindowHours: number;
+}
+
+export const LIVE_QUALITY_DEFAULTS: LiveQualityRules = {
+  sampleIntervalMinutes: 4,
+  maxGapMinutes: 10,
+  recentWindowMinutes: 5,
+  minRecentDistinct: 2,
+  baseFromMinutes: 60,
+  baseToMinutes: 30,
+  minBaseSamples: 3,
+  shapeMinSessions: 5,
+  shapeSessions: 10,
+  shapeBucketMinutes: 10,
+  shapeFraction: 0.15,
+  maxSurgesPerSession: 2,
+  surgeCooldownMinutes: 60,
+  laterSurgeConfidenceFactor: 0.5,
+  burstMinSessionMinutes: 60,
+  burstMinPriorClips: 30,
+  burstMinClips: 15,
+  maxBurstsPerSession: 1,
+  clipsPerHourPerThousandViewers: 1,
+  usualClipsMinSessions: 5,
+  usualClipsWindowHours: 720,
+};
+
+/** The live config with the quality rules laid over it; unchanged when they are off. */
+export function withLiveQuality(config: LiveConfig, quality: LiveQualityRules | undefined): LiveConfig {
+  if (!quality) return config;
+  return {
+    ...config,
+    sampleIntervalMinutes: clamp(quality.sampleIntervalMinutes, MIN_SAMPLE_INTERVAL_MINUTES, MAX_SAMPLE_INTERVAL_MINUTES),
+    maxGapMinutes: quality.maxGapMinutes,
+    quality,
+  };
+}
 
 type Config = Record<string, Json | undefined>;
 
@@ -339,6 +458,8 @@ export interface LiveMoment {
   from: number;
   to: number;
   rationale: string;
+  /** "quality" when the Phase 31 rules judged it; absent for the Phase 16 rules. */
+  rule?: "quality";
 }
 
 function past(at: Date | null, now: Date, minutes: number): boolean {
@@ -395,13 +516,20 @@ export function clipRate(
   samples: Array<Pick<LiveSample, "clipsWindowFrom" | "clipsWindowTo" | "clipsInWindow">>,
   current: { from: Date; to: Date; count: number },
   config: LiveConfig,
-): { trailingClips: number; trailingHours: number; trailingPerHour: number; sessionPerHour: number; baselinePerHour: number; multiple: number } | null {
+  options: { exactSpan?: boolean } = {},
+): { trailingClips: number; trailingHours: number; trailingPerHour: number; priorClips: number; sessionPerHour: number; baselinePerHour: number; multiple: number } | null {
   const windowStart = current.to.getTime() - config.clipWindowMinutes * MINUTE;
   const windows = [
     ...samples.filter((sample) => sample.clipsWindowFrom && sample.clipsWindowTo && sample.clipsWindowTo.getTime() > windowStart).map((sample) => ({ from: sample.clipsWindowFrom!, to: sample.clipsWindowTo!, count: sample.clipsInWindow })),
     current,
   ];
-  const earliest = Math.max(windowStart, Math.min(...windows.map((window) => window.from.getTime())));
+  // Every window that reaches into the trailing minutes is counted WHOLE. The
+  // Phase 16 rule divides by the trailing minutes alone, which overstates the
+  // rate by the part of the oldest window that falls before them: a little at
+  // two-minute windows, up to a third at four. exactSpan (the quality rules)
+  // divides by the span the counted windows actually cover.
+  const oldest = Math.min(...windows.map((window) => window.from.getTime()));
+  const earliest = options.exactSpan ? oldest : Math.max(windowStart, oldest);
   const trailingHours = (current.to.getTime() - earliest) / 3_600_000;
   if (!(trailingHours > 0)) return null;
   const trailingClips = windows.reduce((sum, window) => sum + window.count, 0);
@@ -413,7 +541,7 @@ export function clipRate(
   const sessionPerHour = priorHours > 1 / 60 ? priorClips / priorHours : 0;
   const baselinePerHour = Math.max(sessionPerHour, config.floorClipsPerHour);
   const trailingPerHour = trailingClips / trailingHours;
-  return { trailingClips, trailingHours, trailingPerHour, sessionPerHour, baselinePerHour, multiple: baselinePerHour > 0 ? trailingPerHour / baselinePerHour : 0 };
+  return { trailingClips, trailingHours, trailingPerHour, priorClips, sessionPerHour, baselinePerHour, multiple: baselinePerHour > 0 ? trailingPerHour / baselinePerHour : 0 };
 }
 
 /** A burst of clips, judged against the session's own pace; null when this window is not one. */
@@ -439,6 +567,198 @@ function round3(value: number): number {
 }
 
 // ---------------------------------------------------------------------------
+// The moments under the quality rules (Phase 31 switch)
+// ---------------------------------------------------------------------------
+
+/** Confidence read from the threshold: 0 at the threshold, 1 at `full`. */
+export function confidenceAboveThreshold(value: number, threshold: number, full: number): number {
+  if (!(full > threshold)) return value >= threshold ? 1 : 0;
+  return round3(clamp((value - threshold) / (full - threshold), 0, 1));
+}
+
+function mean(values: number[]): number {
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+export interface SmoothedAudience {
+  /** Mean of the samples in the recent window. */
+  recent: number;
+  /** Mean of the samples in the base window. */
+  base: number;
+  fraction: number;
+  recentReadings: number;
+  recentDistinct: number;
+  baseSamples: number;
+}
+
+/**
+ * The audience at `at` against the half hour before the last half hour, or
+ * null when either window cannot be judged: the recent window holds fewer
+ * than minRecentDistinct different readings (a number Helix has not
+ * refreshed is one reading however often it is read), or the base holds
+ * fewer than minBaseSamples. Base samples taken before `baseNotBefore` (the
+ * end of the session's warm-up) do not count.
+ */
+export function smoothedAudience(samples: Array<Pick<LiveSample, "sampledAt" | "viewerCount">>, at: Date, quality: LiveQualityRules, baseNotBefore?: Date): SmoothedAudience | null {
+  const age = (sample: Pick<LiveSample, "sampledAt">) => minutesBetween(sample.sampledAt, at);
+  const counted = samples.filter((sample): sample is Pick<LiveSample, "sampledAt"> & { viewerCount: number } => sample.viewerCount !== null && age(sample) >= 0);
+  const recent = counted.filter((sample) => age(sample) < quality.recentWindowMinutes).map((sample) => sample.viewerCount);
+  const base = counted
+    .filter((sample) => age(sample) >= quality.baseToMinutes && age(sample) <= quality.baseFromMinutes && (!baseNotBefore || sample.sampledAt.getTime() >= baseNotBefore.getTime()))
+    .map((sample) => sample.viewerCount);
+  const recentDistinct = new Set(recent).size;
+  if (recentDistinct < quality.minRecentDistinct || base.length < quality.minBaseSamples) return null;
+  const recentMean = mean(recent);
+  const baseMean = mean(base);
+  if (!(baseMean > 0)) return null;
+  return { recent: recentMean, base: baseMean, fraction: (recentMean - baseMean) / baseMean, recentReadings: recent.length, recentDistinct, baseSamples: base.length };
+}
+
+/** The person's usual audience at this point of a stream: one mean per past session in the bucket, then the median. */
+export interface SessionShape {
+  sessions: number;
+  median: number;
+  /** Median absolute deviation of the per-session means. */
+  spread: number;
+  bucketFromMinutes: number;
+  bucketToMinutes: number;
+}
+
+/** The elapsed-minute bucket a moment at `elapsedMinutes` falls in. */
+export function shapeBucket(elapsedMinutes: number, quality: LiveQualityRules): { fromMinutes: number; toMinutes: number } {
+  const fromMinutes = Math.floor(Math.max(0, elapsedMinutes) / quality.shapeBucketMinutes) * quality.shapeBucketMinutes;
+  return { fromMinutes, toMinutes: fromMinutes + quality.shapeBucketMinutes };
+}
+
+/** Null until shapeMinSessions sessions reached this bucket: off until there is a shape. */
+export function sessionShape(viewersBySession: number[][], bucket: { fromMinutes: number; toMinutes: number }, quality: LiveQualityRules): SessionShape | null {
+  const means = viewersBySession.filter((viewers) => viewers.length > 0).map(mean);
+  if (means.length < quality.shapeMinSessions) return null;
+  const middle = median(means);
+  return { sessions: means.length, median: middle, spread: median(means.map((value) => Math.abs(value - middle))), bucketFromMinutes: bucket.fromMinutes, bucketToMinutes: bucket.toMinutes };
+}
+
+/** The person's usual clips per stream hour, from the per-session metric, once usualClipsMinSessions exist. */
+export function usualClipsPerHour(perSession: number[], quality: LiveQualityRules): number | null {
+  const values = perSession.filter((value) => Number.isFinite(value) && value >= 0);
+  return values.length >= quality.usualClipsMinSessions ? median(values) : null;
+}
+
+const fmtCount = (n: number) => Math.round(n).toLocaleString("en-US");
+
+/**
+ * A surge under the quality rules: the smoothed rise at the previous sample
+ * AND at this one (confirmed, stamped now), above the threshold, above the
+ * person's usual audience at this minute once a shape exists, inside the
+ * per-session cap and the cooldown. Drops keep the Phase 16 rule (off by
+ * default).
+ */
+export function qualitySurgeMoment(
+  session: LiveSession,
+  samples: Array<Pick<LiveSample, "sampledAt" | "viewerCount">>,
+  current: { sampledAt: Date; viewerCount: number | null },
+  context: { surgesSoFar: number; shape: SessionShape | null },
+  config: LiveConfig,
+): LiveMoment | null {
+  const quality = config.quality;
+  if (!quality || current.viewerCount === null) return null;
+  if (minutesBetween(session.startedAt, current.sampledAt) < quality.baseFromMinutes) return null;
+  if (context.surgesSoFar >= quality.maxSurgesPerSession) return null;
+  if (!past(session.lastSurgeAt, current.sampledAt, quality.surgeCooldownMinutes)) return null;
+
+  const prior = samples.filter((sample) => sample.sampledAt.getTime() < current.sampledAt.getTime());
+  const previous = [...prior].reverse().find((sample) => sample.viewerCount !== null);
+  if (!previous) return null;
+  const all = [...prior, current];
+  const warmedUp = new Date(session.startedAt.getTime() + config.warmupMinutes * MINUTE);
+  const now = smoothedAudience(all, current.sampledAt, quality, warmedUp);
+  const before = smoothedAudience(
+    prior.filter((sample) => sample.sampledAt.getTime() <= previous.sampledAt.getTime()),
+    previous.sampledAt,
+    quality,
+    warmedUp,
+  );
+  const rises = (reading: SmoothedAudience | null): reading is SmoothedAudience => reading !== null && reading.fraction >= config.surgeFraction && Math.max(reading.base, reading.recent) >= config.minViewers;
+  if (!rises(before) || !rises(now)) return null;
+  // The confirmation is the NEW reading, not the mean it joins: at a four-minute
+  // cadence one reading sits in two consecutive recent windows, and a single
+  // spike that reverts would otherwise confirm itself.
+  if ((current.viewerCount - now.base) / now.base < config.surgeFraction) return null;
+  // Against the person's usual at this minute, once there is one.
+  if (context.shape && now.recent < context.shape.median * (1 + quality.shapeFraction)) return null;
+
+  const later = context.surgesSoFar >= 1;
+  const confidence = round3(confidenceAboveThreshold(now.fraction, config.surgeFraction, config.fullConfidenceFraction) * (later ? quality.laterSurgeConfidenceFactor : 1));
+  const shapeNote = context.shape ? `; usual at ${context.shape.bucketFromMinutes}–${context.shape.bucketToMinutes} min ${fmtCount(context.shape.median)} over ${context.shape.sessions} sessions` : "; no session shape yet";
+  return {
+    moment: "audience_surge",
+    direction: 1,
+    confidence,
+    magnitude: round3(now.fraction),
+    windowMinutes: quality.baseFromMinutes,
+    from: Math.round(now.base),
+    to: Math.round(now.recent),
+    rule: "quality",
+    rationale:
+      `audience ${fmtCount(now.recent)} over the last ${quality.recentWindowMinutes} min (${now.recentDistinct} readings) against ${fmtCount(now.base)} ${quality.baseToMinutes}–${quality.baseFromMinutes} min earlier (+${Math.round(now.fraction * 100)}%), ` +
+      `held from the previous sample (+${Math.round(before.fraction * 100)}%), threshold +${Math.round(config.surgeFraction * 100)}%${shapeNote}` +
+      (later ? `; surge ${context.surgesSoFar + 1} of the session at ${quality.laterSurgeConfidenceFactor}× confidence` : ""),
+  };
+}
+
+/** A drop, by the Phase 16 rule; the quality rules leave drops alone (off by default). */
+export function dropMoment(session: LiveSession, samples: Array<Pick<LiveSample, "sampledAt" | "viewerCount">>, current: { sampledAt: Date; viewerCount: number | null }, config: LiveConfig): LiveMoment | null {
+  const moment = audienceMoment(session, samples, current, { ...config, surgeFraction: Number.POSITIVE_INFINITY });
+  return moment?.moment === "audience_drop" ? moment : null;
+}
+
+/**
+ * A clip burst under the quality rules: an hour of session and thirty clips
+ * before the window, fifteen in it, against the largest of the session's
+ * pace, the person's usual rate (or, until there is one, a floor that scales
+ * with the audience) and the absolute floor; once a session.
+ */
+export function qualityClipMoment(
+  session: LiveSession,
+  samples: Array<Pick<LiveSample, "clipsWindowFrom" | "clipsWindowTo" | "clipsInWindow">>,
+  current: { from: Date; to: Date; count: number },
+  now: Date,
+  context: { burstsSoFar: number; usualPerHour: number | null },
+  config: LiveConfig,
+): LiveMoment | null {
+  const quality = config.quality;
+  if (!quality) return null;
+  if (minutesBetween(session.startedAt, now) < quality.burstMinSessionMinutes) return null;
+  if (context.burstsSoFar >= quality.maxBurstsPerSession) return null;
+  const rate = clipRate(session, samples, current, config, { exactSpan: true });
+  if (!rate || rate.priorClips < quality.burstMinPriorClips || rate.trailingClips < quality.burstMinClips) return null;
+  const averageViewers = session.sampleCount > 0 ? session.viewerSum / session.sampleCount : 0;
+  const audienceFloor = (averageViewers / 1000) * quality.clipsPerHourPerThousandViewers;
+  const reference = context.usualPerHour ?? audienceFloor;
+  const basePerHour = Math.max(rate.sessionPerHour, reference, config.floorClipsPerHour);
+  const multiple = basePerHour > 0 ? rate.trailingPerHour / basePerHour : 0;
+  if (multiple < config.burstMultiple) return null;
+  const referenceNote = context.usualPerHour !== null ? `the person's usual ${context.usualPerHour.toFixed(1)}/h` : `the audience floor ${audienceFloor.toFixed(1)}/h (${quality.clipsPerHourPerThousandViewers}/h per 1,000 of ${fmtCount(averageViewers)} average viewers)`;
+  return {
+    moment: "clip_burst",
+    direction: 1,
+    confidence: confidenceAboveThreshold(multiple, config.burstMultiple, config.fullConfidenceMultiple),
+    magnitude: round3(multiple),
+    windowMinutes: Math.round(rate.trailingHours * 60),
+    from: Math.round(basePerHour * 10) / 10,
+    to: Math.round(rate.trailingPerHour * 10) / 10,
+    rule: "quality",
+    rationale: `${rate.trailingClips} clips in ${Math.round(rate.trailingHours * 60)} min (${rate.trailingPerHour.toFixed(1)}/h) against ${basePerHour.toFixed(1)}/h, the largest of the session's ${rate.sessionPerHour.toFixed(1)}/h, ${referenceNote} and the floor ${config.floorClipsPerHour}/h: ${multiple.toFixed(1)}×, threshold ${config.burstMultiple}×`,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The signals
 // ---------------------------------------------------------------------------
 
@@ -459,12 +779,17 @@ const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
 export function liveMomentSignal(person: { display_name: string }, session: LiveSession, moment: LiveMoment, now: Date, sourceName: string): RawSignal {
   const elapsed = describeElapsed(minutesBetween(session.startedAt, now));
   const possessive = person.display_name.endsWith("s") ? `${person.display_name}'` : `${person.display_name}'s`;
+  const quality = moment.rule === "quality";
   const headline =
     moment.moment === "audience_surge"
-      ? `${possessive} live audience is up ${Math.round(moment.magnitude * 100)}% in the last ${moment.windowMinutes} minutes, ${fmt(moment.from)} to ${fmt(moment.to)} viewers, ${elapsed} into the stream.`
+      ? quality
+        ? `${possessive} live audience is up ${Math.round(moment.magnitude * 100)}% on the half hour before: ${fmt(moment.to)} viewers against ${fmt(moment.from)} 30 to 60 minutes earlier, ${elapsed} into the stream.`
+        : `${possessive} live audience is up ${Math.round(moment.magnitude * 100)}% in the last ${moment.windowMinutes} minutes, ${fmt(moment.from)} to ${fmt(moment.to)} viewers, ${elapsed} into the stream.`
       : moment.moment === "audience_drop"
         ? `${possessive} live audience is down ${Math.round(-moment.magnitude * 100)}% in the last ${moment.windowMinutes} minutes, ${fmt(moment.from)} to ${fmt(moment.to)} viewers, ${elapsed} into the stream.`
-        : `Clips of ${possessive} stream are being made at ${moment.magnitude.toFixed(1)}× the session's pace: ${moment.to} an hour over the last ${moment.windowMinutes} minutes, ${elapsed} in.`;
+        : quality
+          ? `Clips of ${possessive} stream are being made at ${moment.magnitude.toFixed(1)}× the expected pace: ${moment.to} an hour over the last ${moment.windowMinutes} minutes against ${moment.from} expected, ${elapsed} in.`
+          : `Clips of ${possessive} stream are being made at ${moment.magnitude.toFixed(1)}× the session's pace: ${moment.to} an hour over the last ${moment.windowMinutes} minutes, ${elapsed} in.`;
   return {
     headline,
     occurredAt: now,
@@ -483,6 +808,7 @@ export function liveMomentSignal(person: { display_name: string }, session: Live
       channel: session.channel,
       minutes_into_stream: Math.round(minutesBetween(session.startedAt, now)),
       rationale: moment.rationale,
+      ...(quality ? { rule: "quality" } : {}),
     },
   };
 }
