@@ -20,6 +20,13 @@ export const SUPABASE_STUBS = `
   create role service_role nologin;
   create role supabase_auth_admin nologin;
 
+  -- Supabase's default privileges: every function created in public is
+  -- executable by anon, authenticated and service_role BY NAME, so a
+  -- migration's "revoke ... from public" alone does not take it back. The
+  -- stub grants the same, so a test sees what production sees (the gap that
+  -- left trade_history_for() open to anon until 2026-09-26).
+  alter default privileges in schema public grant execute on functions to anon, authenticated, service_role;
+
   create schema auth;
   -- Supabase keeps extensions in their own schema (Phase 28's citext).
   create schema extensions;

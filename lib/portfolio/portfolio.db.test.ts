@@ -457,6 +457,30 @@ describe("trade history", () => {
     expect(await database.rows("select id from public.my_trade_history(null, null, 20)")).toEqual([]);
   });
 
+  it("trade_history_for() is the server's alone: anon and authenticated are refused it, and my_trade_history() still answers as the member", async () => {
+    const grants = await database.rows<{ role: string; ok: boolean }>(
+      `select role, has_function_privilege(role, 'public.trade_history_for(uuid, timestamptz, uuid, integer)', 'execute') as ok
+         from unnest(array['anon', 'authenticated', 'service_role']) as role`,
+    );
+    expect(Object.fromEntries(grants.map((row) => [row.role, row.ok]))).toEqual({ anon: false, authenticated: false, service_role: true });
+
+    // Called as the client roles themselves, by another member's id: refused outright.
+    for (const role of ["anon", "authenticated"]) {
+      await expect(database.exec(`begin; set local role ${role}; select * from public.trade_history_for('${cy}'::uuid, null, null, 20); commit;`)).rejects.toThrow(/permission denied for function trade_history_for/);
+      await database.exec("rollback");
+    }
+
+    // The member's own door still opens, as the authenticated role: my_trade_history() runs as its owner.
+    const [{ n }] = await database.rows<{ n: string }>(
+      `select count(*)::text as n from public.trade_orders where user_id = $1`,
+      [cy],
+    );
+    await database.exec(`begin; set local role authenticated; select set_config('request.jwt.claim.sub', '${cy}', true); create temp table mine as select id from public.my_trade_history(null, null, 50); commit;`);
+    const mine = await database.rows<{ n: string }>("select count(*)::text as n from mine");
+    await database.exec("drop table mine");
+    expect(mine[0].n).toBe(n);
+  });
+
   describe("keyset pagination across identical timestamps", () => {
     const PAGE = 12;
 
