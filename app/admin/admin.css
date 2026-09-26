@@ -527,3 +527,41 @@ table.adm-t tfoot td {
   align-items: center;
   gap: 6px;
 }
+
+/* --- sign-up (Phase 32): the invite form's list box ------------------------ */
+
+.adm-body + .adm-body {
+  padding-top: 0;
+}
+
+.adm-form textarea {
+  width: 360px;
+  max-width: 100%;
+  min-height: 56px;
+  padding: 4px 6px;
+  border: 1px solid var(--adm-line);
+  border-radius: 3px;
+  background: var(--adm-panel);
+  color: var(--adm-ink);
+  font: inherit;
+  font-size: 11px;
+  resize: vertical;
+}
+.adm-form textarea::placeholder {
+  color: var(--adm-ink-3);
+}
+.adm-form[data-stack] {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.adm-form fieldset[disabled] {
+  opacity: 0.5;
+}
+.adm-form fieldset {
+  display: contents;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}

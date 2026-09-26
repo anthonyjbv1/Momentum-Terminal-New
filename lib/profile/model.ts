@@ -14,7 +14,6 @@ export function validateDisplayName(raw: unknown): DisplayNameResult {
   const value = typeof raw === "string" ? raw.replace(/\s+/g, " ").trim() : "";
   if (value.length === 0) return { ok: false, message: "Enter a display name." };
   if ([...value].length > DISPLAY_NAME_MAX) return { ok: false, message: `Keep it to ${DISPLAY_NAME_MAX} characters.` };
-  // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(value)) return { ok: false, message: "Use letters, numbers and punctuation only." };
   return { ok: true, value };
 }

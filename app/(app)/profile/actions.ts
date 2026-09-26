@@ -75,7 +75,7 @@ export async function uploadAvatarAction(_prev: ProfileFormState, form: FormData
   return { ok: PROFILE.photo.saved };
 }
 
-export async function removeAvatarAction(_prev: ProfileFormState): Promise<ProfileFormState> {
+export async function removeAvatarAction(): Promise<ProfileFormState> {
   const profile = await member();
   if (!profile.avatar_path) return { ok: PROFILE.photo.removed };
   const admin = createSupabaseAdminClient();

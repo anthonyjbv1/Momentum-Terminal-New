@@ -3,7 +3,7 @@ import "server-only";
 import { DEFAULT_ENGINE_CONFIG, engineConfigFromEnv } from "@/lib/engine/config";
 import { readSignalVolumeRow, volumeSpread, type PersonSignalVolume, type VolumeSpread, type VolumeSpreadRow } from "@/lib/engine/signal-volume";
 import { HIGH_IMPACT_THRESHOLD } from "@/lib/feed/feed-model";
-import { getEngineEnvOverrides, isEngineCronEnabled, isIngestCronEnabled, isTargetDriftEnabled } from "@/lib/env";
+import { getEngineEnvOverrides, getResendApiKeyOrNull, getSiteOrigin, isBetaSignupEnabled, isEngineCronEnabled, isGoogleAuthEnabled, isIngestCronEnabled, isTargetDriftEnabled } from "@/lib/env";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 import { requireAdmin } from "./auth";
@@ -1096,4 +1096,115 @@ export async function readMarket(): Promise<MarketReport> {
       details: toRecord(row.details),
     })),
   };
+}
+
+// ---------------------------------------------------------------------------
+// h) Sign-up: the beta switch, the invites, the members (Phase 32)
+// ---------------------------------------------------------------------------
+
+export interface InviteRow {
+  id: string;
+  /** Null once scrubbed (the account behind it was deleted). */
+  email: string | null;
+  status: "pending" | "accepted" | "revoked" | "expired";
+  createdAt: string;
+  expiresAt: string;
+  sentAt: string | null;
+  sendCount: number;
+  lastSendError: string | null;
+  invitedBy: string | null;
+  referrer: string | null;
+  acceptedAt: string | null;
+  acceptedUsername: string | null;
+  fromWaitlist: boolean;
+}
+
+export interface MemberRow {
+  id: string;
+  username: string;
+  displayName: string;
+  joinedAt: string;
+  deleted: boolean;
+  isAdmin: boolean;
+  frozen: boolean;
+  onboarded: boolean;
+  invitedBy: string | null;
+  invitedAt: string | null;
+  referredBy: string | null;
+  /** Where the invite came from: the waitlist form (and campaign), or the operator's typed list. */
+  source: string;
+  lastSignInAt: string | null;
+}
+
+export interface SignupReport {
+  /** Names and states only: a key's presence, never its value. */
+  switches: { betaSignup: boolean; googleAuth: boolean; resendKeySet: boolean; siteOrigin: string };
+  invites: InviteRow[] | null;
+  inviteCounts: Record<InviteRow["status"], number>;
+  members: MemberRow[] | null;
+  /** Why a list could not be read (before the Phase 32 migration is applied, for one). */
+  unavailable: string | null;
+}
+
+const INVITE_LIST_LIMIT = 200;
+const MEMBER_LIST_LIMIT = 500;
+
+function sourceWords(source: unknown): string {
+  if (!source || typeof source !== "object") return "—";
+  const record = source as Record<string, unknown>;
+  if (record.form === "operator") return "typed by operator";
+  const parts = [`waitlist${typeof record.form === "string" ? ` (${record.form})` : ""}`];
+  const campaign = record.utm_campaign ?? record.utm_source;
+  if (typeof campaign === "string") parts.push(campaign);
+  if (typeof record.ref_code === "string") parts.push("referral link");
+  if (typeof record.referrer_host === "string") parts.push(record.referrer_host);
+  return parts.join(" · ");
+}
+
+export async function readSignup(): Promise<SignupReport> {
+  const client = await adminClient();
+  const switches = {
+    betaSignup: isBetaSignupEnabled(),
+    googleAuth: isGoogleAuthEnabled(),
+    resendKeySet: getResendApiKeyOrNull() !== null,
+    siteOrigin: getSiteOrigin(),
+  };
+  const counts: SignupReport["inviteCounts"] = { pending: 0, accepted: 0, revoked: 0, expired: 0 };
+  const [invites, members] = await Promise.all([client.rpc("admin_invite_list", { p_limit: INVITE_LIST_LIMIT }), client.rpc("admin_user_list", { p_limit: MEMBER_LIST_LIMIT })]);
+  const failure = invites.error ?? members.error;
+  if (failure) {
+    return { switches, invites: null, inviteCounts: counts, members: null, unavailable: failure.message };
+  }
+  const inviteRows: InviteRow[] = (invites.data ?? []).map((row) => ({
+    id: row.id,
+    email: row.email,
+    status: (["pending", "accepted", "revoked", "expired"].includes(row.status) ? row.status : "pending") as InviteRow["status"],
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    sentAt: row.sent_at,
+    sendCount: row.send_count,
+    lastSendError: row.last_send_error,
+    invitedBy: row.invited_by_username,
+    referrer: row.referrer_username,
+    acceptedAt: row.accepted_at,
+    acceptedUsername: row.accepted_username,
+    fromWaitlist: row.from_waitlist,
+  }));
+  for (const row of inviteRows) counts[row.status] += 1;
+  const memberRows: MemberRow[] = (members.data ?? []).map((row) => ({
+    id: row.id,
+    username: row.username,
+    displayName: row.display_name,
+    joinedAt: row.joined_at,
+    deleted: row.deleted_at !== null,
+    isAdmin: row.is_admin,
+    frozen: row.frozen_at !== null,
+    onboarded: row.onboarded_at !== null,
+    invitedBy: row.invited_by_username,
+    invitedAt: row.invited_at,
+    referredBy: row.referred_by_username,
+    source: row.invited_at ? sourceWords(row.signup_source) : "before invites",
+    lastSignInAt: row.last_sign_in_at,
+  }));
+  return { switches, invites: inviteRows, inviteCounts: counts, members: memberRows, unavailable: null };
 }
