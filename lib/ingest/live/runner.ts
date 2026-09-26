@@ -433,8 +433,8 @@ async function sampleSession(input: SampleInput): Promise<{ signalsCreated: numb
     }
   }
 
-  // The quality rules compare with the half hour before the last half hour, and confirm against the previous sample's reading.
-  const qualityLookback = cfg.quality ? cfg.quality.baseFromMinutes + cfg.sampleIntervalMinutes : 0;
+  // The quality rules compare the last ten minutes with the ten before, and confirm against the previous sample's step.
+  const qualityLookback = cfg.quality ? 2 * cfg.quality.stepWindowMinutes + cfg.sampleIntervalMinutes : 0;
   const lookbackMinutes = Math.max(cfg.deltaWindowMinutes, cfg.clipWindowMinutes, qualityLookback) + cfg.clipLagMinutes + cfg.sampleIntervalMinutes + 1;
   const prior = await store.listSamples(session.id, new Date(now.getTime() - lookbackMinutes * MINUTE_MS));
   const current = { sampledAt: now, viewerCount: stream.viewerCount };
@@ -531,7 +531,7 @@ async function judgeWithQuality(input: {
 }): Promise<{ audience: LiveMoment | null; burst: LiveMoment | null; log: Record<string, unknown> }> {
   const { session, mapping, source, store, prior, current, clips, cfg, quality, now } = input;
   const elapsed = minutesBetween(session.startedAt, now);
-  const surgesPossible = elapsed >= quality.baseFromMinutes;
+  const surgesPossible = elapsed >= quality.judgeFromMinutes;
   const burstsPossible = clips !== null && elapsed >= quality.burstMinSessionMinutes;
   const counts = surgesPossible || burstsPossible ? await store.countSessionMoments({ personId: mapping.person.id, dataSourceId: source.id, sourceName: source.name, streamId: session.streamId }) : { audience_surge: 0, audience_drop: 0, clip_burst: 0 };
 

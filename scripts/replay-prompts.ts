@@ -33,11 +33,23 @@
  *   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY   so no privileged key is needed
  *   SUPABASE_SERVICE_ROLE_KEY +  the service role (the last resort; it can
  *   SUPABASE_URL                 write, this script never does)
+ *   REPLAY_EXPORT_DIR            a directory holding narratives.json,
+ *                                signals.json and memory.json, exported
+ *                                beforehand (see fileReader); for an
+ *                                environment that reaches the model but not
+ *                                the database. It fixes the sample, so the
+ *                                two runs read exactly the same rows
+ *
+ * --out FILE writes every signal's new label and salience and every sentence
+ * as JSON, so the version-2 and --v1 runs can be compared signal by signal.
  *
  * The memory is today's memory, not the memory at the time of the tick, so a
  * disagreement on a signal from days ago can be the memory's doing rather
  * than the prompt's; the comparison is strongest on the newest narratives.
  */
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import { createClient } from "@supabase/supabase-js";
 import { Client as PgClient } from "pg";
 
@@ -54,6 +66,11 @@ function argNumber(name: string, fallback: number): number {
   if (index === -1 || index + 1 >= process.argv.length) return fallback;
   const value = Number(process.argv[index + 1]);
   return Number.isFinite(value) ? value : fallback;
+}
+
+function argString(name: string): string | undefined {
+  const index = process.argv.indexOf(`--${name}`);
+  return index === -1 ? undefined : process.argv[index + 1];
 }
 
 function argDuration(name: string, fallbackDays: number): Date {
@@ -218,8 +235,46 @@ async function restReader(url: string, key: string, login?: { email: string; pas
   };
 }
 
+/**
+ * The same four reads over an export. Each file is the JSON of one read-only
+ * query, the same selects as pgReader's:
+ *
+ *   narratives.json  { narratives: pgReader's narratives rows, people: pgReader's people rows }
+ *   signals.json     pgReader's signals rows for every signal_id above, with
+ *                    raw_payload cut to PAYLOAD_KEYS (all the prompt reads)
+ *   memory.json      the person_memory rows of those people
+ *
+ * The window and the sample are the export's: --since and --sample only narrow it.
+ */
+async function fileReader(dir: string): Promise<Reader> {
+  const read = async <T,>(name: string): Promise<T> => JSON.parse(await readFile(join(dir, name), "utf8")) as T;
+  const { narratives, people } = await read<{ narratives: NarrativeRow[]; people: PersonRow[] }>("narratives.json");
+  const signals = await read<SignalRow[]>("signals.json");
+  const memory = await read<Array<{ person_id: string; profile: Json; baseline_patterns: Json; recent_context: Json; updated_at: string | null }>>("memory.json");
+  return {
+    kind: `export in ${dir}`,
+    async narratives(since, limit) {
+      return narratives
+        .filter((n) => Date.parse(n.created_at) >= since.getTime())
+        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+        .slice(0, limit);
+    },
+    async people(ids) {
+      return people.filter((p) => ids.includes(p.id));
+    },
+    async signals(ids) {
+      return signals.filter((s) => ids.includes(s.id));
+    },
+    async memories(ids) {
+      return new Map(memory.filter((row) => ids.includes(row.person_id)).map((row) => [row.person_id, memoryFrom(row)]));
+    },
+    async close() {},
+  };
+}
+
 async function openReader(): Promise<Reader> {
   const env = process.env;
+  if (env.REPLAY_EXPORT_DIR) return fileReader(env.REPLAY_EXPORT_DIR);
   if (env.REPLAY_DATABASE_URL) return pgReader(env.REPLAY_DATABASE_URL);
   const url = env.SUPABASE_URL ?? env.NEXT_PUBLIC_SUPABASE_URL;
   if (url && env.REPLAY_USER_EMAIL && env.REPLAY_USER_PASSWORD && env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) {
@@ -261,6 +316,8 @@ async function main() {
   let directionAgreed = 0;
   const replaced: string[] = [];
   const sentences: string[] = [];
+  const out = argString("out");
+  const records: { signals: Array<{ id: string; person: string; headline: string; stored: Label; label: Label; salience: Salience | null }>; narratives: Array<{ id: string; person: string; was: string; now: string | null; direction: string | null; signalsImpact: number; check: string }> } = { signals: [], narratives: [] };
 
   for (const narrative of narratives) {
     const person = peopleById.get(narrative.person_id);
@@ -291,6 +348,7 @@ async function main() {
       newLabels.push(fresh.label);
       compared += 1;
       if (fresh.label === stored) agreements += 1;
+      records.signals.push({ id: s.id, person: person.display_name, headline: s.headline, stored, label: fresh.label, salience: fresh.salience ?? null });
       if (fresh.salience && fresh.salience in saliences) {
         saliences[fresh.salience] += 1;
         if (fresh.salience !== "relevant") notRelevant.push(`${person.display_name}: [${fresh.salience}] ${s.headline}`);
@@ -302,7 +360,8 @@ async function main() {
       const check = checkNarrative(data.narrative, data.narrative_direction, signalsImpact, DEFAULT_ENGINE_CONFIG.narratives.minAbsChange);
       directionChecks += 1;
       if (check.ok) directionAgreed += 1;
-      else replaced.push(`${person.display_name} (${check.reason}): ${data.narrative}`);
+      else replaced.push(`${person.display_name} (${check.reason}), signals ${signalsImpact >= 0 ? "+" : ""}${signalsImpact.toFixed(2)}, declared ${data.narrative_direction ?? "n/a"}\n    was: ${narrative.text}\n    now: ${data.narrative}`);
+      records.narratives.push({ id: narrative.id, person: person.display_name, was: narrative.text, now: data.narrative, direction: data.narrative_direction ?? null, signalsImpact, check: check.ok ? "ok" : String(check.reason) });
       const move = narrative.score_after - narrative.score_before;
       sentences.push(
         [
@@ -314,6 +373,7 @@ async function main() {
     }
   }
   await reader.close();
+  if (out) await writeFile(out, JSON.stringify({ version, ...records }, null, 2));
 
   console.log(`${narratives.length} narratives, ${compared} signals compared`);
   console.log(`label agreement with stored: ${compared > 0 ? ((100 * agreements) / compared).toFixed(1) : "n/a"}%`);

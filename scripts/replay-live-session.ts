@@ -2,7 +2,7 @@
  * REPLAY: one recorded live session through the live runner, with and without
  * the Phase 31 quality rules.
  *
- *   npx tsx scripts/replay-live-session.ts <session.json> [--quality] [--phase 0|1] [--until <iso>]
+ *   npx tsx scripts/replay-live-session.ts <session.json> [--quality] [--phase 0|1] [--until <iso>] [--step-fraction 0.12]
  *
  * The export holds the session and its samples as live_samples stored them:
  *
@@ -27,7 +27,8 @@
  * each would have done to the score: the prescored impact (base impact × tier
  * multiplier × confidence), summed per tick as the Signals force sums them,
  * and that move decayed by Gravity to the session's end and to --until.
- * Reads a file, calls nothing, changes nothing.
+ * --step-fraction replaces the quality rules' stepFraction, to sweep the
+ * threshold. Reads a file, calls nothing, changes nothing.
  */
 import { readFileSync } from "node:fs";
 
@@ -77,6 +78,7 @@ async function main() {
   const quality = process.argv.includes("--quality");
   const phase = Number(arg("phase") ?? 0);
   const until = arg("until") ? new Date(arg("until") as string) : null;
+  const stepFraction = arg("step-fraction") ? Number(arg("step-fraction")) : LIVE_QUALITY_DEFAULTS.stepFraction;
   const ms = (value: number) => (data.units === "ms" ? value : value * 1000);
   const startedAt = new Date(ms(data.session.startedAt));
   const endedAt = new Date(ms(data.session.endedAt));
@@ -118,7 +120,7 @@ async function main() {
   const fires = rows.slice(phase).map((row) => new Date(ms(row[0])));
   // Two checks past the end close the session, as production's did.
   fires.push(new Date(endedAt.getTime() + 60_000), new Date(endedAt.getTime() + 120_000));
-  for (const now of fires) await runLiveMode({ store, registry, now, log: () => undefined, quality: quality ? LIVE_QUALITY_DEFAULTS : undefined });
+  for (const now of fires) await runLiveMode({ store, registry, now, log: () => undefined, quality: quality ? { ...LIVE_QUALITY_DEFAULTS, stepFraction } : undefined });
 
   const cfg = DEFAULT_ENGINE_CONFIG;
   const tierMultiplier = cfg.signals.tierMultipliers[2] ?? cfg.signals.defaultTierMultiplier;
@@ -132,7 +134,7 @@ async function main() {
 
   const minutesIn = (at: Date) => Math.round((at.getTime() - startedAt.getTime()) / 60_000);
   const sampled = store.samples.length;
-  console.log(`${quality ? "QUALITY RULES" : "PHASE 16 RULES (production)"}, phase ${phase}: ${sampled} samples taken, ${moments.length} moments`);
+  console.log(`${quality ? `QUALITY RULES (step +${Math.round(stepFraction * 1000) / 10}%)` : "PHASE 16 RULES (production)"}, phase ${phase}: ${sampled} samples taken, ${moments.length} moments`);
   for (const m of moments) console.log(`  min ${String(minutesIn(m.at)).padStart(3)}  ${m.moment.padEnd(14)} confidence ${m.confidence.toFixed(3)}  magnitude ${m.magnitude}  impact ${m.impact.toFixed(4)}\n      ${m.headline}\n      ${m.rationale}`);
 
   // Per tick, as the Signals force sums them: kept impacts over count^volumeExponent, capped.

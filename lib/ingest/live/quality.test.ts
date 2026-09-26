@@ -18,7 +18,7 @@ import {
   readLiveConfig,
   sessionShape,
   shapeBucket,
-  smoothedAudience,
+  stepAudience,
   usualClipsPerHour,
   withLiveQuality,
   type LiveConfig,
@@ -123,24 +123,24 @@ describe("confidence from the threshold", () => {
   });
 });
 
-describe("the smoothed audience", () => {
-  it("is not judged on one stale number: two readings in the recent window must differ", () => {
-    const flat = [sample(56, 40_000), sample(60, 40_000)];
-    const base = [sample(20, 30_000), sample(24, 30_000), sample(28, 30_000)];
-    expect(smoothedAudience([...base, ...flat], at(60), Q)).toBeNull();
-    const fresh = [sample(56, 40_000), sample(60, 40_200)];
-    expect(smoothedAudience([...base, ...fresh], at(60), Q)).toMatchObject({ recent: 40_100, base: 30_000, recentDistinct: 2, baseSamples: 3 });
+describe("the step audience", () => {
+  it("is the last ten minutes against the ten before, and is not judged on one stale number: two readings after must differ", () => {
+    const before = [sample(44, 30_000), sample(48, 30_000)];
+    expect(stepAudience([...before, sample(56, 40_000), sample(60, 40_000)], at(60), Q)).toBeNull();
+    expect(stepAudience([...before, sample(56, 40_000), sample(60, 40_200)], at(60), Q)).toMatchObject({ after: 40_100, before: 30_000, afterDistinct: 2, beforeSamples: 2 });
+    // A sample twenty minutes old is in neither window.
+    expect(stepAudience([sample(40, 1_000), ...before, sample(56, 40_000), sample(60, 40_200)], at(60), Q)!.before).toBe(30_000);
   });
 
-  it("never takes its base from the warm-up, and wants three base samples", () => {
+  it("never takes BEFORE from the warm-up, and wants two samples there", () => {
     const ramp = [sample(0, 0), sample(4, 13_000), sample(8, 23_000), sample(12, 32_000), sample(16, 31_000), sample(20, 31_000), sample(24, 31_200), sample(28, 31_000)];
-    const now = [sample(56, 32_000), sample(60, 32_300)];
-    // Without the floor the base at minute 60 would average the ramp in (minutes 0-28): +43%.
-    expect(smoothedAudience([...ramp, ...now], at(60), Q)!.fraction).toBeGreaterThan(0.3);
-    const warmed = smoothedAudience([...ramp, ...now], at(60), Q, at(20))!;
-    expect(warmed.baseSamples).toBe(3);
-    expect(warmed.fraction).toBeCloseTo((32_150 - 31_066.67) / 31_066.67, 3);
-    expect(smoothedAudience([...ramp, ...now], at(60), Q, at(25))).toBeNull();
+    // At minute 24 BEFORE is minutes 8 and 12, the end of the ramp: +13%, a step.
+    expect(stepAudience(ramp, at(24), Q)!.fraction).toBeGreaterThan(Q.stepFraction);
+    expect(stepAudience(ramp, at(24), Q, at(12))).toBeNull();
+    // With the warm-up out, the plateau after it is flat.
+    const warmed = stepAudience(ramp, at(28), Q, at(12))!;
+    expect(warmed.beforeSamples).toBe(2);
+    expect(warmed.fraction).toBeCloseTo((31_066.67 - 31_500) / 31_500, 3);
   });
 });
 
@@ -155,36 +155,44 @@ describe("an audience surge under the quality rules", () => {
     expect(surges(series(240, blip))).toEqual([]);
   });
 
+  it("does not read an organic climb as a step: 7% every ten minutes, compounding for five hours, fires nothing", () => {
+    // 09-26's slow climb, 31,000 to 38,000 over two hours, read at most +11.5% ten against ten.
+    expect(surges(series(300, (m) => 31_000 * Math.pow(1.07, m / 10)))).toEqual([]);
+  });
+
   it("fires once on a step that holds, at the sample that confirms it, with confidence read from the threshold", () => {
     const step = (m: number) => (m < 104 ? 40_000 : 52_000);
     const fired = surges(series(240, step));
+    // At 108 the last ten minutes (100, 104, 108) read +20% on the ten before; 112's own 52,000 holds it.
     expect(fired.map((f) => f.minute)).toEqual([112]);
     const { moment } = fired[0];
-    expect(moment).toMatchObject({ moment: "audience_surge", direction: 1, rule: "quality" });
-    expect(moment.magnitude).toBeCloseTo(0.3, 1);
-    expect(moment.confidence).toBeCloseTo(confidenceAboveThreshold(moment.magnitude, 0.2, 0.5), 2);
-    expect(moment.rationale).toContain("held from the previous sample");
+    expect(moment).toMatchObject({ moment: "audience_surge", direction: 1, rule: "quality", from: 40_050, to: 48_067, windowMinutes: 20 });
+    expect(moment.magnitude).toBeCloseTo(0.2, 3);
+    expect(moment.confidence).toBeCloseTo(confidenceAboveThreshold(moment.magnitude, Q.stepFraction, 0.5), 3);
+    expect(moment.rationale).toContain("held at the next sample (52,000, +30%)");
   });
 
   it("allows two surges a session, an hour apart, the second at half confidence", () => {
     const stairs = (m: number) => (m < 104 ? 40_000 : m < 204 ? 52_000 : m < 304 ? 68_000 : 90_000);
     const fired = surges(series(400, stairs));
     expect(fired.map((f) => f.minute)).toEqual([112, 212]);
-    const raw = confidenceAboveThreshold(fired[1].moment.magnitude, 0.2, 0.5);
+    const raw = confidenceAboveThreshold(fired[1].moment.magnitude, Q.stepFraction, 0.5);
     expect(fired[1].moment.confidence).toBeCloseTo(raw * 0.5, 2);
     expect(fired[1].moment.rationale).toContain("surge 2 of the session");
   });
 
-  it("keeps the hour between surges: a second step 40 minutes after the first waits", () => {
+  it("keeps the hour between surges: a second step 40 minutes after the first is not fired, then or late", () => {
+    // By the end of the hour the second step is the level, not a step.
     const quick = (m: number) => (m < 104 ? 40_000 : m < 144 ? 52_000 : 70_000);
-    expect(surges(series(260, quick)).map((f) => f.minute)[1]).toBeGreaterThanOrEqual(172);
+    expect(surges(series(260, quick)).map((f) => f.minute)).toEqual([112]);
   });
 
   it("once the person has a shape, also has to clear their usual audience at this minute by 15%", () => {
     const step = (m: number) => (m < 104 ? 40_000 : 52_000);
     const usual = (median: number): SessionShape => ({ sessions: 5, median, spread: 1_000, bucketFromMinutes: 110, bucketToMinutes: 120 });
     expect(surges(series(240, step), usual(50_000))).toEqual([]);
-    expect(surges(series(240, step), usual(44_000)).map((f) => f.minute)).toEqual([112]);
+    // At 112 the step's last ten minutes (48,067) are under 44,000 × 1.15; at 116 (52,033) they clear it.
+    expect(surges(series(240, step), usual(44_000)).map((f) => f.minute)).toEqual([116]);
   });
 
   it("leaves drops to the Phase 16 rule, which stays off unless a row switches it on", () => {
@@ -279,10 +287,10 @@ describe("the usual clips per stream hour", () => {
 });
 
 describe("the moment's signal", () => {
-  it("says what the smoothed surge compared and carries the rule in the payload", () => {
-    const moment: LiveMoment = { moment: "audience_surge", direction: 1, confidence: 0.35, magnitude: 0.305, windowMinutes: 60, from: 40_050, to: 52_250, rationale: "r", rule: "quality" };
+  it("says what the step compared and carries the rule in the payload", () => {
+    const moment: LiveMoment = { moment: "audience_surge", direction: 1, confidence: 0.35, magnitude: 0.2, windowMinutes: 20, from: 40_050, to: 48_067, rationale: "r", rule: "quality" };
     const signal = liveMomentSignal(kai, session(), moment, at(112), "twitch");
-    expect(signal.headline).toBe("Kai Cenat's live audience is up 31% on the half hour before: 52,250 viewers against 40,050 30 to 60 minutes earlier, 1h 52m into the stream.");
+    expect(signal.headline).toBe("Kai Cenat's live audience stepped up 20%: 48,067 viewers over 10 minutes against 40,050 in the 10 before, and holding, 1h 52m into the stream.");
     expect(signal.rawPayload).toMatchObject({ kind: "live_moment", moment: "audience_surge", rule: "quality", confidence: 0.35 });
     const phase16 = liveMomentSignal(kai, session(), { ...moment, rule: undefined, windowMinutes: 10 }, at(112), "twitch");
     expect(phase16.rawPayload).not.toHaveProperty("rule");

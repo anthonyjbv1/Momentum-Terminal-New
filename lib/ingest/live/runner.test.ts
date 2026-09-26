@@ -295,8 +295,8 @@ describe("live mode — the quality rules (Phase 31 switch)", () => {
     expect(moments).toHaveLength(1);
     expect(moments[0].occurredAt).toEqual(at(112));
     expect(moments[0].rawPayload).toMatchObject({ moment: "audience_surge", rule: "quality", direction: 1 });
-    // The spike at minute 72 sits in the base window at 112 and lifts it, so the step reads +22% rather than +30%.
-    expect(moments[0].headline).toMatch(/^Kai Cenat's live audience is up 22% on the half hour before: 52,\d{3} viewers against 42,\d{3} 30 to 60 minutes earlier, 1h 52m into the stream\.$/);
+    // The step read at 108, ten minutes against the ten before, held by 112's own reading; the spike at 72 is long out of both windows.
+    expect(moments[0].headline).toMatch(/^Kai Cenat's live audience stepped up 20%: 48,\d{3} viewers over 10 minutes against 40,\d{3} in the 10 before, and holding, 1h 52m into the stream\.$/);
     expect(store.sessions[0].lastSurgeAt).toEqual(at(112));
     expect(await store.countSessionMoments({ personId: kai.id, dataSourceId: "src-twitch", sourceName: "twitch", streamId: "s-1" })).toEqual({ audience_surge: 1, audience_drop: 0, clip_burst: 0 });
     // Every sample past the first hour logged what the rules read: the counts, and no shape (there are no past sessions).

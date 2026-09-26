@@ -140,27 +140,37 @@ export const MAX_SAMPLE_INTERVAL_MINUTES = 5;
  *   samples repeated the one before. Sampling every two minutes reads the
  *   same number twice, so the quality cadence is four minutes.
  *
- *   A single reading is not a level. A surge compares the RECENT audience
- *   (the mean of the samples in the last recentWindowMinutes, which must
- *   hold at least minRecentDistinct different readings, so one stale number
- *   repeated cannot stand for the present) with the BASE (the mean of the
- *   samples from baseFromMinutes to baseToMinutes ago). Nothing is judged
- *   before baseFromMinutes, and the base never takes a sample from the
- *   session's warm-up (warmupMinutes): at minute 60 the base window is
- *   minutes 0 to 30, and a base that averaged the ramp in would read the
- *   plateau after it as a surge (the replay of 2026-09-26 did exactly that
- *   until this was added).
+ *   A single reading is not a level, and a base half an hour back cannot
+ *   tell a step from a climb. A surge is a STEP: the mean audience of the
+ *   last stepWindowMinutes (AFTER, which must hold at least
+ *   minRecentDistinct different readings, so one stale number repeated
+ *   cannot stand for the present) against the mean of the stepWindowMinutes
+ *   before that (BEFORE, at least minBeforeSamples samples), at stepFraction.
+ *   Replayed on 2026-09-26 at both sampling phases, the smoothed rule it
+ *   replaced (the last five minutes against 30 to 60 minutes back, at 20%)
+ *   fired nothing, the real step included (+19.8% at its peak), and lowered
+ *   to fire on the step it fired first on the two-hour climb from 31,000 to
+ *   38,000, which read +20.8% and +21.8% at minutes 92 and 110. Ten minutes
+ *   against the ten before reads the climb at most +11.5% (minutes 80 and
+ *   150) and the minute-248 step +15% to +16%: stepFraction sits between.
+ *   Nothing is judged before judgeFromMinutes, and BEFORE never takes a
+ *   sample from the session's warm-up (warmupMinutes): a before window that
+ *   averaged the ramp in would read the plateau after it as a surge (the
+ *   replay of 2026-09-26 did exactly that until this was added).
  *
  *   Clip rates divide by the span the counted windows actually cover. The
  *   Phase 16 rule counts every window reaching into the trailing minutes but
  *   divides by the trailing minutes alone; at four-minute windows that
  *   overstated a 2.8× hour as 3.7× in the same replay.
  *
- *   A surge must hold: the rule has to pass at the previous sample AND at
- *   this one, this sample's own reading must clear the threshold against the
- *   base (at a four-minute cadence one reading sits in two consecutive recent
- *   windows, so the means alone would let a single spike confirm itself), and
- *   the moment is stamped at the confirmation.
+ *   A surge must hold: the step is read at the previous sample, and this
+ *   sample's own reading must still clear stepFraction against that step's
+ *   BEFORE; the moment is stamped at the confirmation. The next sample's step
+ *   is not the confirmation: the step walks through the AFTER window in ten
+ *   minutes and clears the threshold for one or two samples at most (on
+ *   2026-09-26 at the odd phase, +11.7% then +15.0%, then +6.5% as the new
+ *   level enters BEFORE), and a single spike sits in two consecutive AFTER
+ *   windows and would confirm itself.
  *
  *   Once the person has shapeMinSessions complete sessions that reached this
  *   point of a stream, the recent audience must also clear their usual
@@ -171,8 +181,8 @@ export const MAX_SAMPLE_INTERVAL_MINUTES = 5;
  *   At most maxSurgesPerSession surges a session, surgeCooldownMinutes
  *   apart, every one after the first at laterSurgeConfidenceFactor.
  *
- *   Confidence reads from the threshold, not from zero: a rise exactly at the
- *   threshold is confidence 0 and fullConfidenceFraction is 1. Clip bursts
+ *   Confidence reads from the threshold, not from zero: a step exactly at
+ *   stepFraction is confidence 0 and fullConfidenceFraction is 1. Clip bursts
  *   the same, from burstMultiple to fullConfidenceMultiple.
  *
  *   A clip burst needs burstMinSessionMinutes of session and
@@ -187,11 +197,16 @@ export interface LiveQualityRules {
   sampleIntervalMinutes: number;
   /** A gap longer than this makes the session incomplete (the cadence doubled, so the tolerance does too). */
   maxGapMinutes: number;
-  recentWindowMinutes: number;
+  /** The AFTER window and the BEFORE window, each this long. */
+  stepWindowMinutes: number;
+  /** Different readings AFTER must hold. */
   minRecentDistinct: number;
-  baseFromMinutes: number;
-  baseToMinutes: number;
-  minBaseSamples: number;
+  /** Samples BEFORE must hold. */
+  minBeforeSamples: number;
+  /** The rise of AFTER over BEFORE that is a surge (replaces the source row's surgeFraction under the switch). */
+  stepFraction: number;
+  /** Nothing is judged before this minute of the session. */
+  judgeFromMinutes: number;
   shapeMinSessions: number;
   /** How many of the person's newest complete sessions the shape reads. */
   shapeSessions: number;
@@ -213,11 +228,11 @@ export interface LiveQualityRules {
 export const LIVE_QUALITY_DEFAULTS: LiveQualityRules = {
   sampleIntervalMinutes: 4,
   maxGapMinutes: 10,
-  recentWindowMinutes: 5,
+  stepWindowMinutes: 10,
   minRecentDistinct: 2,
-  baseFromMinutes: 60,
-  baseToMinutes: 30,
-  minBaseSamples: 3,
+  minBeforeSamples: 2,
+  stepFraction: 0.12,
+  judgeFromMinutes: 60,
   shapeMinSessions: 5,
   shapeSessions: 10,
   shapeBucketMinutes: 10,
@@ -586,38 +601,38 @@ function median(values: number[]): number {
   return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-export interface SmoothedAudience {
-  /** Mean of the samples in the recent window. */
-  recent: number;
-  /** Mean of the samples in the base window. */
-  base: number;
+export interface StepAudience {
+  /** Mean of the samples in the last stepWindowMinutes. */
+  after: number;
+  /** Mean of the samples in the stepWindowMinutes before that. */
+  before: number;
   fraction: number;
-  recentReadings: number;
-  recentDistinct: number;
-  baseSamples: number;
+  afterReadings: number;
+  afterDistinct: number;
+  beforeSamples: number;
 }
 
 /**
- * The audience at `at` against the half hour before the last half hour, or
- * null when either window cannot be judged: the recent window holds fewer
- * than minRecentDistinct different readings (a number Helix has not
- * refreshed is one reading however often it is read), or the base holds
- * fewer than minBaseSamples. Base samples taken before `baseNotBefore` (the
- * end of the session's warm-up) do not count.
+ * The audience of the last stepWindowMinutes at `at` against the
+ * stepWindowMinutes before them, or null when either window cannot be
+ * judged: AFTER holds fewer than minRecentDistinct different readings (a
+ * number Helix has not refreshed is one reading however often it is read),
+ * or BEFORE holds fewer than minBeforeSamples. BEFORE samples taken before
+ * `beforeNotBefore` (the end of the session's warm-up) do not count.
  */
-export function smoothedAudience(samples: Array<Pick<LiveSample, "sampledAt" | "viewerCount">>, at: Date, quality: LiveQualityRules, baseNotBefore?: Date): SmoothedAudience | null {
+export function stepAudience(samples: Array<Pick<LiveSample, "sampledAt" | "viewerCount">>, at: Date, quality: LiveQualityRules, beforeNotBefore?: Date): StepAudience | null {
   const age = (sample: Pick<LiveSample, "sampledAt">) => minutesBetween(sample.sampledAt, at);
   const counted = samples.filter((sample): sample is Pick<LiveSample, "sampledAt"> & { viewerCount: number } => sample.viewerCount !== null && age(sample) >= 0);
-  const recent = counted.filter((sample) => age(sample) < quality.recentWindowMinutes).map((sample) => sample.viewerCount);
-  const base = counted
-    .filter((sample) => age(sample) >= quality.baseToMinutes && age(sample) <= quality.baseFromMinutes && (!baseNotBefore || sample.sampledAt.getTime() >= baseNotBefore.getTime()))
+  const after = counted.filter((sample) => age(sample) < quality.stepWindowMinutes).map((sample) => sample.viewerCount);
+  const before = counted
+    .filter((sample) => age(sample) >= quality.stepWindowMinutes && age(sample) < 2 * quality.stepWindowMinutes && (!beforeNotBefore || sample.sampledAt.getTime() >= beforeNotBefore.getTime()))
     .map((sample) => sample.viewerCount);
-  const recentDistinct = new Set(recent).size;
-  if (recentDistinct < quality.minRecentDistinct || base.length < quality.minBaseSamples) return null;
-  const recentMean = mean(recent);
-  const baseMean = mean(base);
-  if (!(baseMean > 0)) return null;
-  return { recent: recentMean, base: baseMean, fraction: (recentMean - baseMean) / baseMean, recentReadings: recent.length, recentDistinct, baseSamples: base.length };
+  const afterDistinct = new Set(after).size;
+  if (afterDistinct < quality.minRecentDistinct || before.length < quality.minBeforeSamples) return null;
+  const afterMean = mean(after);
+  const beforeMean = mean(before);
+  if (!(beforeMean > 0)) return null;
+  return { after: afterMean, before: beforeMean, fraction: (afterMean - beforeMean) / beforeMean, afterReadings: after.length, afterDistinct, beforeSamples: before.length };
 }
 
 /** The person's usual audience at this point of a stream: one mean per past session in the bucket, then the median. */
@@ -653,8 +668,9 @@ export function usualClipsPerHour(perSession: number[], quality: LiveQualityRule
 const fmtCount = (n: number) => Math.round(n).toLocaleString("en-US");
 
 /**
- * A surge under the quality rules: the smoothed rise at the previous sample
- * AND at this one (confirmed, stamped now), above the threshold, above the
+ * A surge under the quality rules: a step above stepFraction at the previous
+ * sample, confirmed by this sample's own reading against that step's BEFORE
+ * (stamped now), above the
  * person's usual audience at this minute once a shape exists, inside the
  * per-session cap and the cooldown. Drops keep the Phase 16 rule (off by
  * default).
@@ -668,46 +684,38 @@ export function qualitySurgeMoment(
 ): LiveMoment | null {
   const quality = config.quality;
   if (!quality || current.viewerCount === null) return null;
-  if (minutesBetween(session.startedAt, current.sampledAt) < quality.baseFromMinutes) return null;
+  if (minutesBetween(session.startedAt, current.sampledAt) < quality.judgeFromMinutes) return null;
   if (context.surgesSoFar >= quality.maxSurgesPerSession) return null;
   if (!past(session.lastSurgeAt, current.sampledAt, quality.surgeCooldownMinutes)) return null;
 
   const prior = samples.filter((sample) => sample.sampledAt.getTime() < current.sampledAt.getTime());
   const previous = [...prior].reverse().find((sample) => sample.viewerCount !== null);
   if (!previous) return null;
-  const all = [...prior, current];
   const warmedUp = new Date(session.startedAt.getTime() + config.warmupMinutes * MINUTE);
-  const now = smoothedAudience(all, current.sampledAt, quality, warmedUp);
-  const before = smoothedAudience(
-    prior.filter((sample) => sample.sampledAt.getTime() <= previous.sampledAt.getTime()),
-    previous.sampledAt,
-    quality,
-    warmedUp,
-  );
-  const rises = (reading: SmoothedAudience | null): reading is SmoothedAudience => reading !== null && reading.fraction >= config.surgeFraction && Math.max(reading.base, reading.recent) >= config.minViewers;
-  if (!rises(before) || !rises(now)) return null;
-  // The confirmation is the NEW reading, not the mean it joins: at a four-minute
-  // cadence one reading sits in two consecutive recent windows, and a single
-  // spike that reverts would otherwise confirm itself.
-  if ((current.viewerCount - now.base) / now.base < config.surgeFraction) return null;
+  const step = stepAudience(prior, previous.sampledAt, quality, warmedUp);
+  if (step === null || step.fraction < quality.stepFraction || Math.max(step.before, step.after) < config.minViewers) return null;
+  // The confirmation is the NEW reading against the level before the step, not
+  // the next step: a single spike that reverts would otherwise confirm itself.
+  const held = (current.viewerCount - step.before) / step.before;
+  if (held < quality.stepFraction) return null;
   // Against the person's usual at this minute, once there is one.
-  if (context.shape && now.recent < context.shape.median * (1 + quality.shapeFraction)) return null;
+  if (context.shape && step.after < context.shape.median * (1 + quality.shapeFraction)) return null;
 
   const later = context.surgesSoFar >= 1;
-  const confidence = round3(confidenceAboveThreshold(now.fraction, config.surgeFraction, config.fullConfidenceFraction) * (later ? quality.laterSurgeConfidenceFactor : 1));
+  const confidence = round3(confidenceAboveThreshold(step.fraction, quality.stepFraction, config.fullConfidenceFraction) * (later ? quality.laterSurgeConfidenceFactor : 1));
   const shapeNote = context.shape ? `; usual at ${context.shape.bucketFromMinutes}–${context.shape.bucketToMinutes} min ${fmtCount(context.shape.median)} over ${context.shape.sessions} sessions` : "; no session shape yet";
   return {
     moment: "audience_surge",
     direction: 1,
     confidence,
-    magnitude: round3(now.fraction),
-    windowMinutes: quality.baseFromMinutes,
-    from: Math.round(now.base),
-    to: Math.round(now.recent),
+    magnitude: round3(step.fraction),
+    windowMinutes: 2 * quality.stepWindowMinutes,
+    from: Math.round(step.before),
+    to: Math.round(step.after),
     rule: "quality",
     rationale:
-      `audience ${fmtCount(now.recent)} over the last ${quality.recentWindowMinutes} min (${now.recentDistinct} readings) against ${fmtCount(now.base)} ${quality.baseToMinutes}–${quality.baseFromMinutes} min earlier (+${Math.round(now.fraction * 100)}%), ` +
-      `held from the previous sample (+${Math.round(before.fraction * 100)}%), threshold +${Math.round(config.surgeFraction * 100)}%${shapeNote}` +
+      `audience ${fmtCount(step.after)} over ${quality.stepWindowMinutes} min (${step.afterDistinct} readings) against ${fmtCount(step.before)} the ${quality.stepWindowMinutes} min before (+${Math.round(step.fraction * 100)}%), ` +
+      `held at the next sample (${fmtCount(current.viewerCount)}, +${Math.round(held * 100)}%), threshold +${Math.round(quality.stepFraction * 100)}%${shapeNote}` +
       (later ? `; surge ${context.surgesSoFar + 1} of the session at ${quality.laterSurgeConfidenceFactor}× confidence` : ""),
   };
 }
@@ -783,7 +791,7 @@ export function liveMomentSignal(person: { display_name: string }, session: Live
   const headline =
     moment.moment === "audience_surge"
       ? quality
-        ? `${possessive} live audience is up ${Math.round(moment.magnitude * 100)}% on the half hour before: ${fmt(moment.to)} viewers against ${fmt(moment.from)} 30 to 60 minutes earlier, ${elapsed} into the stream.`
+        ? `${possessive} live audience stepped up ${Math.round(moment.magnitude * 100)}%: ${fmt(moment.to)} viewers over ${moment.windowMinutes / 2} minutes against ${fmt(moment.from)} in the ${moment.windowMinutes / 2} before, and holding, ${elapsed} into the stream.`
         : `${possessive} live audience is up ${Math.round(moment.magnitude * 100)}% in the last ${moment.windowMinutes} minutes, ${fmt(moment.from)} to ${fmt(moment.to)} viewers, ${elapsed} into the stream.`
       : moment.moment === "audience_drop"
         ? `${possessive} live audience is down ${Math.round(-moment.magnitude * 100)}% in the last ${moment.windowMinutes} minutes, ${fmt(moment.from)} to ${fmt(moment.to)} viewers, ${elapsed} into the stream.`
