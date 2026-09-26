@@ -7,6 +7,7 @@ import { checkUsernameAvailability, clientIpFrom } from "@/lib/auth/username-ava
 import { absoluteUrl, isBetaSignupEnabled, isGoogleAuthEnabled } from "@/lib/env";
 import { parseJoinForm, submitJoin, type JoinOutcome } from "@/lib/invites/join";
 import { attestInvite } from "@/lib/invites/server";
+import { newInviteToken } from "@/lib/invites/token";
 import { createSupabaseRateLimiter } from "@/lib/rate-limit";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
@@ -38,9 +39,15 @@ export async function joinAction(_prev: JoinFormState, form: FormData): Promise<
       return result.reason === "rate_limited" ? "rate_limited" : "unavailable";
     },
     attest: attestInvite,
-    sendLink: async (email) => {
+    // Same shape as an invite token: 32 random bytes, and its SHA-256.
+    newNonce: () => {
+      const { token, hash } = newInviteToken();
+      return { nonce: token, hash };
+    },
+    sendLink: async (email, joinNonce) => {
       const supabase = await createSupabaseServerClient();
-      const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: true, emailRedirectTo: callback } });
+      // join_nonce becomes the new user's metadata; the sign-up trigger checks it against the invite.
+      const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: true, emailRedirectTo: callback, data: { join_nonce: joinNonce } } });
       if (error) {
         console.warn("[join] sign-in link failed:", error.message);
         return { ok: false, message: "The sign-in email could not be sent. Please try again in a moment." };

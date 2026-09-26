@@ -42,7 +42,7 @@ export function JoinForm({ token, email, googleEnabled, defaults, initialState }
           <p className="text-base text-fg-secondary">
             A sign-in link is on its way to <span className="font-medium text-fg">{state.outcome.email}</span>. It works once. Open it on this device to finish.
           </p>
-          <p className="text-sm text-fg-muted">Nothing there after a few minutes? Check spam, or submit the form again for a new link.</p>
+          <p className="text-sm text-fg-muted">Nothing there after a few minutes? Check spam, or ask for a new link on the log-in page with the same address.</p>
         </CardContent>
       </Card>
     );

@@ -24,7 +24,7 @@ export function MemberProfile({ view }: { view: ProfileView }) {
   return (
     <div className="flex flex-col gap-10">
       <header className="flex flex-col gap-6 sm:flex-row sm:items-center">
-        <Avatar name={view.displayName} src={view.avatarSrc} size="2xl" />
+        <Avatar name={view.displayName} src={view.avatarSrc} size="2xl" initialsUnderImage={view.hasUploadedPhoto} />
         <div className="flex min-w-0 flex-col gap-3">
           <div className="flex min-w-0 flex-col gap-1">
             <h1 className="truncate text-4xl font-bold tracking-tighter text-fg sm:text-5xl">{view.displayName}</h1>

@@ -43,20 +43,32 @@ async function lookup(token: string): Promise<Record<string, unknown> | null> {
   return r;
 }
 
+/** The join page's one-time secret for each address, as the server would have made it at attestation. */
+const nonces = new Map<string, string>();
+
 async function attest(token: string, username: string, age = true, terms: string | null = TERMS_VERSION): Promise<Record<string, unknown>> {
-  const [{ r }] = await database.rows<{ r: Record<string, unknown> }>("select public.invite_attest($1, $2, $3, $4, $5, $6) as r", [hashInviteToken(token), username, "Test Person", age, terms, PRIVACY_VERSION]);
+  const nonce = newInviteToken();
+  const [{ r }] = await database.rows<{ r: Record<string, unknown> }>("select public.invite_attest($1, $2, $3, $4, $5, $6, $7) as r", [hashInviteToken(token), username, "Test Person", age, terms, PRIVACY_VERSION, nonce.hash]);
+  if (r.ok === true && typeof r.email === "string") nonces.set(r.email, nonce.token);
   return r;
 }
 
-/** GoTrue creating the auth user: the trigger decides. */
-async function signUp(email: string): Promise<string> {
-  const [row] = await database.rows<{ id: string }>("insert into auth.users (email) values ($1) returning id", [email]);
+/**
+ * GoTrue creating the auth user from the join page's sign-in request, which
+ * carries the one-time secret in the user metadata: the trigger decides.
+ */
+async function signUp(email: string, options: { nonce?: string | null; provider?: string } = {}): Promise<string> {
+  const nonce = options.nonce === undefined ? nonces.get(email) : options.nonce;
+  const [row] = await database.rows<{ id: string }>(
+    "insert into auth.users (email, raw_user_meta_data, raw_app_meta_data) values ($1, $2::jsonb, $3::jsonb) returning id",
+    [email, JSON.stringify(nonce ? { join_nonce: nonce } : {}), JSON.stringify({ provider: options.provider ?? "email" })],
+  );
   return row.id;
 }
 
-async function refusedSignUp(email: string): Promise<string> {
+async function refusedSignUp(email: string, options: { nonce?: string | null; provider?: string } = {}): Promise<string> {
   try {
-    await signUp(email);
+    await signUp(email, options);
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
@@ -104,6 +116,37 @@ describe("the door is shut without an invite", () => {
   it("refuses an invited address that has not attested on the join page (Google straight from the login page, say)", async () => {
     await issue(["unattested@example.com"]);
     expect(await refusedSignUp("unattested@example.com")).toMatch(/signup_requires_attestation/);
+  });
+
+  it("refuses an email sign-up for an attested invite without the join page's secret: someone who only knows the address cannot claim it", async () => {
+    const { created } = await issue(["claimed@example.com"]);
+    expect(await attest(created[0].token, "claimed_one")).toMatchObject({ ok: true });
+    // The public sign-up endpoint, with a password and no secret.
+    expect(await refusedSignUp("claimed@example.com", { nonce: null })).toMatch(/signup_requires_link/);
+    // A guessed secret.
+    expect(await refusedSignUp("claimed@example.com", { nonce: newInviteToken().token })).toMatch(/signup_requires_link/);
+    // Nothing was made, and the invite is still open for its owner.
+    const [{ n }] = await database.rows<{ n: number }>("select count(*)::int as n from public.users where email = 'claimed@example.com'");
+    expect(n).toBe(0);
+    expect(await lookup(created[0].token)).toMatchObject({ status: "pending" });
+    // The owner's own request, carrying the secret, gets in.
+    const id = await signUp("claimed@example.com");
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("does not ask Google for the secret: the provider proves the address, and the invite still has to be attested", async () => {
+    const { created } = await issue(["google-person@example.com"]);
+    expect(await refusedSignUp("google-person@example.com", { nonce: null, provider: "google" })).toMatch(/signup_requires_attestation/);
+    expect(await attest(created[0].token, "google_person")).toMatchObject({ ok: true });
+    const id = await signUp("google-person@example.com", { nonce: null, provider: "google" });
+    const [{ username }] = await database.rows<{ username: string }>("select username from public.users where id = $1", [id]);
+    expect(username).toBe("google_person");
+  });
+
+  it("refuses an attestation that carries no well-formed secret hash", async () => {
+    const { created } = await issue(["nonceless@example.com"]);
+    const [{ r }] = await database.rows<{ r: Record<string, unknown> }>("select public.invite_attest($1, $2, $3, $4, $5, $6, $7) as r", [hashInviteToken(created[0].token), "nonceless", "", true, TERMS_VERSION, PRIVACY_VERSION, "not-a-hash"]);
+    expect(r).toEqual({ ok: false, code: "bad_nonce" });
   });
 });
 
@@ -159,7 +202,7 @@ describe("issuing invites", () => {
         const [{ ok }] = await database.rows<{ ok: boolean }>("select has_table_privilege($1, 'public.invites', $2) as ok", [role, privilege]);
         expect(ok, `${role} ${privilege} invites`).toBe(false);
       }
-      for (const fn of ["public.invite_for_token(text)", "public.invite_attest(text, text, text, boolean, text, text)", "public.admin_user_list(integer)", "public.admin_invite_list(integer)"]) {
+      for (const fn of ["public.invite_for_token(text)", "public.invite_attest(text, text, text, boolean, text, text, text)", "public.admin_user_list(integer)", "public.admin_invite_list(integer)"]) {
         const [{ ok }] = await database.rows<{ ok: boolean }>("select has_function_privilege($1, $2, 'execute') as ok", [role, fn]);
         expect(ok, `${role} execute ${fn}`).toBe(false);
       }

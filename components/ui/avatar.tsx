@@ -24,6 +24,14 @@ export interface AvatarProps {
   className?: string;
   /** Emphasised ring (e.g. the active profile button). */
   ring?: "default" | "accent" | "positive";
+  /**
+   * Keep the initials under the image (Phase 32, members' uploaded photos).
+   * If the file behind `src` is gone (a database restored to before a photo
+   * was replaced, say: Storage files are not in database backups), the
+   * failed image draws nothing and the initials show through. Off by default
+   * so a transparent image never shows initials behind it.
+   */
+  initialsUnderImage?: boolean;
 }
 
 export function initialsFor(name: string): string {
@@ -40,7 +48,7 @@ const rings = {
   positive: "ring-positive",
 };
 
-export function Avatar({ name, src, size = "md", className, ring = "default" }: AvatarProps) {
+export function Avatar({ name, src, size = "md", className, ring = "default", initialsUnderImage = false }: AvatarProps) {
   const dims = avatarSizes[size];
   return (
     <span
@@ -54,6 +62,7 @@ export function Avatar({ name, src, size = "md", className, ring = "default" }: 
       role="img"
       aria-label={name}
     >
+      {src && initialsUnderImage ? <span aria-hidden>{initialsFor(name)}</span> : null}
       {src ? (
         <Image src={src} alt="" fill sizes={`${dims.px}px`} unoptimized className="object-cover" />
       ) : (

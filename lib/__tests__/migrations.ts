@@ -27,6 +27,8 @@ export const SUPABASE_STUBS = `
     id                 uuid        primary key default gen_random_uuid(),
     email              text,
     raw_user_meta_data jsonb       not null default '{}'::jsonb,
+    -- Set by GoTrue, never by the caller: the provider that made the user.
+    raw_app_meta_data  jsonb       not null default '{"provider": "email"}'::jsonb,
     created_at         timestamptz not null default now(),
     email_confirmed_at timestamptz,
     last_sign_in_at    timestamptz

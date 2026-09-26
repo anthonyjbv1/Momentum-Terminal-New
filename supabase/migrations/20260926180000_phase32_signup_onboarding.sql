@@ -221,6 +221,11 @@ create table public.invites (
   privacy_version      text,
   desired_username     text,
   desired_display_name text,
+  -- SHA-256 (hex) of the one-time secret our server made when the join form
+  -- was accepted. The secret travels only in that sign-in request; an email
+  -- sign-up must carry it, so nobody who merely knows an invited address can
+  -- claim the invite through the public sign-up endpoint.
+  join_nonce_hash      text,
   -- The account that accepted it.
   accepted_at          timestamptz,
   accepted_user_id     uuid              references public.users (id) on delete set null,
@@ -233,6 +238,7 @@ create table public.invites (
   -- The username goes with the address when an account is deleted; the attestation's facts stay.
   constraint invites_attestation_whole   check (attested_at is null or (age_attested and terms_version is not null and privacy_version is not null and (desired_username is not null or email is null))),
   constraint invites_username_format     check (desired_username is null or desired_username ~ '^[a-z0-9_]{3,30}$'),
+  constraint invites_join_nonce_shape    check (join_nonce_hash is null or join_nonce_hash ~ '^[0-9a-f]{64}$'),
   constraint invites_display_name_length check (desired_display_name is null or length(desired_display_name) between 1 and 80),
   constraint invites_user_only_accepted check (accepted_user_id is null or accepted_at is not null),
   constraint invites_note_length         check (revoke_note is null or length(revoke_note) <= 500),
@@ -368,6 +374,17 @@ begin
     if v_invite.attested_at is null or not v_invite.age_attested then
       raise exception 'signup_requires_attestation: the invite has not been accepted on the join page' using errcode = '42501';
     end if;
+    -- An email sign-up must carry the join page's one-time secret. Supabase's
+    -- public sign-up endpoint takes any address and a password; without this,
+    -- someone who knew an invited address could register it with their own
+    -- password between the join form and the link, and sign in once the
+    -- invitee confirmed. Another provider (Google) proves the address itself.
+    -- raw_app_meta_data is set by GoTrue, never by the caller.
+    if coalesce(new.raw_app_meta_data ->> 'provider', 'email') = 'email'
+       and (v_invite.join_nonce_hash is null
+            or v_invite.join_nonce_hash <> encode(pg_catalog.sha256(convert_to(coalesce(new.raw_user_meta_data ->> 'join_nonce', ''), 'UTF8')), 'hex')) then
+      raise exception 'signup_requires_link: an email sign-up must come from the join page' using errcode = '42501';
+    end if;
   end if;
 
   base_username := lower(coalesce(
@@ -466,7 +483,8 @@ create or replace function public.invite_attest(
   p_display_name    text,
   p_age_attested    boolean,
   p_terms_version   text,
-  p_privacy_version text
+  p_privacy_version text,
+  p_join_nonce_hash text
 )
 returns jsonb
 language plpgsql
@@ -499,6 +517,9 @@ begin
   if exists (select 1 from public.users u where u.username = v_username) then
     return jsonb_build_object('ok', false, 'code', 'username_taken');
   end if;
+  if p_join_nonce_hash is null or lower(p_join_nonce_hash) !~ '^[0-9a-f]{64}$' then
+    return jsonb_build_object('ok', false, 'code', 'bad_nonce');
+  end if;
   if v_display is not null and length(v_display) > 80 then
     v_display := left(v_display, 80);
   end if;
@@ -509,7 +530,8 @@ begin
          terms_version = left(trim(p_terms_version), 64),
          privacy_version = left(trim(p_privacy_version), 64),
          desired_username = v_username,
-         desired_display_name = v_display
+         desired_display_name = v_display,
+         join_nonce_hash = lower(p_join_nonce_hash)
    where id = v_invite.id;
 
   return jsonb_build_object('ok', true, 'email', v_invite.email::text);
@@ -518,10 +540,10 @@ $$;
 
 revoke execute on function public.invite_status(timestamptz, timestamptz, timestamptz) from public, anon, authenticated;
 revoke execute on function public.invite_for_token(text) from public, anon, authenticated;
-revoke execute on function public.invite_attest(text, text, text, boolean, text, text) from public, anon, authenticated;
+revoke execute on function public.invite_attest(text, text, text, boolean, text, text, text) from public, anon, authenticated;
 grant  execute on function public.invite_status(timestamptz, timestamptz, timestamptz) to service_role;
 grant  execute on function public.invite_for_token(text) to service_role;
-grant  execute on function public.invite_attest(text, text, text, boolean, text, text) to service_role;
+grant  execute on function public.invite_attest(text, text, text, boolean, text, text, text) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- 9. The operator's invite actions, audited
@@ -854,12 +876,12 @@ begin
   delete from public.follows f where f.user_id = v_uid;
   delete from public.waitlist w where w.email = lower(v_user.email);
   update public.invites i
-     set email = null, desired_username = null, desired_display_name = null
+     set email = null, desired_username = null, desired_display_name = null, join_nonce_hash = null
    where i.accepted_user_id = v_uid
       or (i.email = lower(v_user.email) and (i.accepted_at is not null or i.revoked_at is not null));
   -- An open invite to the same address would keep it: revoke and scrub it.
   update public.invites i
-     set revoked_at = now(), revoke_note = 'Account deleted', email = null, desired_username = null, desired_display_name = null
+     set revoked_at = now(), revoke_note = 'Account deleted', email = null, desired_username = null, desired_display_name = null, join_nonce_hash = null
    where i.email = lower(v_user.email) and i.accepted_at is null and i.revoked_at is null;
 
   update public.users

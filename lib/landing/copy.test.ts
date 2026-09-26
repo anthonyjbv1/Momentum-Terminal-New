@@ -122,6 +122,8 @@ describe("the copy file", () => {
     expect(deletion.body.join(" ")).toContain("{contact}");
     expect(PRIVACY.sections.map((section) => section.title)).toEqual(["What is collected", "Why", "Who handles it", "How long", "Deletion"]);
     expect(PRIVACY.sections.find((section) => section.title === "Why")!.body.join(" ")).toMatch(/not sold/);
+    // Phase 32: privacy@ for data, info@ for invitations and the Terms.
+    expect(PRIVACY_CONTACT_EMAIL).toBe("privacy@momentumterminal.app");
   });
 
   it("covers accounts (Phase 32): deleted versus kept without a name, the backups, and a deletion line for each state of the beta switch", () => {

@@ -26,7 +26,7 @@ export async function lookupInvite(token: string): Promise<InviteView | null> {
   return readInviteView(data);
 }
 
-export async function attestInvite(input: { token: string; username: string; displayName: string | null; termsVersion: string; privacyVersion: string }): Promise<{ ok: true; email: string } | { ok: false; code: string }> {
+export async function attestInvite(input: { token: string; username: string; displayName: string | null; termsVersion: string; privacyVersion: string; joinNonceHash: string }): Promise<{ ok: true; email: string } | { ok: false; code: string }> {
   const admin = createSupabaseAdminClient();
   const { data, error } = await admin.rpc("invite_attest", {
     p_token_hash: hashInviteToken(input.token),
@@ -35,6 +35,7 @@ export async function attestInvite(input: { token: string; username: string; dis
     p_age_attested: true,
     p_terms_version: input.termsVersion,
     p_privacy_version: input.privacyVersion,
+    p_join_nonce_hash: input.joinNonceHash,
   });
   if (error) return { ok: false, code: "unavailable" };
   const record = (data ?? {}) as Record<string, unknown>;

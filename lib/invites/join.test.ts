@@ -37,10 +37,16 @@ function deps(overrides: Partial<JoinDeps> = {}) {
     },
     attest: async (input) => {
       calls.push(`attest:${input.termsVersion}:${input.privacyVersion}`);
+      calls.push(`nonce-hash:${input.joinNonceHash}`);
       return { ok: true, email: "person@example.com" };
     },
-    sendLink: async (email) => {
+    newNonce: () => {
+      const { token, hash } = newInviteToken();
+      return { nonce: token, hash };
+    },
+    sendLink: async (email, joinNonce) => {
       calls.push(`link:${email}`);
+      calls.push(`nonce:${joinNonce}`);
       return { ok: true };
     },
     googleUrl: async () => {
@@ -170,7 +176,21 @@ describe("the join form", () => {
   it("records the attestation with the current Terms and Privacy versions, then sends the email link to the invited address", async () => {
     const { deps: d, calls } = deps();
     expect(await submitJoin(submission(), d)).toEqual({ kind: "link_sent", email: "person@example.com" });
-    expect(calls).toEqual(["username", `attest:${TERMS_VERSION}:${PRIVACY_VERSION}`, "link:person@example.com"]);
+    expect(calls.filter((call) => !call.startsWith("nonce"))).toEqual(["username", `attest:${TERMS_VERSION}:${PRIVACY_VERSION}`, "link:person@example.com"]);
+  });
+
+  it("puts the hash of a fresh one-time secret on the invite and the secret itself only in the sign-in request", async () => {
+    const first = deps();
+    await submitJoin(submission(), first.deps);
+    const hash = first.calls.find((call) => call.startsWith("nonce-hash:"))!.slice("nonce-hash:".length);
+    const nonce = first.calls.find((call) => call.startsWith("nonce:"))!.slice("nonce:".length);
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashInviteToken(nonce)).toBe(hash);
+    expect(nonce).not.toBe(TOKEN);
+    // A second attempt gets a different secret.
+    const second = deps();
+    await submitJoin(submission(), second.deps);
+    expect(second.calls.find((call) => call.startsWith("nonce:"))).not.toBe(`nonce:${nonce}`);
   });
 
   it("sends the browser to Google only when Google is switched on", async () => {
@@ -179,7 +199,7 @@ describe("the join form", () => {
     expect(off.calls).toEqual([]);
     const on = deps({ googleEnabled: true });
     expect(await submitJoin(submission({ method: "google" }), on.deps)).toEqual({ kind: "redirect", url: "https://accounts.google.example/o/oauth2" });
-    expect(on.calls).toEqual(["username", `attest:${TERMS_VERSION}:${PRIVACY_VERSION}`, "google"]);
+    expect(on.calls.filter((call) => !call.startsWith("nonce"))).toEqual(["username", `attest:${TERMS_VERSION}:${PRIVACY_VERSION}`, "google"]);
   });
 
   it("is rate-limited per address", async () => {

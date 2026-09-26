@@ -37,7 +37,7 @@ export async function ProfileButton() {
       aria-label={`Profile: ${profile.display_name}`}
       className="flex size-10 items-center justify-center rounded-full transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
     >
-      <Avatar name={profile.display_name} src={avatarSource(profile)} size="md" />
+      <Avatar name={profile.display_name} src={avatarSource(profile)} size="md" initialsUnderImage={Boolean(profile.avatar_path)} />
     </Link>
   );
 }

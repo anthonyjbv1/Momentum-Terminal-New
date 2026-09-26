@@ -559,6 +559,7 @@ export type Database = {
           expires_at: string
           id: string
           invited_by: string
+          join_nonce_hash: string | null
           last_send_error: string | null
           privacy_version: string | null
           referrer_user_id: string | null
@@ -584,6 +585,7 @@ export type Database = {
           expires_at: string
           id?: string
           invited_by: string
+          join_nonce_hash?: string | null
           last_send_error?: string | null
           privacy_version?: string | null
           referrer_user_id?: string | null
@@ -609,6 +611,7 @@ export type Database = {
           expires_at?: string
           id?: string
           invited_by?: string
+          join_nonce_hash?: string | null
           last_send_error?: string | null
           privacy_version?: string | null
           referrer_user_id?: string | null
@@ -2874,6 +2877,7 @@ export type Database = {
           p_age_attested: boolean
           p_display_name: string
           p_privacy_version: string
+          p_join_nonce_hash: string
           p_terms_version: string
           p_token_hash: string
           p_username: string

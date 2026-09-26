@@ -182,12 +182,13 @@ export const OG = {
 // ---------------------------------------------------------------------------
 
 /**
- * Where a person writes about their data, shown on /privacy (and /terms) as
- * a mailto link. Phase 28 shipped a flagged placeholder here; Phase 32 set
- * the real address, the one the invitations are sent from and replied to.
+ * Where a person writes about their data, shown on /privacy as a mailto
+ * link. Phase 28 shipped a flagged placeholder here; Phase 32 set the real
+ * address (it forwards to the operator). The invitations and the Terms use
+ * info@ instead (lib/invites/email.ts, lib/legal/terms.ts).
  * lib/landing/copy.test.ts holds the flag and the value in step.
  */
-export const PRIVACY_CONTACT_EMAIL = "info@momentumterminal.app";
+export const PRIVACY_CONTACT_EMAIL = "privacy@momentumterminal.app";
 export const PRIVACY_CONTACT_IS_PLACEHOLDER = false;
 
 /**

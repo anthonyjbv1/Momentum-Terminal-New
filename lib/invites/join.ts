@@ -145,10 +145,16 @@ export interface JoinDeps {
   ip: string;
   /** Is the username free? Service role, behind its own per-address limit. */
   usernameAvailable: (username: string) => Promise<"available" | "taken" | "rate_limited" | "unavailable">;
-  /** invite_attest(): records the attestation on the invite, or says why not. */
-  attest: (input: { token: string; username: string; displayName: string | null; termsVersion: string; privacyVersion: string }) => Promise<{ ok: true; email: string } | { ok: false; code: string }>;
-  /** signInWithOtp for the invited address, creating the account when the link is asked for. */
-  sendLink: (email: string) => Promise<{ ok: true } | { ok: false; message: string }>;
+  /** invite_attest(): records the attestation on the invite, with the hash of this request's one-time secret, or says why not. */
+  attest: (input: { token: string; username: string; displayName: string | null; termsVersion: string; privacyVersion: string; joinNonceHash: string }) => Promise<{ ok: true; email: string } | { ok: false; code: string }>;
+  /**
+   * A fresh one-time secret and its SHA-256. The hash goes on the invite; the
+   * secret goes only into the sign-in request, where the database trigger
+   * checks it before an email sign-up may create the account.
+   */
+  newNonce: () => { nonce: string; hash: string };
+  /** signInWithOtp for the invited address, carrying the secret, creating the account when the link is asked for. */
+  sendLink: (email: string, joinNonce: string) => Promise<{ ok: true } | { ok: false; message: string }>;
   /** signInWithOAuth: the URL to send the browser to. */
   googleUrl: () => Promise<{ ok: true; url: string } | { ok: false; message: string }>;
 }
@@ -186,7 +192,8 @@ export async function submitJoin(input: JoinSubmission, deps: JoinDeps): Promise
   if (availability === "rate_limited") return { kind: "error", message: JOIN_MESSAGES.rateLimited };
   if (availability === "unavailable") return { kind: "error", message: JOIN_MESSAGES.unavailable };
 
-  const attested = await deps.attest({ token: input.token, username: input.username, displayName: input.displayName || null, termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION });
+  const nonce = deps.newNonce();
+  const attested = await deps.attest({ token: input.token, username: input.username, displayName: input.displayName || null, termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, joinNonceHash: nonce.hash });
   if (!attested.ok) {
     const refusal = ATTEST_REFUSALS[attested.code] ?? { message: JOIN_MESSAGES.unavailable };
     return { kind: "error", ...refusal };
@@ -196,7 +203,7 @@ export async function submitJoin(input: JoinSubmission, deps: JoinDeps): Promise
     const google = await deps.googleUrl();
     return google.ok ? { kind: "redirect", url: google.url } : { kind: "error", message: google.message };
   }
-  const sent = await deps.sendLink(attested.email);
+  const sent = await deps.sendLink(attested.email, nonce.nonce);
   return sent.ok ? { kind: "link_sent", email: attested.email } : { kind: "error", message: sent.message };
 }
 

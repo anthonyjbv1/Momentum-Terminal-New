@@ -259,6 +259,8 @@ All of these are applied to the `Momentum Terminal` Supabase project and recorde
 
 **Standing rule (2026-09-25): before any migration is applied to production, confirm a backup exists from within the last 24 hours and name its time in the report.** The project's organisation has been on Supabase's **Pro** plan since 2026-09-25: a daily backup is taken automatically and the last seven days of them are kept, listed under **Dashboard → Database → Backups** (physical backups, the process Supabase uses for every project on Postgres 15.8 and newer; by Supabase's documentation, up to seven daily backups taken while the project was on the Free plan become visible on the upgrade). The Management API lists them too, `GET https://api.supabase.com/v1/projects/<ref>/database/backups` with a personal access token from the account page. The MCP tooling this project is operated through has no backups call and the operating environment cannot reach `api.supabase.com`, so the time is read from the Dashboard, or from that endpoint on a machine that can reach it, and quoted in the report before the migration is applied. Point-in-time recovery is a paid add-on and is not enabled. No `pg_dump` plumbing exists and none is planned.
 
+**Storage files are not in the backups (noted 2026-09-26, from the Backups page).** A database backup holds Storage's *metadata* (`storage.objects`, the rows that list files) but not the files themselves, so members' profile photos in the private `avatars` bucket (Phase 32) are covered by no backup, and a database restore does not roll the bucket back. After a restore, the database describes the bucket as it was at the backup time while the files are as they are now: a `users.avatar_path` can point at a photo deleted since (a replaced photo, or a deleted account's), and a photo uploaded since can sit in the bucket with nothing pointing at it and no row listing it. The app degrades rather than breaks: a member's avatar keeps their initials under the image, so a missing file shows initials, never a broken picture. The restore procedure below handles the rest.
+
 ### Tables
 
 | Table                 | Purpose                                                                                       |
@@ -3315,6 +3317,10 @@ The email (`lib/invites/email.ts`) is sent by our server through Resend's API fr
 
 `/join/<token>` shows one of: the form (open), already used, withdrawn, expired, not valid, or "could not be checked just now" when the database does not answer (nothing is used up). The quiet layout (`components/shell/quiet-layout.tsx`) carries the mark and nothing else: no banner, no countdown. Refusals, in order: the switch, the token shape, the 18+ box, the Terms box, the username, Google availability, a per-address rate limit (10 in 10 minutes), the username being free, then the invite's own state. Consent is recorded with `TERMS_VERSION` and `PRIVACY_VERSION` from `lib/legal/versions.ts`; change a sentence someone agrees to and bump the version.
 
+**The join page's one-time secret.** Supabase's own sign-up endpoint is public: with "Allow new users to sign up" on, anyone can ask it to create a user for any address, with a password of their choosing. The trigger alone would have let someone who merely knew an invited address register it with their own password in the window after the invitee ticked the boxes, and sign in once the invitee confirmed the address. So the join action makes a fresh secret per submission, stores only its SHA-256 on the invite (`invites.join_nonce_hash`, through `invite_attest`), and sends the secret itself in the sign-in request's user metadata (`join_nonce`); for an email sign-up the trigger refuses anything else (`signup_requires_link`). A Google sign-up does not need it (GoTrue sets `raw_app_meta_data.provider`, which no caller can), because Google proves the address. Two consequences: the account is created when the link is requested, so a second submission of the join form reads "already used" (the check-inbox note sends people to the log-in page's email link instead), and users created from the Supabase Dashboard are refused unless made with the operator bypass below.
+
+**Supabase's "Allow new users to sign up" must be ON** for the join flow to work (the email link and Google both create the user through it). It is safe on once this migration is applied: every new auth user, whichever way it arrives, passes through the trigger.
+
 **Supabase settings the flow needs** (Dashboard → Authentication): Site URL `https://momentumterminal.app`; Redirect URLs `https://momentumterminal.app/auth/callback**` (and the preview and local origins you use); custom SMTP through Resend (done); the email rate limit raised above the default for a batch of invites. The default email templates work with the PKCE flow `@supabase/ssr` uses, on one condition the join page states: the link is opened in the browser that asked for it (the code verifier is a cookie there). To let a link work on another device, change the Magic Link and Confirm signup templates to link to `{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=email`; `/auth/callback` already accepts `token_hash` (a new member then lands on their profile rather than on `/start`, which they can still open). Google, when wanted: an OAuth client in Google Cloud with `https://<project-ref>.supabase.co/auth/v1/callback` as its redirect, the provider enabled in Supabase with that client's id and secret, then `GOOGLE_AUTH_ENABLED=true`.
 
 **The operator bypass.** Setting `momentum.signup_without_invite = 'on'` for a session lets the trigger create an account without an invite. It exists for the test harness and for an operator creating an account by SQL; nothing in the application sets it.
@@ -3329,9 +3335,42 @@ With the switch on, `/profile` is the member profile: photo (uploaded to the pri
 
 `/profile/delete` explains, before the confirm box, what is deleted (email, username, display name, photo, follows, behavioural events, the network hash on trades, the waitlist row and invite details, the sign-in) and what is **kept without a name** (paper trades, the ledger, forecasts, consent versions and times, and any review of trading), refuses while positions are open or for an operator, and runs `delete_my_account()`. The Privacy notice and the Terms say the same; `lib/profile/copy.test.ts` checks the page's claims against the SQL of the function. The anonymous stub keeps `users.id`, so every other balance and the house ledger still reconcile to the cent: `lib/invites/invites.db.test.ts` compares counts and the reconciliation before and after a deletion.
 
+### Photos, deletion and restores
+
+**Deletion removes the photo after the database has committed.** `delete_my_account()` returns the account's `avatar_path`; the Server Action then removes that file with the service role and signs the browser out. A replaced photo is removed the same way once the new one is saved. If a removal fails it is logged (`[profile] deleted account's photo was not removed`) and the file is an orphan: nothing points at it, and it is personal data, so sweep for orphans after any such log line and monthly:
+
+```sql
+-- Files in the avatars bucket that no account points at. Delete them through
+-- the Dashboard (Storage -> avatars) or the Storage API, never by deleting
+-- rows here: a row deleted in SQL leaves the file behind.
+select o.name, o.created_at
+  from storage.objects o
+ where o.bucket_id = 'avatars'
+   and not exists (select 1 from public.users u where u.avatar_path = o.name)
+ order by o.created_at;
+```
+
+**A database restore.** In order:
+
+1. **Before restoring**, from the live database, write down the accounts deleted after the backup's time, because the restore brings their personal data back:
+   ```sql
+   select id, deleted_at from public.users where deleted_at > '<backup time>' order by deleted_at;
+   ```
+2. Restore (Dashboard → Database → Backups).
+3. **Delete those accounts again**, one statement per id, as that account (the function reads the caller from the JWT claim):
+   ```sql
+   begin;
+   select set_config('request.jwt.claim.sub', '<id>', true);
+   select public.delete_my_account();
+   commit;
+   ```
+   Each returns the photo path it cleared; remove those files through the Dashboard if they still exist.
+4. **Photos.** References to files deleted since the backup show initials; tell those members to upload again, or clear the references (`update public.users set avatar_path = null where id in (…)`). Files uploaded since the backup exist in the bucket without a row in `storage.objects`, so neither the Dashboard nor the sweep above lists them; if they must go (they are photos of members), ask Supabase support to remove objects under `avatars/` newer than the backup time.
+5. Invites issued, accepted or revoked since the backup are gone from the database, but links sent since then still arrive in inboxes: a restored invite row has the old token hash, so a newer link reads "not valid". Resend any invite issued after the backup time.
+
 ### Terms and Privacy
 
-`/terms` is the beta Terms, a **DRAFT FOR COUNSEL** (the banner says so), written with the build to describe what the product does, ending with what a lawyer must add. Behind the switch and not indexed. `/privacy` now covers accounts, who handles the data (Supabase, Vercel, Resend, Google if chosen), the seven-day backup window, and deletion; the contact is `info@momentumterminal.app`.
+`/terms` is the beta Terms, a **DRAFT FOR COUNSEL** (the banner says so), written with the build to describe what the product does, ending with what a lawyer must add. Behind the switch and not indexed. `/privacy` now covers accounts, who handles the data (Supabase, Vercel, Resend, Google if chosen), the seven-day backup window, and deletion; its contact is `privacy@momentumterminal.app` (forwarded to the operator). Invitations and the Terms use `info@momentumterminal.app`.
 
 ### Verification
 
