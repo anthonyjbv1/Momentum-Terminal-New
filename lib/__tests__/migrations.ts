@@ -27,11 +27,19 @@ export const SUPABASE_STUBS = `
     id                 uuid        primary key default gen_random_uuid(),
     email              text,
     raw_user_meta_data jsonb       not null default '{}'::jsonb,
-    created_at         timestamptz not null default now()
+    created_at         timestamptz not null default now(),
+    email_confirmed_at timestamptz,
+    last_sign_in_at    timestamptz
   );
   create function auth.uid() returns uuid
   language sql stable
   as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+
+  -- Phase 32: a new auth user needs an open, attested invite. Tests that make
+  -- users to trade with take the operator's bypass for the whole database;
+  -- the tests of the rule itself turn it off in their own session.
+  select set_config('momentum.signup_without_invite', 'on', false);
+  do $$ begin execute format('alter database %I set momentum.signup_without_invite = %L', current_database(), 'on'); end $$;
 `;
 
 /** The migration files in the order Supabase applies them (by version prefix). */

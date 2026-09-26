@@ -89,10 +89,10 @@ describe("no client can reach the waitlist", () => {
 
   it("anon and authenticated cannot execute join_waitlist(); the service role can", async () => {
     for (const role of USER_ROLES) {
-      const [{ ok }] = await database.rows<{ ok: boolean }>("select has_function_privilege($1, 'public.join_waitlist(text, text, jsonb, text)', 'execute') as ok", [role]);
+      const [{ ok }] = await database.rows<{ ok: boolean }>("select has_function_privilege($1, 'public.join_waitlist(text, text, jsonb, text, text)', 'execute') as ok", [role]);
       expect(ok, `${role} may call join_waitlist`).toBe(false);
     }
-    const [{ ok }] = await database.rows<{ ok: boolean }>("select has_function_privilege('service_role', 'public.join_waitlist(text, text, jsonb, text)', 'execute') as ok");
+    const [{ ok }] = await database.rows<{ ok: boolean }>("select has_function_privilege('service_role', 'public.join_waitlist(text, text, jsonb, text, text)', 'execute') as ok");
     expect(ok).toBe(true);
   });
 

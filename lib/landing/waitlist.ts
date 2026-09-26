@@ -22,12 +22,16 @@ const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const MAX_EMAIL = 254;
 const MAX_UTM = 128;
 const MAX_REFERRER = 512;
+/** A referral code: eight characters from an alphabet with no look-alikes (the database's own rule). */
+export const REFERRAL_CODE_PATTERN = /^[a-hj-km-np-z2-9]{8}$/;
 
 export interface WaitlistSubmission {
   email: string;
   source: WaitlistSource;
   utm: Partial<Record<"source" | "medium" | "campaign" | "content" | "term", string>>;
   referrer: string | null;
+  /** A member's referral code from the link the visitor arrived by (?ref=), when well-formed (Phase 32). */
+  ref: string | null;
   /** The honeypot's value. Anything at all means a bot filled the hidden field. */
   honeypot: string;
 }
@@ -60,6 +64,8 @@ export function parseWaitlistBody(body: unknown): WaitlistSubmission | string {
     source,
     utm,
     referrer: clean(record.referrer, MAX_REFERRER),
+    // A malformed code is dropped, never refused: the visitor still joins.
+    ref: typeof record.ref === "string" && REFERRAL_CODE_PATTERN.test(record.ref.trim().toLowerCase()) ? record.ref.trim().toLowerCase() : null,
     // A honeypot that is missing is fine (an older page); one that is filled is not.
     honeypot: typeof record.website === "string" ? record.website : "",
   };

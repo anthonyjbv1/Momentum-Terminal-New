@@ -3,20 +3,20 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { checkUsernameAvailability, clientIpFrom } from "@/lib/auth/username-availability";
-import { getSiteUrl } from "@/lib/env";
+import { clientIpFrom } from "@/lib/auth/username-availability";
+import { absoluteUrl, isBetaSignupEnabled, isGoogleAuthEnabled } from "@/lib/env";
+import { isValidEmail } from "@/lib/landing/waitlist";
+import { createSupabaseRateLimiter } from "@/lib/rate-limit";
+import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 
-/** State returned to the login/signup forms via useActionState. */
+/** State returned to the login forms via useActionState. */
 export type AuthFormState = {
   error?: string;
   message?: string;
   /** Echoed back so the form can keep what the user typed after an error. */
   values?: Record<string, string>;
 };
-
-const USERNAME_PATTERN = /^[a-z0-9_]{3,30}$/;
-const MIN_PASSWORD_LENGTH = 8;
 
 /** Only allow same-origin relative paths as post-auth destinations. */
 function safeNextPath(raw: FormDataEntryValue | null, fallback = "/profile"): string {
@@ -48,72 +48,45 @@ export async function login(_prev: AuthFormState, formData: FormData): Promise<A
   redirect(next);
 }
 
-export async function signup(_prev: AuthFormState, formData: FormData): Promise<AuthFormState> {
+/** Per address: five sign-in links in ten minutes. */
+const LINK_LIMIT = { limit: 5, windowSeconds: 600 } as const;
+
+/**
+ * A sign-in link by email, for an account that already exists (Phase 32).
+ * Never creates one (shouldCreateUser: false): accounts come only from the
+ * join page. The answer is the same whether or not the address has an
+ * account, so the form cannot be used to find out who is a member.
+ */
+export async function requestSignInLink(_prev: AuthFormState, formData: FormData): Promise<AuthFormState> {
+  if (!isBetaSignupEnabled()) return { error: "Sign-in links are not available yet." };
   const email = field(formData, "email").trim().toLowerCase();
-  const password = field(formData, "password");
-  const username = field(formData, "username").trim().toLowerCase();
-  const displayName = field(formData, "display_name").trim();
-  const values = { email, username, display_name: displayName };
+  const next = safeNextPath(formData.get("next"), "/");
+  if (!isValidEmail(email)) return { error: "Enter the email address your account uses.", values: { email } };
 
-  if (!email || !password || !username) {
-    return { error: "Email, username and password are required.", values };
-  }
-  if (!USERNAME_PATTERN.test(username)) {
-    return {
-      error: "Username must be 3–30 characters using lowercase letters, numbers or underscores.",
-      values,
-    };
-  }
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    return { error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`, values };
-  }
-
-  // The username check runs on the server, service role, behind a per-IP
-  // rate limit: the RPC is not executable by the public roles, so this is
-  // the only way to ask, and it cannot be walked.
-  const requestHeaders = await headers();
-  const availability = await checkUsernameAvailability(username, clientIpFrom(requestHeaders));
-  if (!availability.ok) {
-    if (availability.reason === "rate_limited") {
-      return { error: "Too many attempts from your connection. Please wait a few minutes and try again.", values };
-    }
-    return { error: "Could not check username availability. Please try again.", values };
-  }
-  if (!availability.available) {
-    return { error: "That username is already taken.", values };
+  const admin = createSupabaseAdminClient();
+  const ip = clientIpFrom(await headers());
+  try {
+    const decision = await createSupabaseRateLimiter(admin).hit(`signin_link:${ip}`, LINK_LIMIT.limit, LINK_LIMIT.windowSeconds);
+    if (!decision.allowed) return { error: "Too many links asked for from your connection. Please wait a few minutes.", values: { email } };
+  } catch {
+    return { error: "Something went wrong on our side. Please try again in a moment.", values: { email } };
   }
 
   const supabase = await createSupabaseServerClient();
+  const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: absoluteUrl(`/auth/callback?next=${encodeURIComponent(next)}`) } });
+  // An unknown address comes back as an error from GoTrue; it is answered like a known one.
+  if (error && !/signups not allowed|user not found|otp/i.test(error.message)) console.warn("[login] sign-in link failed:", error.message);
+  return { message: `If ${email} has an account, a sign-in link is on its way. It works once.` };
+}
 
-  // The on_auth_user_created trigger reads username / display_name from this
-  // metadata to build the public.users row with the paper balance.
-  const origin = requestHeaders.get("origin") ?? getSiteUrl();
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      data: { username, display_name: displayName || username },
-      emailRedirectTo: `${origin}/auth/callback?next=/profile`,
-    },
-  });
-  if (error) {
-    return { error: error.message, values };
-  }
-
-  // With email confirmation on, Supabase returns a placeholder user with no
-  // identities when the email is already registered (to avoid enumeration).
-  if (data.user && data.user.identities?.length === 0) {
-    return { error: "An account with that email already exists. Try logging in.", values };
-  }
-
-  if (data.session) {
-    // Email confirmation is disabled: the user is signed in immediately.
-    redirect("/profile");
-  }
-
-  return {
-    message: `Almost there — check ${email} for a confirmation link to finish creating your account.`,
-  };
+/** Google, for an account that already exists or for an invited address that has attested on its join page. */
+export async function signInWithGoogle(formData: FormData): Promise<void> {
+  if (!isGoogleAuthEnabled()) redirect("/login");
+  const next = safeNextPath(formData.get("next"), "/");
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: absoluteUrl(`/auth/callback?next=${encodeURIComponent(next)}`) } });
+  if (error || !data.url) redirect("/login?error=auth_callback");
+  redirect(data.url);
 }
 
 export async function signOut(): Promise<void> {

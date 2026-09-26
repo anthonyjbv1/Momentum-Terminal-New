@@ -24,16 +24,25 @@ import { withCookies, type ResolvedSession } from "@/lib/supabase-proxy";
  * the auth code and fails if it starts calling an API route not listed
  * here):
  *
- *   sign-up              GET /signup, then the Server Action POST to /signup.
- *                        The username check and auth.signUp happen inside
- *                        the action, server to server against Supabase;
- *                        no API route of ours is called.
- *   sign-in              GET /login, then the Server Action POST to /login.
- *   email confirmation   the link lands on GET /auth/callback (PKCE code or
- *                        token hash), which sets the session and redirects.
- *   password reset       not built yet; when it is, its page and callback
- *                        are added here by name.
+ *   joining (Phase 32)   GET /join/<token>, then the Server Action POST to
+ *                        the same path. The token is the ONE path segment
+ *                        the gate matches by shape rather than by name
+ *                        (JOIN_ROUTE_PATTERN: /join/ and 43 base64url
+ *                        characters, nothing before or after); the page
+ *                        itself 404s while BETA_SIGNUP_ENABLED is off. The
+ *                        attestation, the username check and the email link
+ *                        or Google redirect happen inside the action, server
+ *                        to server; no API route of ours is called. The
+ *                        Terms it links to are /terms, named below.
+ *   sign-in              GET /login, then the Server Action POST to /login
+ *                        (password; and, with the switch on, an email link
+ *                        or Google).
+ *   email links          GET /auth/callback (PKCE code or token hash), which
+ *                        sets the session and redirects.
  *   sign-out             a Server Action from a signed-in page.
+ *
+ * The old public sign-up (/signup) is gone as of Phase 32: an account is made
+ * only from an invite, and the database refuses any other.
  *
  * The shared-secret routes are named too: they are authorised by
  * INGEST_SECRET / ENGINE_SECRET / CRON_SECRET, never by a session, and
@@ -67,7 +76,14 @@ export const NOINDEX_HEADER_VALUE = "noindex, nofollow, noarchive";
  * nothing else. /how-the-price-works (Phase 29) is the public explainer of
  * the market price, linked from every profile.
  */
-export const PUBLIC_ROUTES: readonly string[] = ["/login", "/signup", "/auth/callback", "/privacy", "/how-the-price-works", "/og"];
+export const PUBLIC_ROUTES: readonly string[] = ["/login", "/auth/callback", "/privacy", "/terms", "/how-the-price-works", "/og"];
+
+/**
+ * The join page (Phase 32): /join/ and one invite token, exactly. A token is
+ * 32 random bytes in base64url, so 43 characters from [A-Za-z0-9_-]; any
+ * other shape, a trailing slash or a second segment is not a join page.
+ */
+export const JOIN_ROUTE_PATTERN = /^\/join\/[A-Za-z0-9_-]{43}$/;
 
 /** The public API (Phase 28): the featured score and the waitlist. Exact paths, no session, rate-limited on their own. */
 export const PUBLIC_API_ROUTES: readonly string[] = ["/api/public/featured", "/api/waitlist"];
@@ -106,6 +122,7 @@ export function decideAuthGate(pathname: string, search: string, isSignedIn: boo
   if (isSignedIn) return { kind: "allow" };
   if (pathname === "/") return { kind: "landing" };
   if (PUBLIC_ROUTES.includes(pathname)) return { kind: "allow" };
+  if (JOIN_ROUTE_PATTERN.test(pathname)) return { kind: "allow" };
   if (PUBLIC_API_ROUTES.includes(pathname)) return { kind: "allow" };
   if (SHARED_SECRET_ROUTES.includes(pathname)) return { kind: "allow" };
   if (pathname === "/api" || pathname.startsWith("/api/")) return { kind: "unauthorized" };

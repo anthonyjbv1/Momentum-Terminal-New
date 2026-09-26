@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   INDEXABLE_ROUTES,
+  JOIN_ROUTE_PATTERN,
   LANDING_ROUTE,
   NOINDEX_HEADER_NAME,
   NOINDEX_HEADER_VALUE,
@@ -16,6 +17,7 @@ import {
   applyAuthGate,
   decideAuthGate,
 } from "./auth-gate";
+import { newInviteToken } from "./invites/token";
 import type { ResolvedSession } from "./supabase-proxy";
 
 /**
@@ -46,10 +48,12 @@ describe("decideAuthGate", () => {
     expect(decideAuthGate("/api", "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
   });
 
-  it("keeps sign-in, sign-up, the auth callback, the privacy page, the price explainer and the OG image reachable, by exact route only", () => {
-    expect(PUBLIC_ROUTES).toEqual(["/login", "/signup", "/auth/callback", "/privacy", "/how-the-price-works", "/og"]);
+  it("keeps sign-in, the auth callback, the privacy page, the Terms, the price explainer and the OG image reachable, by exact route only", () => {
+    expect(PUBLIC_ROUTES).toEqual(["/login", "/auth/callback", "/privacy", "/terms", "/how-the-price-works", "/og"]);
     expect(decideAuthGate("/login", "?next=%2Ffeed", SIGNED_OUT)).toEqual({ kind: "allow" });
-    expect(decideAuthGate("/signup", "", SIGNED_OUT)).toEqual({ kind: "allow" });
+    expect(decideAuthGate("/terms", "", SIGNED_OUT)).toEqual({ kind: "allow" });
+    // Phase 32: the old public sign-up is gone; its path is gated like any other.
+    expect(decideAuthGate("/signup", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/signup" });
     expect(decideAuthGate("/auth/callback", "?code=abc", SIGNED_OUT)).toEqual({ kind: "allow" });
     expect(decideAuthGate("/privacy", "", SIGNED_OUT)).toEqual({ kind: "allow" });
     expect(decideAuthGate("/how-the-price-works", "", SIGNED_OUT)).toEqual({ kind: "allow" });
@@ -58,9 +62,19 @@ describe("decideAuthGate", () => {
     expect(decideAuthGate("/auth", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/auth" });
     expect(decideAuthGate("/auth/callback/extra", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/auth/callback/extra" });
     expect(decideAuthGate("/login-help", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/login-help" });
-    expect(decideAuthGate("/signup/", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/signup/" });
+    expect(decideAuthGate("/terms/", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/terms/" });
     expect(decideAuthGate("/privacy/policy", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/privacy/policy" });
     expect(decideAuthGate("/og/drake", "", SIGNED_OUT)).toEqual({ kind: "redirect", next: "/og/drake" });
+  });
+
+  it("opens the join page by one exact shape: /join/ and a 43-character token, nothing before or after (Phase 32)", () => {
+    const { token } = newInviteToken();
+    expect(JOIN_ROUTE_PATTERN.test(`/join/${token}`)).toBe(true);
+    expect(decideAuthGate(`/join/${token}`, "", SIGNED_OUT)).toEqual({ kind: "allow" });
+    for (const path of ["/join", "/join/", `/join/${token}/`, `/join/${token}x`, `/join/${token.slice(1)}`, `/join/${token}/extra`, `/x/join/${token}`, "/join/../admin", `/join/${token.slice(0, 42)}.`]) {
+      expect(decideAuthGate(path, "", SIGNED_OUT), path).toEqual({ kind: "redirect", next: path });
+    }
+    expect(decideAuthGate(`/api/join/${token}`, "", SIGNED_OUT)).toEqual({ kind: "unauthorized" });
   });
 
   it("serves the landing page at / to a signed-out visitor, and sends its own path back to / (Phase 28)", () => {
@@ -227,17 +241,22 @@ describe("the unauthenticated flows complete against the gate", () => {
     return { reached, status: response.status, location: response.headers.get("location") };
   };
 
-  it("sign-up: open the form, submit the Server Action, land on the confirmation link, arrive signed in", () => {
-    expect(passes("GET", "https://example.test/signup")).toMatchObject({ reached: true, status: 200 });
-    expect(passes("GET", "https://example.test/signup?_rsc=abc", { rsc: "1" })).toMatchObject({ reached: true, status: 200 });
-    expect(passes("POST", "https://example.test/signup", { "next-action": "6012014edb0afa7f2abf2c47c0f8790ff690956132", "content-type": "multipart/form-data" })).toMatchObject({ reached: true, status: 200 });
-    // After a failed attempt the form re-posts to the same path with the same headers.
-    expect(passes("POST", "https://example.test/signup", { "next-action": "6012014edb0afa7f2abf2c47c0f8790ff690956132" })).toMatchObject({ reached: true, status: 200 });
-    // The confirmation email lands here, still signed out, in either link style.
-    expect(passes("GET", "https://example.test/auth/callback?code=pkce-code&next=%2Fprofile")).toMatchObject({ reached: true, status: 200 });
-    expect(passes("GET", "https://example.test/auth/callback?token_hash=abc&type=signup&next=%2Fprofile")).toMatchObject({ reached: true, status: 200 });
-    // The callback sets the session and redirects; the destination is then open.
-    expect(passes("GET", "https://example.test/profile", {}, SIGNED_IN)).toMatchObject({ reached: true, status: 200 });
+  it("joining (Phase 32): open the invitation, read the Terms, submit the Server Action, land from the email link or Google, arrive signed in", () => {
+    const { token } = newInviteToken();
+    expect(passes("GET", `https://example.test/join/${token}`)).toMatchObject({ reached: true, status: 200 });
+    expect(passes("GET", `https://example.test/join/${token}?_rsc=abc`, { rsc: "1" })).toMatchObject({ reached: true, status: 200 });
+    expect(passes("GET", "https://example.test/terms")).toMatchObject({ reached: true, status: 200 });
+    expect(passes("GET", "https://example.test/privacy")).toMatchObject({ reached: true, status: 200 });
+    expect(passes("POST", `https://example.test/join/${token}`, { "next-action": "6012014edb0afa7f2abf2c47c0f8790ff690956132", "content-type": "multipart/form-data" })).toMatchObject({ reached: true, status: 200 });
+    // The sign-in email (or Google) lands here, still signed out, in either link style.
+    expect(passes("GET", "https://example.test/auth/callback?code=pkce-code&next=%2Fstart")).toMatchObject({ reached: true, status: 200 });
+    expect(passes("GET", "https://example.test/auth/callback?token_hash=abc&type=email&next=%2Fstart")).toMatchObject({ reached: true, status: 200 });
+    expect(passes("GET", "https://example.test/auth/callback?error=server_error&error_description=Database+error+saving+new+user")).toMatchObject({ reached: true, status: 200 });
+    // The callback sets the session and redirects; onboarding is then open.
+    expect(passes("GET", "https://example.test/start", {}, SIGNED_IN)).toMatchObject({ reached: true, status: 200 });
+    // The old public sign-up is not a way in.
+    expect(passes("GET", "https://example.test/signup")).toMatchObject({ reached: false, status: 307 });
+    expect(passes("GET", "https://example.test/start")).toMatchObject({ reached: false, status: 307 });
   });
 
   it("sign-in: open the form with a destination, submit the Server Action, follow the redirect signed in", () => {
@@ -287,11 +306,25 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe("the audit of what the unauthenticated flows call", () => {
-  const authCode = [join(root, "app", "(auth)"), join(root, "app", "auth"), join(root, "components", "auth"), join(root, "lib", "auth")].flatMap((dir) => sourceFiles(dir));
+  const authCode = [join(root, "app", "(auth)"), join(root, "app", "auth"), join(root, "app", "join"), join(root, "components", "auth"), join(root, "components", "join"), join(root, "lib", "auth"), join(root, "lib", "invites")].flatMap((dir) => sourceFiles(dir));
 
-  it("covers the sign-up, sign-in and callback code", () => {
+  it("covers the joining, sign-in and callback code", () => {
     const names = authCode.map((file) => relative(root, file)).sort();
-    expect(names).toEqual(expect.arrayContaining(["app/(auth)/actions.ts", "app/(auth)/login/page.tsx", "app/(auth)/signup/page.tsx", "app/auth/callback/route.ts", "components/auth/LoginForm.tsx", "components/auth/SignupForm.tsx", "lib/auth/username-availability.ts"]));
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "app/(auth)/actions.ts",
+        "app/(auth)/login/page.tsx",
+        "app/auth/callback/route.ts",
+        "app/join/[token]/actions.ts",
+        "app/join/[token]/page.tsx",
+        "components/auth/LoginForm.tsx",
+        "components/auth/SignInLinkForm.tsx",
+        "components/join/join-form.tsx",
+        "lib/auth/username-availability.ts",
+        "lib/invites/join.ts",
+      ]),
+    );
+    expect(names.some((name) => name.includes("signup/page") || name.includes("SignupForm"))).toBe(false);
   });
 
   it("finds no API route of ours in those flows that the gate does not name", () => {

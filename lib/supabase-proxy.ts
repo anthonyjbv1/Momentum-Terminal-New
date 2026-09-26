@@ -5,10 +5,10 @@ import { getSupabasePublishableKey, getSupabaseUrl } from "@/lib/env";
 import type { Database } from "@/types/database";
 
 /** Routes that require a signed-in user. Prefix match. */
-const PROTECTED_PREFIXES = ["/account", "/portfolio", "/profile"];
+const PROTECTED_PREFIXES = ["/account", "/portfolio", "/profile", "/start"];
 
 /** Routes that only make sense when signed out. Exact match. */
-const SIGNED_OUT_ONLY_ROUTES = ["/login", "/signup"];
+const SIGNED_OUT_ONLY_ROUTES = ["/login"];
 
 function matchesPrefix(pathname: string, prefixes: string[]): boolean {
   return prefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
