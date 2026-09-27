@@ -100,6 +100,7 @@ export function SignupSection({ report, now, notice, noticeOk }: { report: Signu
                         <span style={{ display: "inline-flex", gap: 4 }}>
                           <form action={resendInviteAction} className="adm-form">
                             <input type="hidden" name="invite_id" value={row.id} />
+                            {row.fromWaitlist ? <input type="hidden" name="from_waitlist" value="1" /> : null}
                             <button type="submit" className="adm-btn">
                               Resend
                             </button>

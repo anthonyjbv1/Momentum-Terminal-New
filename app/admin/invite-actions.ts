@@ -63,7 +63,8 @@ export async function resendInviteAction(form: FormData): Promise<void> {
   let sentence: string;
   let ok = false;
   try {
-    const result = await resendInvite(await createSupabaseServerClient(), id);
+    // Only the email's first line depends on it; the console renders it from the row.
+    const result = await resendInvite(await createSupabaseServerClient(), id, form.get("from_waitlist") === "1");
     ok = result.ok && result.sent;
     sentence = !result.ok
       ? `Not resent: the invite is ${result.code}.`
