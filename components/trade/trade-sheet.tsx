@@ -1027,7 +1027,8 @@ export function RejectedView({
  */
 function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => void }) {
   return (
-    <div role="radiogroup" aria-label="Order in" className="inline-flex items-center gap-1 rounded-full bg-surface-raised p-1">
+    // On a phone the toggle has its own row, so the two halves fill it evenly; on a wide screen it sits beside the input at its natural width.
+    <div role="radiogroup" aria-label="Order in" className="grid w-full grid-cols-2 gap-1 rounded-full bg-surface-raised p-1 lg:inline-flex lg:w-auto lg:items-center">
       {(["shares", "dollars"] as const).map((option) => (
         <button
           key={option}
@@ -1036,7 +1037,7 @@ function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => 
           aria-checked={mode === option}
           onClick={() => onChange(option)}
           className={cn(
-            "inline-flex h-8 items-center rounded-full px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+            "inline-flex h-10 items-center justify-center rounded-full px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 lg:h-8 lg:font-normal",
             mode === option ? "bg-surface-inverse text-fg-inverse" : "text-fg-muted hover:text-fg",
           )}
         >

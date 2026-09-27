@@ -114,7 +114,8 @@
 
 /* Bottom padding that clears the mobile tab bar plus the device's home indicator. */
 @utility pb-tabbar-safe {
-  padding-bottom: calc(var(--spacing-tabbar) + env(safe-area-inset-bottom));
+  /* The tab bar, the home indicator, and room to breathe: the last card should not sit on the bar. */
+  padding-bottom: calc(var(--spacing-tabbar) + env(safe-area-inset-bottom) + 2.5rem);
 }
 
 @utility pb-safe {

@@ -28,11 +28,8 @@ export function MemberProfile({ view }: { view: ProfileView }) {
         <div className="flex min-w-0 flex-col gap-3">
           <div className="flex min-w-0 flex-col gap-1">
             <h1 className="truncate text-4xl font-bold tracking-tighter text-fg sm:text-5xl">{view.displayName}</h1>
-            <p className="text-base text-fg-muted">
-              @{view.username}
-              <span aria-hidden> · </span>
-              {PROFILE.joined.replace("{date}", joinDate(view.joinedAt))}
-            </p>
+            <p className="text-base text-fg-muted">@{view.username}</p>
+            <p className="text-sm text-fg-muted">{PROFILE.joined.replace("{date}", joinDate(view.joinedAt))}</p>
           </div>
           <PhotoForm hasPhoto={view.hasUploadedPhoto} />
         </div>
