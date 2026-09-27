@@ -17,7 +17,7 @@ import { Badge, Empty, Panel, Scroll, Stat, Stats, age, num, stamp, type Tone } 
 
 const STATUS_TONE: Record<InviteRow["status"], Tone> = { pending: "info", accepted: "ok", revoked: "plain", expired: "warn" };
 
-export function SignupSection({ report, now, notice }: { report: SignupReport; now: number; notice: string | null }) {
+export function SignupSection({ report, now, notice, noticeOk }: { report: SignupReport; now: number; notice: string | null; noticeOk: boolean }) {
   const { switches } = report;
   const canSend = switches.betaSignup && switches.resendKeySet;
   return (
@@ -27,7 +27,7 @@ export function SignupSection({ report, now, notice }: { report: SignupReport; n
         GOOGLE_AUTH_ENABLED is {switches.googleAuth ? "on" : "off"}. RESEND_API_KEY is {switches.resendKeySet ? "set" : "not set"}. Links point at {switches.siteOrigin}.
       </p>
       {notice ? (
-        <p className="adm-notice" role="status" data-tone={notice.startsWith("Issued") || notice.startsWith("Resent") || notice.startsWith("Revoked") ? "ok" : "warn"}>
+        <p className="adm-notice" role="status" data-tone={noticeOk ? "ok" : "bad"}>
           {notice}
         </p>
       ) : null}
@@ -42,7 +42,8 @@ export function SignupSection({ report, now, notice }: { report: SignupReport; n
 
       <div className="adm-body">
         <form action={issueInvitesAction} className="adm-form" data-stack>
-          <fieldset disabled={!canSend}>
+          {/* Never disabled: a press always reaches the server, which refuses with the reason (and logs it) rather than doing nothing. */}
+          <fieldset>
             <textarea name="emails" placeholder={`Addresses to invite, up to ${MAX_TYPED_INVITES}: one per line, or separated by commas`} aria-label="Addresses to invite" />
             <span>
               and the oldest{" "}
@@ -54,10 +55,14 @@ export function SignupSection({ report, now, notice }: { report: SignupReport; n
             </span>
           </fieldset>
           {!canSend ? (
-            <small className="adm-note">
-              {!switches.betaSignup ? 'Sending is off until BETA_SIGNUP_ENABLED is "true" here: a link would lead to a page that does not exist.' : "Sending needs RESEND_API_KEY in this environment."}
-            </small>
-          ) : null}
+            <p className="adm-notice" role="alert" data-tone="bad">
+              {!switches.betaSignup
+                ? 'Invites cannot be sent: BETA_SIGNUP_ENABLED is not "true" here, so a link would lead to a page that does not exist.'
+                : "Invites cannot be sent: RESEND_API_KEY is not readable by this deployment. Set it for Production in Vercel, then redeploy (a variable reaches only deployments built after it was set)."}
+            </p>
+          ) : (
+            <small className="adm-note">An address that already has an account is not invited; the result names it. An invite shows as sent only once Resend has accepted it.</small>
+          )}
         </form>
       </div>
 
@@ -95,7 +100,7 @@ export function SignupSection({ report, now, notice }: { report: SignupReport; n
                         <span style={{ display: "inline-flex", gap: 4 }}>
                           <form action={resendInviteAction} className="adm-form">
                             <input type="hidden" name="invite_id" value={row.id} />
-                            <button type="submit" className="adm-btn" disabled={!canSend}>
+                            <button type="submit" className="adm-btn">
                               Resend
                             </button>
                           </form>

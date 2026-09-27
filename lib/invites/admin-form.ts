@@ -42,18 +42,35 @@ export function parseInviteForm(rawEmails: unknown, rawCount: unknown): ParsedIn
   return { emails, invalid, fromWaitlist: Number.isInteger(count) && count > 0 ? count : 0, error };
 }
 
-/** The outcome of an issue, as one sentence for the console. */
-export function issueSentence(report: { created: number; sent: number; failed: Array<{ email: string; error: string }>; skipped: Array<{ email: string; reason: string }> }, invalid: string[]): string {
-  const parts = [`Issued ${report.created} ${report.created === 1 ? "invite" : "invites"}, emailed ${report.sent}.`];
-  if (report.failed.length > 0) parts.push(`Not delivered: ${report.failed.map((f) => `${f.email} (${f.error})`).join(", ")}. Use Resend on those rows.`);
-  if (report.skipped.length > 0) parts.push(`Skipped: ${report.skipped.map((s) => `${s.email} (${SKIP_WORDS[s.reason] ?? s.reason})`).join(", ")}.`);
+type IssueOutcome = { created: number; sent: number; failed: Array<{ email: string; error: string }>; skipped: Array<{ email: string; reason: string }> };
+
+/**
+ * The outcome of an issue, as one sentence for the console. An invite counts
+ * as sent only when Resend accepted it; an address that already has an
+ * account is never invited and is named first, as a warning.
+ */
+export function issueSentence(report: IssueOutcome, invalid: string[]): string {
+  const parts: string[] = [];
+  const members = report.skipped.filter((s) => s.reason === "member").map((s) => s.email);
+  const others = report.skipped.filter((s) => s.reason !== "member");
+  if (members.length > 0) parts.push(`Already ${members.length === 1 ? "has an account" : "have accounts"}, so no invite was sent: ${members.join(", ")}. They can sign in at /login.`);
+  if (report.created === 0) {
+    if (members.length === 0) parts.push("No invite was sent.");
+  } else if (report.sent === report.created) parts.push(`Sent ${report.sent} ${report.sent === 1 ? "invite" : "invites"}; Resend accepted ${report.sent === 1 ? "it" : "each"}.`);
+  else parts.push(`Sent ${report.sent} of ${report.created} invites.`);
+  if (report.failed.length > 0) parts.push(`Not sent, Resend did not accept: ${report.failed.map((f) => `${f.email} (${f.error})`).join(", ")}. Saved as not sent; fix the cause, then use Resend on the row.`);
+  if (others.length > 0) parts.push(`Skipped: ${others.map((s) => `${s.email} (${SKIP_WORDS[s.reason] ?? s.reason})`).join(", ")}.`);
   if (invalid.length > 0) parts.push(`Not addresses: ${invalid.join(", ")}.`);
   return parts.join(" ");
 }
 
+/** Whether the outcome is all good: every invite created was accepted by Resend, and nothing was skipped or unreadable. */
+export function issueSucceeded(report: IssueOutcome, invalid: string[]): boolean {
+  return report.created > 0 && report.sent === report.created && report.failed.length === 0 && report.skipped.length === 0 && invalid.length === 0;
+}
+
 const SKIP_WORDS: Record<string, string> = {
   invalid: "not an address",
-  member: "already a member",
-  already_invited: "already has an open invite",
+  already_invited: "already has an open invite; use Resend on its row",
   no_token: "no token",
 };

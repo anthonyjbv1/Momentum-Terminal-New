@@ -15,7 +15,8 @@ import { WaitlistSection } from "@/components/admin/waitlist";
  * check is a convenience and not the boundary. `?window=` moves the two
  * time-scoped sections; everything else is current state. `?notice=` carries
  * the outcome of the last market action (app/admin/actions.ts) as a sentence;
- * `?signup=` the outcome of the last invite action (app/admin/invite-actions.ts).
+ * `?signup=` the outcome of the last invite action (app/admin/invite-actions.ts),
+ * `&signup_ok=1` when all of it happened (anything else reads as a warning).
  */
 
 export const dynamic = "force-dynamic";
@@ -30,11 +31,12 @@ function parseNotice(value: string | string[] | undefined, max = 300): string | 
   return typeof first === "string" && first.trim() ? first.trim().slice(0, max) : null;
 }
 
-export default async function AdminPage({ searchParams }: { searchParams: Promise<{ window?: string | string[]; notice?: string | string[]; signup?: string | string[] }> }) {
+export default async function AdminPage({ searchParams }: { searchParams: Promise<{ window?: string | string[]; notice?: string | string[]; signup?: string | string[]; signup_ok?: string | string[] }> }) {
   const params = await searchParams;
   const window = parseWindow(params.window);
   const notice = parseNotice(params.notice);
   const signupNotice = parseNotice(params.signup, 600);
+  const signupOk = params.signup_ok === "1";
   // One clock for the whole page, so every "3m ago" on it agrees.
   const now = getRenderedAt();
 
@@ -58,7 +60,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       <MarketSection report={market} now={now} notice={notice} />
       <BehaviourSection report={behaviour} />
       <WaitlistSection report={waitlist} now={now} />
-      <SignupSection report={signup} now={now} notice={signupNotice} />
+      <SignupSection report={signup} now={now} notice={signupNotice} noticeOk={signupOk} />
     </>
   );
 }

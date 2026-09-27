@@ -58,7 +58,7 @@ describe("every way in is closed while the switch is off", () => {
     { path: "app/(app)/(home)/page.tsx", why: "no Following filter", pattern: /user && isBetaSignupEnabled\(\) \? await getMyFollowIds\(\) : undefined/ },
     { path: "app/(auth)/login/page.tsx", why: "no sign-in link or Google on the login page", pattern: /const open = isBetaSignupEnabled\(\)/ },
     { path: "app/(auth)/actions.ts", why: "no sign-in links or Google", pattern: /if \(!isBetaSignupEnabled\(\)\) return \{ error:[\s\S]*if \(!isGoogleAuthEnabled\(\)\) redirect\("\/login"\)/ },
-    { path: "app/admin/invite-actions.ts", why: "no invites are sent", pattern: /if \(!isBetaSignupEnabled\(\)\) return 'Sending is off/ },
+    { path: "app/admin/invite-actions.ts", why: "no invites are sent", pattern: /const betaSignup = isBetaSignupEnabled\(\);[\s\S]*if \(!betaSignup\) return 'Sending is off/ },
     { path: "app/(public)/privacy/page.tsx", why: "Privacy offers deletion by email, not in the app", pattern: /isBetaSignupEnabled\(\) \? PRIVACY_DELETION\.inApp : PRIVACY_DELETION\.byEmail/ },
   ];
 

@@ -1169,6 +1169,8 @@ export async function readSignup(): Promise<SignupReport> {
     resendKeySet: getResendApiKeyOrNull() !== null,
     siteOrigin: getSiteOrigin(),
   };
+  // What this deployment can read, as booleans, so a send that never happened can be traced in the runtime logs.
+  console.log(JSON.stringify({ source: "admin-signup", betaSignup: switches.betaSignup, resendKeySet: switches.resendKeySet }));
   const counts: SignupReport["inviteCounts"] = { pending: 0, accepted: 0, revoked: 0, expired: 0 };
   const [invites, members] = await Promise.all([client.rpc("admin_invite_list", { p_limit: INVITE_LIST_LIMIT }), client.rpc("admin_user_list", { p_limit: MEMBER_LIST_LIMIT })]);
   const failure = invites.error ?? members.error;

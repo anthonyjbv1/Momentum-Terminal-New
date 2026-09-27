@@ -54,9 +54,35 @@ export interface IssueReport {
   skipped: Array<{ email: string; reason: string }>;
 }
 
+/** "a***@example.com": enough to tell two sends apart in a log, never the address. */
+export function maskEmail(email: string): string {
+  const at = email.lastIndexOf("@");
+  return at <= 0 ? "***" : `${email[0]}***${email.slice(at)}`;
+}
+
+/**
+ * One send: Resend first, then the row. The row says sent only when Resend
+ * accepted the message (an id came back); a refusal is recorded as the
+ * invite's last error. Every attempt leaves one log line, with the address
+ * masked and never the key or the link.
+ */
 async function deliver(client: TypedSupabaseClient, inviteId: string, email: string, token: string, expiresAt: Date): Promise<SendResult> {
-  const result = await sendInviteEmail({ to: email, link: joinLink(token), expiresAt }, { apiKey: getResendApiKeyOrNull() });
-  await client.rpc("admin_record_invite_send", { p_invite_id: inviteId, p_ok: result.ok, p_error: result.ok ? undefined : result.error });
+  const apiKey = getResendApiKeyOrNull();
+  const result = await sendInviteEmail({ to: email, link: joinLink(token), expiresAt }, { apiKey });
+  const recorded = await client.rpc("admin_record_invite_send", { p_invite_id: inviteId, p_ok: result.ok, p_error: result.ok ? undefined : result.error });
+  console.log(
+    JSON.stringify({
+      source: "invite-send",
+      invite: inviteId,
+      to: maskEmail(email),
+      resendKeySet: apiKey !== null,
+      accepted: result.ok,
+      resendId: result.ok ? result.id : null,
+      error: result.ok ? null : result.error,
+      recordError: recorded.error?.message ?? null,
+    }),
+  );
+  if (result.ok && recorded.error) return { ok: false, error: `Resend accepted it (id ${result.id}) but the row could not be marked sent: ${recorded.error.message}` };
   return result;
 }
 

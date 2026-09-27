@@ -271,5 +271,11 @@ describe("the invitation email", () => {
       }) as unknown as typeof fetch,
     });
     expect(thrown).toEqual({ ok: false, error: "network down" });
+    // A 2xx without a message id is not proof Resend queued anything: not sent.
+    const noId = await sendInviteEmail({ to: "p@example.com", link: "l", expiresAt: at }, {
+      apiKey: "re_test",
+      fetch: (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch,
+    });
+    expect(noId).toEqual({ ok: false, error: "Resend 200 without a message id: not counted as sent" });
   });
 });

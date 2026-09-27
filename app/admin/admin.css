@@ -432,6 +432,10 @@ table.adm-t tfoot td {
 .adm-notice[data-tone="warn"] {
   color: var(--adm-warn);
 }
+.adm-notice[data-tone="bad"] {
+  color: var(--adm-bad);
+  background: var(--adm-bad-soft);
+}
 
 .adm-form {
   display: inline-flex;

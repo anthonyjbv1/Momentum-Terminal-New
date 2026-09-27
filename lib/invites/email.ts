@@ -72,7 +72,7 @@ export function inviteEmail({ to, link, expiresAt }: InviteEmailInput): InviteEm
   return { from: INVITE_FROM, reply_to: INVITE_REPLY_TO, to: [to], subject: "Your invitation to Momentum Terminal", text: lines.join("\n"), html };
 }
 
-export type SendResult = { ok: true; id: string | null } | { ok: false; error: string };
+export type SendResult = { ok: true; id: string } | { ok: false; error: string };
 
 export interface SendDeps {
   apiKey: string | null;
@@ -92,7 +92,9 @@ export async function sendInviteEmail(input: InviteEmailInput, deps: SendDeps): 
     });
     const body = (await response.json().catch(() => null)) as { id?: string; message?: string; name?: string } | null;
     if (!response.ok) return { ok: false, error: `Resend ${response.status}: ${body?.message ?? body?.name ?? "request failed"}`.slice(0, 300) };
-    return { ok: true, id: typeof body?.id === "string" ? body.id : null };
+    // Accepted means Resend gave the message an id; a 2xx without one is not proof it was queued.
+    if (typeof body?.id !== "string" || body.id === "") return { ok: false, error: `Resend ${response.status} without a message id: not counted as sent` };
+    return { ok: true, id: body.id };
   } catch (error) {
     return { ok: false, error: (error instanceof Error ? error.message : String(error)).slice(0, 300) };
   }
