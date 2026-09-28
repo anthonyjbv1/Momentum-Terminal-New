@@ -3,7 +3,7 @@ import "server-only";
 import { cache } from "react";
 
 import { loadCompaniesByPerson } from "@/lib/feed/enrich";
-import { isVoidedPayload } from "@/lib/signals/voided";
+import { isVoided } from "@/lib/signals/voided";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 import {
@@ -216,15 +216,17 @@ export const getPersonSignals = cache(async (person: SignalsSubject): Promise<Pr
   const [signals, narratives, companies] = await Promise.all([
     supabase
       .from("signals")
-      .select("id, headline, occurred_at, impact_score, sentiment_label, sentiment_confidence, processed, raw_payload, data_sources(display_name)")
+      .select("id, headline, occurred_at, impact_score, sentiment_label, sentiment_confidence, processed, raw_payload, voided_at, data_sources(display_name)")
       .eq("person_id", person.id)
+      .is("voided_at", null)
       .order("occurred_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(SIGNAL_LIMIT),
     supabase
       .from("narratives")
-      .select("id, text, created_at, score_before, score_after, narrative_signals(relation, signals(id, headline, occurred_at, impact_score, raw_payload, data_sources(display_name), people(display_name)))")
+      .select("id, text, created_at, score_before, score_after, narrative_signals(relation, signals(id, headline, occurred_at, impact_score, raw_payload, voided_at, data_sources(display_name), people(display_name)))")
       .eq("person_id", person.id)
+      .is("voided_at", null)
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(SIGNAL_LIMIT),
@@ -235,10 +237,10 @@ export const getPersonSignals = cache(async (person: SignalsSubject): Promise<Pr
   if (narratives.error) console.warn("[person] narratives read failed:", narratives.error.message);
 
   // A voided signal (a false input the operator struck) is neither a card nor evidence.
-  const liveSignals = ((signals.data ?? []) as unknown as SignalRow[]).filter((row) => !isVoidedPayload(row.raw_payload));
+  const liveSignals = ((signals.data ?? []) as unknown as SignalRow[]).filter((row) => !isVoided(row));
   const liveNarratives = ((narratives.data ?? []) as unknown as NarrativeRow[]).map((row) => ({
     ...row,
-    narrative_signals: (row.narrative_signals ?? []).filter((link) => !isVoidedPayload(link.signals?.raw_payload)),
+    narrative_signals: (row.narrative_signals ?? []).filter((link) => !isVoided(link.signals)),
   }));
 
   return mergeSignals(

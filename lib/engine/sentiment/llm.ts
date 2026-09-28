@@ -8,7 +8,7 @@ import { noopUsageLogger, recordedCall, type LLMUsageLogger } from "@/lib/llm/us
 import type { Json } from "@/types/database";
 
 import { TickCallBudget, type DeferralReason } from "./budget";
-import { guardNarrative } from "./grave-claims";
+import { guardNarrative, sourceOf, zeroedGraveClaim } from "./grave-claims";
 import { metricScorer as defaultMetricScorer } from "./metric";
 import { LIVE_MOMENT_KIND, prescoredScorer } from "./prescored";
 import { SENTIMENT_RESPONSE_SCHEMA, SENTIMENT_SYSTEM_PROMPT, buildSentimentUserPrompt } from "./prompts";
@@ -360,6 +360,10 @@ export class LLMScorer implements SentimentScorer {
       this.log("narrative withheld: grave claim without a reputable or second source", { personId, tickNumber, term: guarded.withheld.term, sources: guarded.withheld.sources, narrative: parsed.narrative });
     }
 
+    // The companion scoring rule: a signal the model assessed as a death, an
+    // arrest, a charge or a serious illness scores zero on the same test.
+    const sources = signals.map(sourceOf);
+
     const byId = new Map(parsed.signals.map((s) => [s.id, s]));
     const unmatched: Pending[] = [];
     for (const item of items) {
@@ -368,25 +372,34 @@ export class LLMScorer implements SentimentScorer {
         unmatched.push(item);
         continue;
       }
-      item.resolve(this.toResult(assessment, guarded.narrative));
+      const zeroed = zeroedGraveClaim(assessment.rationale, sources);
+      if (zeroed) {
+        this.log("signal zeroed: grave claim without a reputable or second source", { personId, tickNumber, signalId: item.signal.id, headline: item.signal.headline, term: zeroed, sources, rationale: assessment.rationale });
+      }
+      item.resolve(this.toResult(assessment, guarded.narrative, zeroed));
     }
     if (unmatched.length > 0) await this.fallbackFor(unmatched, "LLM omitted the signal from its response");
   }
 
-  private toResult(assessment: ParsedSignalAssessment, narrative: string | undefined): SentimentResult {
+  private toResult(assessment: ParsedSignalAssessment, narrative: string | undefined, zeroed: string | null = null): SentimentResult {
     const multiplier = {
       routine: this.config.routineConfidenceMultiplier,
       notable: this.config.notableConfidenceMultiplier,
       anomalous: this.config.anomalousConfidenceMultiplier,
     }[assessment.anomaly];
     const direction: SentimentResult["direction"] = assessment.label === "positive" ? 1 : assessment.label === "negative" ? -1 : 0;
-    const confidence = direction === 0 ? 0 : Math.round(clamp01(assessment.confidence * multiplier) * 1000) / 1000;
+    const assessed = direction === 0 ? 0 : Math.round(clamp01(assessment.confidence * multiplier) * 1000) / 1000;
+    // Zeroed: the label and direction are kept as the model gave them (the
+    // audit trail says what it thought), the confidence is 0, so the impact
+    // is 0, and the rationale says why.
+    const confidence = zeroed ? 0 : assessed;
+    const rationale = zeroed ? `${assessment.rationale} [zeroed: a grave claim ("${zeroed}") from no reputable or second source]`.slice(0, 400) : assessment.rationale;
     return {
       label: assessment.label,
       direction,
       confidence,
       anomaly: assessment.anomaly,
-      rationale: assessment.rationale,
+      rationale,
       narrative: narrative?.trim() || undefined,
       scorer: this.name,
     };

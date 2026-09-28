@@ -73,6 +73,21 @@ export function graveClaimSupported(sources: readonly NarrativeSource[]): boolea
   return outlets.size >= 2;
 }
 
+/**
+ * THE COMPANION SCORING RULE (decision 4, 2026-09-28). A signal whose
+ * ASSESSED content, the model's rationale for it, is a grave claim scores
+ * zero unless the batch carries a reputable publisher or two independent
+ * outlets. The rationale rather than the headline, because the rationale is
+ * the assessment: "Sued to Death" and "Killed Its Solar Roof" are headlines,
+ * and the model's reading of them says nothing grave. Returns the term when
+ * the signal is to be zeroed, null when it stands.
+ */
+export function zeroedGraveClaim(rationale: string | null | undefined, sources: readonly NarrativeSource[]): string | null {
+  const term = graveClaimTerm(rationale);
+  if (!term) return null;
+  return graveClaimSupported(sources) ? null : term;
+}
+
 export interface GuardedNarrative {
   narrative: string | undefined;
   /** Why the sentence was withheld; null when it stands. */

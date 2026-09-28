@@ -2,7 +2,7 @@ import "server-only";
 
 import { narrativeCard, projectSignalDetail, showsAsCard, signalCard, type CardEvidenceInput, type CardSubject } from "@/lib/feed/card-copy";
 import { loadCompaniesByPerson } from "@/lib/feed/enrich";
-import { isVoidedPayload } from "@/lib/signals/voided";
+import { isVoided } from "@/lib/signals/voided";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 import { buildBoard, type HomeBoard, type MomentumRow, type PersonRow } from "./board-model";
@@ -119,13 +119,15 @@ export async function getFeedPreview(limit = 8): Promise<FeedPreviewItem[]> {
   const [narratives, signals, companies] = await Promise.all([
     supabase
       .from("narratives")
-      .select("id, text, created_at, score_before, score_after, people(id, slug, display_name, category), narrative_signals(relation, signals(id, headline, occurred_at, impact_score, raw_payload, data_sources(display_name), people(display_name)))")
+      .select("id, text, created_at, score_before, score_after, people(id, slug, display_name, category), narrative_signals(relation, signals(id, headline, occurred_at, impact_score, raw_payload, voided_at, data_sources(display_name), people(display_name)))")
+      .is("voided_at", null)
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(limit),
     supabase
       .from("signals")
-      .select("id, headline, occurred_at, impact_score, processed, sentiment_label, raw_payload, people(id, slug, display_name, category), data_sources(display_name)")
+      .select("id, headline, occurred_at, impact_score, processed, sentiment_label, raw_payload, voided_at, people(id, slug, display_name, category), data_sources(display_name)")
+      .is("voided_at", null)
       .order("occurred_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(limit * 4),
@@ -146,7 +148,7 @@ export async function getFeedPreview(limit = 8): Promise<FeedPreviewItem[]> {
       const impact = Math.round((Number(row.score_after) - Number(row.score_before)) * 1000) / 1000;
       const evidence: CardEvidenceInput[] = (row.narrative_signals ?? []).flatMap((link) => {
         const signal = link.signals;
-        if (!signal || isVoidedPayload(signal.raw_payload)) return [];
+        if (!signal || isVoided(signal)) return [];
         const relation = link.relation === "inverse_pair" ? ("inverse_pair" as const) : ("direct" as const);
         return [
           {
@@ -176,7 +178,7 @@ export async function getFeedPreview(limit = 8): Promise<FeedPreviewItem[]> {
       };
     }),
     ...((signals.data ?? []) as unknown as SignalJoin[])
-      .filter((row) => !isVoidedPayload(row.raw_payload) && showsAsCard(numberOrNull(row.impact_score), row.processed ?? null))
+      .filter((row) => !isVoided(row) && showsAsCard(numberOrNull(row.impact_score), row.processed ?? null))
       .map((row) => {
         const copy = signalCard({
           subject: subjectOf(row.people),

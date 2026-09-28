@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { graveClaimSupported, graveClaimTerm, guardNarrative, sourceOf } from "./grave-claims";
+import { graveClaimSupported, graveClaimTerm, guardNarrative, sourceOf, zeroedGraveClaim } from "./grave-claims";
 import type { SentimentInput } from "./types";
 
 /**
@@ -88,5 +88,22 @@ describe("the guard, on the exact case", () => {
     const plain = "Larry Page's coverage picked up on a local station's item.";
     expect(guardNarrative(plain, [WGRV])).toEqual({ narrative: plain, withheld: null });
     expect(guardNarrative(undefined, [WGRV])).toEqual({ narrative: undefined, withheld: null });
+  });
+});
+
+describe("the companion scoring rule (decision 4): the signal scores zero on the same test", () => {
+  it("zeroes the wgrv.com item and the Legacy.com notice, each alone from an unknown outlet, on what the model assessed", () => {
+    expect(zeroedGraveClaim("Obituary published today confirms Larry Page's death, a catastrophic and unprecedented event for his momentum.", [sourceOf(WGRV)])).toBe("obituary");
+    expect(zeroedGraveClaim("Obituary published suggests death or severe health event, drastically weakening momentum regardless of verification status.", [{ tier: 5, outlet: "legacy.com" }])).toBe("obituary");
+  });
+
+  it("judges the assessment, not the headline: 'Sued to Death' and 'Killed Its Solar Roof' stand when the model read nothing grave", () => {
+    expect(zeroedGraveClaim("Huang's candid warning about lawsuit risk reinforces emerging concern narrative.", [{ tier: 5, outlet: "futurism.com" }])).toBeNull();
+    expect(zeroedGraveClaim("Relaunch of solar ambitions signals continued diversification within energy portfolio.", [{ tier: 3, outlet: "finance.yahoo.com" }])).toBeNull();
+  });
+
+  it("lets a grave assessment stand on a reputable outlet or two outlets", () => {
+    expect(zeroedGraveClaim("Death of a producer is contextual news without direct impact on Drake's current momentum trajectory.", [{ tier: 3, outlet: "hotnewhiphop.com" }, { tier: 2, outlet: "vice.com" }])).toBeNull();
+    expect(zeroedGraveClaim("Workplace death lawsuit creates legal and reputational liability.", [{ tier: 3, outlet: "rss" }, { tier: 5, outlet: "independent.co.uk" }])).toBeNull();
   });
 });
