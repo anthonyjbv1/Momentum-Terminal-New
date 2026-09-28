@@ -168,17 +168,17 @@ describe("an audience surge under the quality rules", () => {
     const { moment } = fired[0];
     expect(moment).toMatchObject({ moment: "audience_surge", direction: 1, rule: "quality", from: 40_050, to: 48_067, windowMinutes: 20 });
     expect(moment.magnitude).toBeCloseTo(0.2, 3);
-    // Full confidence at +30% above the level before the step (2026-09-28), not the source row's +50%: a +20% step reads 0.44, not 0.21.
-    expect(Q.fullConfidenceStepFraction).toBe(0.3);
+    // Full confidence at +20% above the level before the step (2026-09-28), not the source row's +50%: a +20% step is full confidence, not 0.21.
+    expect(Q.fullConfidenceStepFraction).toBe(0.2);
     expect(moment.confidence).toBeCloseTo(confidenceAboveThreshold(moment.magnitude, Q.stepFraction, Q.fullConfidenceStepFraction), 2);
-    expect(moment.confidence).toBeCloseTo(0.445, 2);
+    expect(moment.confidence).toBeCloseTo(1, 2);
     expect(moment.rationale).toContain("held at the next sample (52,000, +30%)");
   });
 
-  it("reads the 09-26 step (+12.7%) at 0.04 and a +30% step at full confidence; the source row's +50% no longer applies", () => {
-    expect(confidenceAboveThreshold(0.127, Q.stepFraction, Q.fullConfidenceStepFraction)).toBeCloseTo(0.039, 3);
-    expect(confidenceAboveThreshold(0.15, Q.stepFraction, Q.fullConfidenceStepFraction)).toBeCloseTo(0.167, 3);
-    expect(confidenceAboveThreshold(0.3, Q.stepFraction, Q.fullConfidenceStepFraction)).toBe(1);
+  it("reads the 09-26 step (+12.7% / +15.0%) at 0.09 / 0.37 and a +20% step at full confidence; the source row's +50% no longer applies", () => {
+    expect(confidenceAboveThreshold(0.127, Q.stepFraction, Q.fullConfidenceStepFraction)).toBeCloseTo(0.088, 3);
+    expect(confidenceAboveThreshold(0.15, Q.stepFraction, Q.fullConfidenceStepFraction)).toBeCloseTo(0.375, 3);
+    expect(confidenceAboveThreshold(0.2, Q.stepFraction, Q.fullConfidenceStepFraction)).toBe(1);
     // A +50% jump is read one sample earlier than the +20% step (the AFTER window mean clears 12% at 104, with one new reading
     // of 60,000 among three), so the magnitude at the confirmation is the window's mean, +16.7%, and the confidence follows it.
     const big = (m: number) => (m < 104 ? 40_000 : 60_000);

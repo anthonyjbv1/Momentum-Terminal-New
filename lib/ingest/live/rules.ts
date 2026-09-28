@@ -183,9 +183,10 @@ export const MAX_SAMPLE_INTERVAL_MINUTES = 5;
  *
  *   Confidence reads from the threshold, not from zero: a step exactly at
  *   stepFraction is confidence 0 and fullConfidenceStepFraction is 1 (decided
- *   2026-09-28: +30% above the level before the step, not the source row's
+ *   2026-09-28: +20% above the level before the step, not the source row's
  *   +50%, which was set for a 20% threshold and read the 09-26 step of +12.7%
- *   as 0.018). Clip bursts the same, from burstMultiple to
+ *   as 0.018; to be revisited once the person has five complete sessions and
+ *   the session shape turns on). Clip bursts the same, from burstMultiple to
  *   fullConfidenceMultiple.
  *
  *   Two readings are the minimum (decided 2026-09-28): the step read at the
@@ -242,7 +243,7 @@ export const LIVE_QUALITY_DEFAULTS: LiveQualityRules = {
   minRecentDistinct: 2,
   minBeforeSamples: 2,
   stepFraction: 0.12,
-  fullConfidenceStepFraction: 0.3,
+  fullConfidenceStepFraction: 0.2,
   judgeFromMinutes: 60,
   shapeMinSessions: 5,
   shapeSessions: 10,
