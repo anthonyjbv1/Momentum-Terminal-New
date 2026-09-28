@@ -139,13 +139,13 @@ describe("categoryOptions", () => {
       { value: "creator", label: "Creators", count: 2 },
       // Ties read alphabetically by what the reader sees.
       { value: "musician", label: "Artists", count: 1 },
-      { value: "executive", label: "Billionaires", count: 1 },
+      { value: "executive", label: "Executives", count: 1 },
     ]);
   });
 
   it("names one person singular and a group plural; the stored values are untouched", () => {
-    expect(["executive", "musician", "athlete", "creator"].map(categoryLabel)).toEqual(["Billionaire", "Artist", "Athlete", "Creator"]);
-    expect(["executive", "musician", "athlete", "creator"].map(categoryGroupLabel)).toEqual(["Billionaires", "Artists", "Athletes", "Creators"]);
+    expect(["executive", "musician", "athlete", "creator"].map(categoryLabel)).toEqual(["Executive", "Artist", "Athlete", "Creator"]);
+    expect(["executive", "musician", "athlete", "creator"].map(categoryGroupLabel)).toEqual(["Executives", "Artists", "Athletes", "Creators"]);
     // A category added later reads as itself until it is given words.
     expect(categoryLabel("founder")).toBe("Founder");
     expect(categoryGroupLabel("founder")).toBe("Founders");

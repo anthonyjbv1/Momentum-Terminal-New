@@ -2,6 +2,7 @@ import "server-only";
 
 import { narrativeCard, projectSignalDetail, showsAsCard, signalCard, type CardEvidenceInput, type CardSubject } from "@/lib/feed/card-copy";
 import { loadCompaniesByPerson } from "@/lib/feed/enrich";
+import { isVoidedPayload } from "@/lib/signals/voided";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 import { buildBoard, type HomeBoard, type MomentumRow, type PersonRow } from "./board-model";
@@ -145,7 +146,7 @@ export async function getFeedPreview(limit = 8): Promise<FeedPreviewItem[]> {
       const impact = Math.round((Number(row.score_after) - Number(row.score_before)) * 1000) / 1000;
       const evidence: CardEvidenceInput[] = (row.narrative_signals ?? []).flatMap((link) => {
         const signal = link.signals;
-        if (!signal) return [];
+        if (!signal || isVoidedPayload(signal.raw_payload)) return [];
         const relation = link.relation === "inverse_pair" ? ("inverse_pair" as const) : ("direct" as const);
         return [
           {
@@ -175,7 +176,7 @@ export async function getFeedPreview(limit = 8): Promise<FeedPreviewItem[]> {
       };
     }),
     ...((signals.data ?? []) as unknown as SignalJoin[])
-      .filter((row) => showsAsCard(numberOrNull(row.impact_score), row.processed ?? null))
+      .filter((row) => !isVoidedPayload(row.raw_payload) && showsAsCard(numberOrNull(row.impact_score), row.processed ?? null))
       .map((row) => {
         const copy = signalCard({
           subject: subjectOf(row.people),

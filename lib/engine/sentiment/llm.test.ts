@@ -358,3 +358,34 @@ describe("LLMScorer — the two outcomes", () => {
     expect(outcomes.filter(isDeferred)).toEqual([expect.objectContaining({ reason: "rate_limit" })]);
   });
 });
+
+describe("the narrative safety rule (hotfix 2026-09-28)", () => {
+  /** The wgrv.com item exactly as the scorer saw it: the RSS source at tier 3, the publisher resolved to 5. */
+  const wgrv: SentimentInput = {
+    id: "2d73f458-a4f8-4a3b-b3f5-ae810d9e1025",
+    personId: "p-buffett",
+    headline: "Larry Page",
+    rawPayload: { kind: "article", outlet: "wgrv.com", publisher_tier: 5, publisher_domain: "wgrv.com", publisher_status: "unknown" },
+    sourceName: "rss",
+    sourceTier: 3,
+  };
+  const death = "Larry Page has died. This ends his momentum profile as an active market figure.";
+
+  it("withholds a death written from one unknown outlet: the signal is still scored, the sentence is not kept, and the log says why", async () => {
+    const complete = fakeComplete(() => ({ label: "negative", confidence: 1, anomaly: "anomalous" }), death);
+    const { scorer, log } = makeScorer(complete);
+    const result = scored(await scorer.scoreSignal(wgrv));
+    expect(result).toMatchObject({ label: "negative", direction: -1, scorer: "llm" });
+    expect(result.narrative).toBeUndefined();
+    expect(log).toHaveBeenCalledWith("narrative withheld: grave claim without a reputable or second source", expect.objectContaining({ personId: "p-buffett", term: "died", sources: [{ tier: 5, outlet: "wgrv.com" }], narrative: death }));
+  });
+
+  it("keeps the same sentence when a reputable outlet is in the batch", async () => {
+    const complete = fakeComplete(() => ({ label: "negative", confidence: 1, anomaly: "anomalous" }), death);
+    const { scorer, log } = makeScorer(complete);
+    const reuters: SentimentInput = { ...wgrv, id: "s-reuters", headline: "Larry Page dies at 53", rawPayload: { kind: "article", publisher_tier: 1, publisher_domain: "reuters.com" } };
+    const results = (await Promise.all([scorer.scoreSignal(wgrv), scorer.scoreSignal(reuters)])).map(scored);
+    expect(results.map((r) => r.narrative)).toEqual([death, death]);
+    expect(log).not.toHaveBeenCalledWith("narrative withheld: grave claim without a reputable or second source", expect.anything());
+  });
+});

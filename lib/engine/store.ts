@@ -3,6 +3,7 @@ import type { MoodWindowHistory } from "@/lib/engine/forces/market-mood";
 import { isFreeSignal } from "@/lib/engine/selection";
 import { LIVE_MOMENT_KIND } from "@/lib/engine/sentiment/prescored";
 import { readSignalVolumeRow, type PersonSignalVolume, type PersonSignalVolumeRow } from "@/lib/engine/signal-volume";
+import { VOIDED_COLUMN_PATH } from "@/lib/signals/voided";
 import type {
   EngineSignal,
   SignalActivity,
@@ -111,6 +112,8 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
           .from("signals")
           .select("id, person_id, headline, raw_payload, occurred_at, created_at, tier, source:data_sources!inner(name, tier)")
           .eq("processed", false)
+          // A voided signal (a false input the operator struck) is never scored.
+          .is(VOIDED_COLUMN_PATH, null)
           // Newest first, then id: the ceiling's window must hold the signals
           // freshness weights highest, and a batch stamped with one timestamp
           // must be cut the same way every time.
@@ -118,7 +121,8 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
           .order("id")
           .limit(config.tick.loadCeiling),
         client.from("positions").select("person_id, amount_cents").eq("is_open", true),
-        client.from("signals").select("person_id, sentiment_confidence, processed_at, kind:raw_payload->>kind").eq("processed", true).gte("processed_at", depthSince),
+        // ...and no longer counts toward anyone's depth.
+        client.from("signals").select("person_id, sentiment_confidence, processed_at, kind:raw_payload->>kind").eq("processed", true).is(VOIDED_COLUMN_PATH, null).gte("processed_at", depthSince),
         client.from("trade_events").select("person_id, side, amount_cents, created_at").gte("created_at", tradesSince),
         client.from("inverse_pairs").select("*"),
         client.from("engine_ticks").select("tick_number").order("tick_number", { ascending: false }).limit(1).maybeSingle(),

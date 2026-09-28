@@ -8,6 +8,7 @@ import { noopUsageLogger, recordedCall, type LLMUsageLogger } from "@/lib/llm/us
 import type { Json } from "@/types/database";
 
 import { TickCallBudget, type DeferralReason } from "./budget";
+import { guardNarrative } from "./grave-claims";
 import { metricScorer as defaultMetricScorer } from "./metric";
 import { LIVE_MOMENT_KIND, prescoredScorer } from "./prescored";
 import { SENTIMENT_RESPONSE_SCHEMA, SENTIMENT_SYSTEM_PROMPT, buildSentimentUserPrompt } from "./prompts";
@@ -351,6 +352,14 @@ export class LLMScorer implements SentimentScorer {
       return;
     }
 
+    // The narrative safety rule: a grave claim (a death, an arrest, a charge,
+    // a serious illness) stands only on a reputable source or two independent
+    // outlets. Otherwise the sentence is withheld and the template speaks.
+    const guarded = guardNarrative(parsed.narrative, signals);
+    if (guarded.withheld) {
+      this.log("narrative withheld: grave claim without a reputable or second source", { personId, tickNumber, term: guarded.withheld.term, sources: guarded.withheld.sources, narrative: parsed.narrative });
+    }
+
     const byId = new Map(parsed.signals.map((s) => [s.id, s]));
     const unmatched: Pending[] = [];
     for (const item of items) {
@@ -359,7 +368,7 @@ export class LLMScorer implements SentimentScorer {
         unmatched.push(item);
         continue;
       }
-      item.resolve(this.toResult(assessment, parsed.narrative));
+      item.resolve(this.toResult(assessment, guarded.narrative));
     }
     if (unmatched.length > 0) await this.fallbackFor(unmatched, "LLM omitted the signal from its response");
   }

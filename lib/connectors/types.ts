@@ -199,11 +199,11 @@ export interface LiveCapability {
   liveSignal(person: Person, stream: LiveStream, now: Date): RawSignal;
 }
 
-/** An item a connector refused as being about somebody else. */
+/** An item a connector refused as being about somebody else, or as a namesake's obituary. */
 export interface ExcludedItem {
   /** The headline as the feed carried it, so an over-filtered item is recognisable in the log. */
   headline: string;
-  reason: "excluded_term" | "missing_context";
+  reason: "excluded_term" | "missing_context" | "obituary";
   /** The term that matched; null when the item simply carried none of the required context. */
   term: string | null;
 }

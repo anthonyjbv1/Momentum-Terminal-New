@@ -293,3 +293,57 @@ describe("entity disambiguation", () => {
     expect(fetch.calls[0]).toBe(feedUrlFor('"Drake"'));
   });
 });
+
+describe("the obituary guard on the feed (hotfix 2026-09-28)", () => {
+  beforeEach(() => resetFeedCache());
+
+  /** Larry Page's feed as it stood on 2026-09-28: the Legacy.com notice of the 26th and the wgrv.com item of the 28th, beside a real story. */
+  const PAGE = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>"Larry Page" - Google News</title>
+    <item>
+      <title><![CDATA[Larry Page - wgrv.com]]></title>
+      <link>https://news.google.com/rss/articles/wgrv</link><guid isPermaLink="false">wgrv</guid>
+      <pubDate>Mon, 28 Sep 2026 17:35:03 GMT</pubDate><source url="https://wgrv.com">wgrv.com</source>
+    </item>
+    <item>
+      <title><![CDATA[Larry Page Obituary (2026) - Greeneville, TN - Legacy obituary]]></title>
+      <link>https://news.google.com/rss/articles/legacy</link><guid isPermaLink="false">legacy</guid>
+      <pubDate>Sat, 26 Sep 2026 07:00:00 GMT</pubDate><source url="https://www.legacy.com">Legacy obituary</source>
+    </item>
+    <item>
+      <title><![CDATA[Alphabet co-founder Larry Page backs a new flying-car venture - Bloomberg.com]]></title>
+      <link>https://news.google.com/rss/articles/bloomberg</link><guid isPermaLink="false">bloomberg</guid>
+      <pubDate>Sun, 27 Sep 2026 12:00:00 GMT</pubDate><source url="https://www.bloomberg.com">Bloomberg.com</source>
+    </item>
+  </channel>
+</rss>`;
+  const POLL = new Date("2026-09-28T17:45:00.000Z");
+  const page = makePerson({ id: "p-page", slug: "larry-page", display_name: "Larry Page", full_name: "Lawrence Edward Page", category: "executive" });
+
+  const ctx = (fetch: typeof globalThis.fetch, excluded: unknown[]) => ({
+    source: makeSource({ name: "rss" }),
+    config: {} as Record<string, never>,
+    snapshots: { latest: async () => null, record: () => undefined },
+    now: POLL,
+    fetch,
+    exclude: (item: unknown) => excluded.push(item),
+  });
+
+  it("refuses the Legacy.com notice with no rules configured and no switch, keeps the wgrv.com item (not an obituary) and the real story", async () => {
+    const excluded: unknown[] = [];
+    const fetch = fakeFetchRoutes([{ match: "news.google.com/rss/search", body: PAGE }]);
+    const signals = await rssConnector.fetchForPerson(page, feedUrlFor('"Larry Page"'), ctx(fetch, excluded));
+    expect(signals.map((s) => s.headline)).toEqual(["Larry Page", "Alphabet co-founder Larry Page backs a new flying-car venture"]);
+    expect(excluded).toEqual([{ headline: "Larry Page Obituary (2026) - Greeneville, TN - Legacy obituary", reason: "obituary", term: "obituary" }]);
+  });
+
+  it("keeps the notice out of news_volume_24h too", async () => {
+    const fetch = fakeFetchRoutes([{ match: "news.google.com/rss/search", body: PAGE }]);
+    const c = ctx(fetch, []);
+    const [reading] = await rssConnector.fetchMetrics!(page, feedUrlFor('"Larry Page"'), c);
+    // Inside the trailing 24 h of the poll: only the wgrv.com item.
+    expect(reading).toEqual({ metricKey: "news_volume_24h", value: 1 });
+  });
+});

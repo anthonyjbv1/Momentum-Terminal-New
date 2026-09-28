@@ -186,6 +186,8 @@ function toEvidence(value: unknown, details: ReadonlyMap<string, SignalDetail>):
     if (typeof item !== "object" || item === null) continue;
     const record = item as Record<string, unknown>;
     if (typeof record.id !== "string" || typeof record.headline !== "string") continue;
+    // A voided signal is not evidence of anything.
+    if (details.get(record.id)?.voided) continue;
     const relation: FeedEvidenceRelation = record.relation === "inverse_pair" ? "inverse_pair" : "direct";
     const personName = typeof record.person_name === "string" ? record.person_name : null;
     const personSlug = typeof record.person_slug === "string" ? record.person_slug : "";
@@ -243,6 +245,8 @@ export function evidenceDetailLines(item: FeedEvidence, subject: CardSubject): M
 export function toFeedEntry(row: FeedRow, context: FeedRowContext = EMPTY_CONTEXT): FeedEntry | null {
   const kind: FeedEntryKind | null = row.kind === "narrative" ? "narrative" : row.kind === "signal" ? "signal" : null;
   if (!kind || !row.id || !row.person_id || !row.occurred_at) return null;
+  // A signal the operator voided as a false input is no card at all.
+  if (kind === "signal" && context.details.get(row.id)?.voided) return null;
 
   const evidence = toEvidence(row.evidence, context.details);
   const sources = [...new Set((row.sources ?? []).filter((name): name is string => typeof name === "string" && name.length > 0))];

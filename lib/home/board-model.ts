@@ -91,7 +91,7 @@ function toNullableNumber(value: unknown): number | null {
  * ("Artists 3"). A value with no entry here reads as itself, capitalised.
  */
 const CATEGORY_WORDS: Record<string, { one: string; many: string }> = {
-  executive: { one: "Billionaire", many: "Billionaires" },
+  executive: { one: "Executive", many: "Executives" },
   musician: { one: "Artist", many: "Artists" },
   athlete: { one: "Athlete", many: "Athletes" },
   creator: { one: "Creator", many: "Creators" },
@@ -99,12 +99,12 @@ const CATEGORY_WORDS: Record<string, { one: string; many: string }> = {
 
 const capitalised = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
 
-/** One person's category: "executive" -> "Billionaire". */
+/** One person's category: "musician" -> "Artist". */
 export function categoryLabel(category: string): string {
   return CATEGORY_WORDS[category]?.one ?? capitalised(category);
 }
 
-/** A category as a group, for filters: "executive" -> "Billionaires". */
+/** A category as a group, for filters: "musician" -> "Artists". */
 export function categoryGroupLabel(category: string): string {
   return CATEGORY_WORDS[category]?.many ?? `${capitalised(category)}s`;
 }

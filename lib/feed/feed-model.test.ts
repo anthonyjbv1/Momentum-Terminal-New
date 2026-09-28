@@ -306,3 +306,25 @@ describe("a metric signal reads as plain language, whenever it was stored (Phase
     expect(withoutCounts.some((line) => line.value.includes("fortnight"))).toBe(true);
   });
 });
+
+describe("a voided signal (hotfix 2026-09-28)", () => {
+  const voided: SignalDetail = { kind: "article", outlet: "wgrv.com", domain: "wgrv.com", link: null, digest: null, voided: true };
+
+  it("is no card at all", () => {
+    const id = "2d73f458-a4f8-4a3b-b3f5-ae810d9e1025";
+    const entry = toFeedEntry(
+      row({ kind: "signal", id, text: "Larry Page", impact: -0.9, score_before: null, score_after: null, tick_number: null, sources: ["RSS (per-person news feed)"], evidence: [{ id, headline: "Larry Page", source: "RSS (per-person news feed)", impact: -0.9, occurred_at: iso(NOW), processed: true }] }),
+      { details: new Map([[id, voided]]), companies: new Map() },
+    );
+    expect(entry).toBeNull();
+  });
+
+  it("is not evidence under a narrative", () => {
+    const id = "2d73f458-a4f8-4a3b-b3f5-ae810d9e1025";
+    const entry = toFeedEntry(
+      row({ evidence: [{ id, headline: "Larry Page", source: "RSS (per-person news feed)", impact: -0.9, occurred_at: iso(NOW), processed: true }] }),
+      { details: new Map([[id, voided]]), companies: new Map() },
+    );
+    expect(entry?.evidence).toEqual([]);
+  });
+});

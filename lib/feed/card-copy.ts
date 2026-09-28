@@ -1,4 +1,5 @@
 import { detailForPayload, readMetricPayload, sentenceForPayload, type MetricDetailLine } from "@/lib/signals/metric-language";
+import { isVoidedPayload } from "@/lib/signals/voided";
 
 /**
  * ONE VOICE FOR EVERY CARD (Phase 30).
@@ -55,6 +56,8 @@ export interface SignalDetail {
   domain: string | null;
   link: string | null;
   digest: { lean: "positive" | "negative" | "mixed" | null; videoTitle: string | null; sampled: number | null } | null;
+  /** The operator voided the signal as a false input: no card, no evidence line. */
+  voided?: boolean;
 }
 
 export const NO_DETAIL: SignalDetail = { kind: null, outlet: null, domain: null, link: null, digest: null };
@@ -81,6 +84,7 @@ export function projectSignalDetail(payload: unknown): SignalDetail {
     domain: detailText(record.publisher_domain, 253),
     link: link && /^https?:\/\//i.test(link) ? link : null,
     digest: kind === "comment_digest" ? { lean, videoTitle: detailText(record.videoTitle, 200), sampled } : null,
+    ...(isVoidedPayload(payload) ? { voided: true } : {}),
   };
 }
 

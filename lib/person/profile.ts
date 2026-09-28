@@ -3,6 +3,7 @@ import "server-only";
 import { cache } from "react";
 
 import { loadCompaniesByPerson } from "@/lib/feed/enrich";
+import { isVoidedPayload } from "@/lib/signals/voided";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 import {
@@ -233,9 +234,16 @@ export const getPersonSignals = cache(async (person: SignalsSubject): Promise<Pr
   if (signals.error) console.warn("[person] signals read failed:", signals.error.message);
   if (narratives.error) console.warn("[person] narratives read failed:", narratives.error.message);
 
+  // A voided signal (a false input the operator struck) is neither a card nor evidence.
+  const liveSignals = ((signals.data ?? []) as unknown as SignalRow[]).filter((row) => !isVoidedPayload(row.raw_payload));
+  const liveNarratives = ((narratives.data ?? []) as unknown as NarrativeRow[]).map((row) => ({
+    ...row,
+    narrative_signals: (row.narrative_signals ?? []).filter((link) => !isVoidedPayload(link.signals?.raw_payload)),
+  }));
+
   return mergeSignals(
-    (signals.data ?? []) as unknown as SignalRow[],
-    (narratives.data ?? []) as unknown as NarrativeRow[],
+    liveSignals,
+    liveNarratives,
     SIGNAL_LIMIT,
     { name: person.displayName, category: person.category, company: companies.get(person.id) ?? null },
   );

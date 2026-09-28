@@ -1,6 +1,6 @@
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
-import { applyQueryExclusions, excludeReason, hasRules, readDisambiguation, type ExclusionVerdict } from "@/lib/ingest/disambiguation";
+import { applyQueryExclusions, excludeReason, obituaryReason, readDisambiguation, type ExclusionVerdict } from "@/lib/ingest/disambiguation";
 import { publisherDomainOf, type PublisherPolicy } from "@/lib/ingest/publishers";
 import { collapseStories, personNames, storyTokens, stripOutletSuffix } from "@/lib/ingest/stories";
 import type { Json } from "@/types/database";
@@ -310,17 +310,15 @@ async function loadFeed(identifier: string, context: ConnectorContext): Promise<
 
   // Post-fetch, over the title as the feed wrote it — which on Google News
   // still carries the outlet suffix, so an outlet's own name ("Drake
-  // Athletics") counts as evidence too.
+  // Athletics") counts as evidence too. Then the obituary guard, on every
+  // feed whether or not it has rules: the headline without its outlet suffix,
+  // the outlet, and the publisher's domain.
   const items: FeedItem[] = [];
   const refused: Array<{ item: FeedItem; verdict: ExclusionVerdict }> = [];
-  if (hasRules(rules)) {
-    for (const item of parsed.items) {
-      const verdict = excludeReason(`${item.title} ${item.outlet ?? ""}`, rules);
-      if (verdict) refused.push({ item, verdict });
-      else items.push(item);
-    }
-  } else {
-    items.push(...parsed.items);
+  for (const item of parsed.items) {
+    const verdict = excludeReason(`${item.title} ${item.outlet ?? ""}`, rules) ?? obituaryReason({ headline: stripOutletSuffix(item.title, item.outlet), outlet: item.outlet, domain: publisherDomainOf(item).domain });
+    if (verdict) refused.push({ item, verdict });
+    else items.push(item);
   }
   const feed = { title: parsed.title, items };
 
