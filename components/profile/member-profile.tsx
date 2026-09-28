@@ -38,22 +38,28 @@ export function MemberProfile({ view }: { view: ProfileView }) {
             <p className="text-base text-fg-muted">@{view.username}</p>
             <p className="text-sm text-fg-muted">{PROFILE.joined.replace("{date}", joinDate(view.joinedAt))}</p>
           </div>
-          <dl className="flex max-w-sm items-start justify-between gap-2 sm:gap-6" data-testid="profile-stats">
+          <dl className="grid max-w-sm grid-cols-3" data-testid="profile-stats">
             <StatLink href="#following" label={PROFILE.stats.following} value={view.following.length} />
             <StatLink href="#forecasts" label={PROFILE.stats.forecasts} value={view.activity.forecasts} />
-            <StatLink href="#trades" label={PROFILE.stats.trades} value={view.activity.trades} />
+            <StatLink href="/portfolio" label={PROFILE.stats.trades} value={view.activity.trades} />
           </dl>
           {view.bio ? <p className="max-w-prose text-base text-fg-secondary">{view.bio}</p> : null}
           <EditProfileSheet displayName={view.displayName} bio={view.bio} hasPhoto={view.hasUploadedPhoto} />
         </div>
       </header>
 
-      <Section id="trades" title={PROFILE.activity.title} meta={<Link href="/portfolio" className="font-medium text-fg-secondary hover:text-fg">{PROFILE.activity.portfolio}</Link>}>
-        <Card className="grid grid-cols-3 divide-x divide-line">
-          <Stat label={PROFILE.activity.openPositions} value={view.activity.openPositions} />
-          <Stat label={PROFILE.activity.trades} value={view.activity.trades} />
-          <Stat label={PROFILE.activity.forecasts} value={view.activity.forecasts} />
-        </Card>
+      {/* Trades and Forecasts are in the header now; what is left is one line, not a box with one tile. */}
+      <Section title={PROFILE.activity.title}>
+        <p className="px-1 text-base text-fg-secondary">
+          <span className="font-medium tabular-nums text-fg">{view.activity.openPositions.toLocaleString("en-US")}</span> {view.activity.openPositions === 1 ? PROFILE.activity.openPositionOne : PROFILE.activity.openPositionsMany}
+          <span className="text-fg-faint" aria-hidden>
+            {" "}
+            ·{" "}
+          </span>
+          <Link href="/portfolio" className="font-medium text-fg-secondary hover:text-fg">
+            {PROFILE.activity.portfolio}
+          </Link>
+        </p>
       </Section>
 
       <Section id="forecasts" title={PROFILE.record.title}>
@@ -136,21 +142,13 @@ function Section({ id, title, meta, children }: { id?: string; title: string; me
   );
 }
 
-/** One count in the header: the number, bold, above its small label; the whole thing a link to its section. */
+/** One count in the header: the number, bold, above its small label, centred in its column; the whole thing a link. */
 function StatLink({ href, label, value }: { href: string; label: string; value: number }) {
   return (
-    <a href={href} className="group flex min-w-0 flex-col items-start gap-0.5 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+    <a href={href} className="group flex min-w-0 flex-col items-center gap-0.5 rounded-lg text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
       <dd className="text-xl font-semibold tracking-tight tabular-nums text-fg sm:text-2xl">{value.toLocaleString("en-US")}</dd>
       <dt className="text-xs text-fg-muted transition-colors group-hover:text-fg-secondary sm:text-sm">{label}</dt>
     </a>
   );
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="flex flex-col gap-1 px-4 py-5 sm:px-6">
-      <p className="text-2xl font-semibold tracking-tight tabular-nums text-fg">{value.toLocaleString("en-US")}</p>
-      <p className="text-xs text-fg-muted sm:text-sm">{label}</p>
-    </div>
-  );
-}

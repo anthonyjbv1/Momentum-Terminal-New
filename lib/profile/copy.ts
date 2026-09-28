@@ -33,9 +33,8 @@ export const PROFILE = {
   },
   activity: {
     title: "Activity",
-    openPositions: "Open positions",
-    trades: "Trades",
-    forecasts: "Forecasts",
+    openPositionOne: "open position",
+    openPositionsMany: "open positions",
     portfolio: "Open portfolio",
   },
   record: {
