@@ -22,7 +22,7 @@ export default async function HomePage() {
     <div className="flex flex-col gap-10">
       <PageHeader
         title="Home"
-        description="Every person the Engine tracks, ranked by momentum. Buy the ones heating up, sell the ones cooling off."
+        description="Discover who’s trending"
       />
       <PeopleBoard board={board} loggingEnabled={Boolean(user)} followingIds={followingIds} />
     </div>

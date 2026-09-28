@@ -45,7 +45,7 @@ export default async function PortfolioPage() {
 
   return (
     <div className="flex flex-col gap-10">
-      <PageHeader title="Portfolio" description="What you hold, how it is doing, and every trade you have made. Paper money, marked at the Sell side of the market price." />
+      <PageHeader title="Portfolio" description="View and manage your positions" />
 
       {summary ? (
         <PortfolioView
