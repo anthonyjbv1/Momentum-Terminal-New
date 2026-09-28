@@ -8,10 +8,10 @@ import { formatCents } from "@/lib/money";
 import { ONBOARDING, previousStep, progressLabel, type OnboardingStep } from "@/lib/onboarding/copy";
 
 /**
- * THE ONBOARDING SCREENS' FRAME AND THE TWO SCREENS THAT ASK NOTHING
- * (Phase 32). Every sentence comes from lib/onboarding/copy.ts. Each screen
- * says where it is ("2 of 4") in words, offers Skip on every screen, and
- * Back from the second on. No bar fills, nothing counts down.
+ * THE ONBOARDING SCREENS' FRAME AND THE WELCOME (Phase 32, Phase 32b).
+ * Every sentence comes from lib/onboarding/copy.ts. Each screen says where
+ * it is ("1 of 3") in words, offers Skip on every screen, and Back from the
+ * second on. No bar fills, nothing counts down.
  */
 
 export function StepFrame({ step, title, children }: { step: OnboardingStep; title: string; children: ReactNode }) {
@@ -54,26 +54,11 @@ export function StepNav({ step }: { step: OnboardingStep }) {
   );
 }
 
-export function WhatStep() {
-  const copy = ONBOARDING.what;
-  return (
-    <StepFrame step="what" title={copy.title}>
-      <div className="flex flex-col gap-4">
-        {[copy.score, copy.price].map((block) => (
-          <Card key={block.label} className="flex flex-col gap-2 p-5 sm:p-6">
-            <h2 className="text-lg font-semibold tracking-tight text-fg">{block.label}</h2>
-            <p className="text-base text-fg-secondary">{block.body}</p>
-          </Card>
-        ))}
-        <Link href="/how-the-price-works" target="_blank" rel="noopener" className="px-1 text-sm font-medium text-fg underline underline-offset-4">
-          {copy.more}
-        </Link>
-      </div>
-      <StepNav step="what" />
-    </StepFrame>
-  );
-}
-
+/**
+ * THE WELCOME: the paper balance and what paper means. The one screen every
+ * new account sees before anything else; Next leads to the tour, and the
+ * screen says so.
+ */
 export function PaperStep({ balanceCents }: { balanceCents: number }) {
   const copy = ONBOARDING.paper;
   const [first, ...rest] = copy.balance.split("{balance}");
@@ -93,6 +78,7 @@ export function PaperStep({ balanceCents }: { balanceCents: number }) {
           ))}
         </ul>
       </Card>
+      <p className="px-1 text-sm text-fg-muted">{copy.next}</p>
       <StepNav step="paper" />
     </StepFrame>
   );

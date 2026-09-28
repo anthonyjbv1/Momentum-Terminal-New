@@ -49,6 +49,8 @@ export const PROFILE = {
     saved: "Saved.",
     updates: "Email me occasional product updates",
     updatesHint: "Off unless you turn it on. Invitations and sign-in links are sent either way.",
+    tour: "Take the tour again",
+    tourHint: "The short walk through one person's page: the score, the market price, the forces, and where Portfolio and Feed are.",
   },
   account: {
     title: "Account",

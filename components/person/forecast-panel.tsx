@@ -102,7 +102,7 @@ export function ForecastPanel({ person, summary: initialSummary, signedIn, ownVo
   const showVoting = signedIn && (!ownVote || changing);
 
   return (
-    <section aria-labelledby="forecast-heading" className={cn("flex flex-col gap-4", className)}>
+    <section aria-labelledby="forecast-heading" data-tour="forecast" className={cn("flex flex-col gap-4", className)}>
       <SectionHeader title={FORECAST_SECTION_TITLE} meta={summary.total > 0 ? <span className="tabular-nums">{forecastsLabel(summary.total)}</span> : null} />
       <h2 id="forecast-heading" className="sr-only">
         {FORECAST_SECTION_TITLE}

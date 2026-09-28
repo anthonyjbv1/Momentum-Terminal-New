@@ -121,7 +121,7 @@ function ChangeLine({ change, rangeLabel }: { change: PeriodChange; rangeLabel: 
 function MarketLine({ marketPrice, premiumCents }: { marketPrice: number; premiumCents: number }) {
   const market = marketLine({ premiumCents });
   return (
-    <p className="flex flex-wrap items-center gap-x-2 text-sm tabular-nums text-fg-muted">
+    <p data-tour="market" className="flex flex-wrap items-center gap-x-2 text-sm tabular-nums text-fg-muted">
       <span>
         Market <span key={premiumCents} className="font-medium text-fg-secondary animate-tick-flash">{formatCents(pointsToCents(marketPrice))}</span>
       </span>
@@ -283,7 +283,10 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnable
       <Card className="flex flex-col gap-8 p-6 sm:p-8">
         <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between md:gap-10">
           <div className="flex min-w-0 flex-col gap-4">
-            <ScoreDisplay score={state.score} size="xl" flash />
+            {/* data-tour: the guided tour's first two stops (Phase 32b) light the number and the market line. */}
+            <span data-tour="score" className="self-start">
+              <ScoreDisplay score={state.score} size="xl" flash />
+            </span>
 
             {change ? <ChangeLine change={change} rangeLabel={rangeLabel} /> : <p className="text-base text-fg-muted">No change recorded yet</p>}
 

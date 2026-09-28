@@ -37,7 +37,7 @@ const impactTones = {
 
 export function SignalsList({ items, personId, personName, loggingEnabled, renderedAt, className }: SignalsListProps) {
   return (
-    <section aria-labelledby="signals-heading" className={cn("flex flex-col gap-4", className)}>
+    <section aria-labelledby="signals-heading" data-tour="signals" className={cn("flex flex-col gap-4", className)}>
       <SectionHeader
         title="Signals"
         meta={

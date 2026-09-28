@@ -175,6 +175,8 @@
   --shadow-card: inset 0 1px 0 0 color-mix(in oklab, var(--color-fg) 4%, transparent);
   --shadow-raised: inset 0 1px 0 0 color-mix(in oklab, var(--color-fg) 6%, transparent), 0 24px 48px -24px oklch(0% 0 0 / 0.9);
   --shadow-overlay: inset 0 1px 0 0 color-mix(in oklab, var(--color-fg) 6%, transparent), 0 32px 80px -24px oklch(0% 0 0 / 0.95);
+  /* The guided tour's light (Phase 32b): a shadow so wide it dims the whole page except the element it sits on. */
+  --shadow-tour: 0 0 0 200vmax oklch(0% 0 0 / 0.72);
 
   /* ---------------------------------------------------------------------------
      Motion
@@ -250,5 +252,7 @@
   --z-overlay: 30;
   --z-sheet: 35;
   --z-banner: 50;
+  /* The guided tour (Phase 32b): above the banner and the bars it points at, below toasts. */
+  --z-tour: 55;
   --z-toast: 60;
 }

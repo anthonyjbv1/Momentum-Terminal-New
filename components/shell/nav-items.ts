@@ -5,13 +5,15 @@ export interface NavItem {
   href: string;
   label: string;
   icon: LucideIcon;
+  /** Stable name, for the tour's anchors (`data-tour="nav-<key>"`, Phase 32b) and nothing else. */
+  key: "home" | "portfolio" | "feed" | "profile";
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { href: "/", label: "Home", icon: House },
-  { href: "/portfolio", label: "Portfolio", icon: ChartPie },
-  { href: "/feed", label: "Feed", icon: Newspaper },
-  { href: "/profile", label: "Profile", icon: CircleUser },
+  { href: "/", label: "Home", icon: House, key: "home" },
+  { href: "/portfolio", label: "Portfolio", icon: ChartPie, key: "portfolio" },
+  { href: "/feed", label: "Feed", icon: Newspaper, key: "feed" },
+  { href: "/profile", label: "Profile", icon: CircleUser, key: "profile" },
 ];
 
 export function isNavItemActive(href: string, pathname: string): boolean {

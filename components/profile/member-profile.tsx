@@ -87,6 +87,12 @@ export function MemberProfile({ view }: { view: ProfileView }) {
           </Field>
           <DisplayNameForm value={view.displayName} />
           <EmailUpdatesForm on={view.emailUpdates} />
+          <div className="flex flex-col gap-2 border-t border-line pt-5">
+            <Link href="/start?step=tour&return=profile" className={buttonClassName("outline", "sm", "self-start")}>
+              {PROFILE.settings.tour}
+            </Link>
+            <p className="text-xs text-fg-muted">{PROFILE.settings.tourHint}</p>
+          </div>
         </Card>
       </Section>
 

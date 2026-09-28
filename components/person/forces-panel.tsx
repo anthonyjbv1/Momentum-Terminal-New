@@ -136,7 +136,7 @@ export function ForcesPanel({ forces, market, latestTick, curved, className }: F
   const span = forcesWindowLabel(FORCES_WINDOW_MINUTES);
 
   return (
-    <section aria-labelledby="forces-heading" className={cn("flex flex-col gap-4", className)}>
+    <section aria-labelledby="forces-heading" data-tour="forces" className={cn("flex flex-col gap-4", className)}>
       <SectionHeader
         title="The five forces"
         meta={
