@@ -21,6 +21,8 @@ export interface ProfileView {
   email: string;
   username: string;
   displayName: string;
+  /** The optional line under the name; null when empty, and then not shown. */
+  bio: string | null;
   joinedAt: string;
   avatarSrc: string | null;
   hasUploadedPhoto: boolean;
@@ -51,6 +53,7 @@ export const getMyProfileView = cache(async (): Promise<ProfileView | null> => {
     email: user.email ?? profile.email,
     username: profile.username,
     displayName: profile.display_name,
+    bio: profile.bio ?? null,
     joinedAt: profile.created_at,
     avatarSrc: avatarSource(profile),
     hasUploadedPhoto: Boolean(profile.avatar_path),

@@ -16,6 +16,21 @@ export const PROFILE = {
     removed: "Photo removed.",
     tooBig: "That photo is over 2 MB. Choose a smaller one.",
   },
+  stats: {
+    following: "Following",
+    forecasts: "Forecasts",
+    trades: "Trades",
+  },
+  edit: {
+    button: "Edit profile",
+    title: "Edit profile",
+    description: "Your photo, your name and a line about you. Only you and the operator can see your profile.",
+    photo: "Photo",
+    bio: "Bio",
+    bioHint: "Optional. Plain text, up to 150 characters, no links.",
+    saved: "Saved.",
+    save: "Save",
+  },
   activity: {
     title: "Activity",
     openPositions: "Open positions",
@@ -66,6 +81,7 @@ export const DELETE_PAGE = {
     title: "Deleted",
     items: [
       "Your email address, username, display name and photo",
+      "Your bio",
       "The people you follow",
       "The record of what you opened and tapped in the app",
       "The network hash stored with your trades",

@@ -8,7 +8,7 @@ import { redirect } from "next/navigation";
 import { getCurrentProfile } from "@/lib/auth";
 import { isBetaSignupEnabled } from "@/lib/env";
 import { PROFILE } from "@/lib/profile/copy";
-import { AVATAR_PATH_PATTERN, DELETE_REFUSALS, avatarObjectPath, checkAvatar, validateDisplayName } from "@/lib/profile/model";
+import { AVATAR_PATH_PATTERN, DELETE_REFUSALS, avatarObjectPath, checkAvatar, validateBio, validateDisplayName } from "@/lib/profile/model";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 
@@ -41,6 +41,20 @@ export async function updateDisplayNameAction(_prev: ProfileFormState, form: For
   if (error) return { error: "Could not save. Nothing was changed." };
   revalidatePath("/", "layout");
   return { ok: PROFILE.settings.saved };
+}
+
+/** The Edit profile sheet: the display name and the bio, saved together, each with its own validation. */
+export async function updateProfileAction(_prev: ProfileFormState, form: FormData): Promise<ProfileFormState> {
+  const profile = await member();
+  const name = validateDisplayName(form.get("display_name"));
+  if (!name.ok) return { error: name.message };
+  const bio = validateBio(form.get("bio"));
+  if (!bio.ok) return { error: bio.message };
+  const supabase = await createSupabaseServerClient();
+  const { error } = await supabase.from("users").update({ display_name: name.value, bio: bio.value }).eq("id", profile.id);
+  if (error) return { error: "Could not save. Nothing was changed." };
+  revalidatePath("/", "layout");
+  return { ok: PROFILE.edit.saved };
 }
 
 export async function updateEmailUpdatesAction(_prev: ProfileFormState, form: FormData): Promise<ProfileFormState> {

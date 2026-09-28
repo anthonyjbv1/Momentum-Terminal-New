@@ -4,6 +4,8 @@ import { copyViolations } from "@/lib/copy-rules";
 
 import {
   AVATAR_MAX_BYTES,
+  BIO_MAX,
+  validateBio,
   AVATAR_PATH_PATTERN,
   DELETE_REFUSALS,
   avatarObjectPath,
@@ -72,5 +74,32 @@ describe("profile words", () => {
   it("explains every deletion refusal without breaking the house rules", () => {
     for (const code of ["open_positions", "operator", "unknown", "unavailable", "unconfirmed"]) expect(DELETE_REFUSALS[code]).toBeTruthy();
     expect(Object.values(DELETE_REFUSALS).flatMap((line) => copyViolations(line))).toEqual([]);
+  });
+});
+
+describe("validateBio (2026-09-28)", () => {
+  it("is optional: empty and whitespace store as null", () => {
+    expect(validateBio("")).toEqual({ ok: true, value: null });
+    expect(validateBio("   ")).toEqual({ ok: true, value: null });
+    expect(validateBio(undefined)).toEqual({ ok: true, value: null });
+  });
+
+  it("keeps plain text up to 150 characters, whitespace collapsed", () => {
+    expect(validateBio("  Paper trader.   Forecasts on Fridays. ")).toEqual({ ok: true, value: "Paper trader. Forecasts on Fridays." });
+    expect(validateBio("a".repeat(BIO_MAX))).toEqual({ ok: true, value: "a".repeat(BIO_MAX) });
+    expect(validateBio("a".repeat(BIO_MAX + 1))).toEqual({ ok: false, message: "Keep the bio to 150 characters." });
+  });
+
+  it("refuses links in every usual shape, and control characters", () => {
+    for (const text of ["see https://example.com", "www.example.com", "find me at example.com", "my page: something.app", "mixed CASE Example.COM"]) {
+      expect(validateBio(text), text).toEqual({ ok: false, message: "No links in the bio." });
+    }
+    expect(validateBio("tab\there")).toEqual({ ok: true, value: "tab here" });
+    expect(validateBio("bell\u0007")).toEqual({ ok: false, message: "Use letters, numbers and punctuation only." });
+  });
+
+  it("does not mistake ordinary punctuation for a link", () => {
+    expect(validateBio("I like forks. Mostly.")).toEqual({ ok: true, value: "I like forks. Mostly." });
+    expect(validateBio("Dr. Smith, e.g. a fan of momentum. 2.5x a day.")).toEqual({ ok: true, value: "Dr. Smith, e.g. a fan of momentum. 2.5x a day." });
   });
 });

@@ -63,3 +63,12 @@ describe("the deletion screen tells the truth", () => {
     expect(PRIVACY.sections.find((section) => section.title === "How long")!.body.join(" ")).toMatch(/seven days/);
   });
 });
+
+describe("the bio (2026-09-28)", () => {
+  it("is deleted with the account, and the deletion screen says so", () => {
+    const bioMigration = readFileSync(join(root, "supabase", "migrations", "20260928220000_profile_bio.sql"), "utf8");
+    expect(DELETE_PAGE.deleted.items).toContain("Your bio");
+    expect(bioMigration).toMatch(/create or replace function public\.delete_my_account[\s\S]*bio\s+= null/);
+    expect(bioMigration).toMatch(/users_deleted_has_no_bio check \(deleted_at is null or bio is null\)/);
+  });
+});
