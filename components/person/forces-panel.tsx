@@ -208,7 +208,7 @@ function ForceRow({ force, scale }: { force: ForceReading; scale: number }) {
         {idle ? (
           <span className="text-label text-fg-faint">Idle</span>
         ) : (
-          <span className={cn("num text-sm font-medium", figureTones[force.direction])}>{formatSigned(force.impact ?? 0, FORCE_IMPACT_DECIMALS)}</span>
+          <span className={cn("text-sm font-medium tabular-nums", figureTones[force.direction])}>{formatSigned(force.impact ?? 0, FORCE_IMPACT_DECIMALS)}</span>
         )}
       </div>
     </div>

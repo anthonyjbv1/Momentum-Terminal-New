@@ -121,7 +121,7 @@ function SignalItem({ item, personId, loggingEnabled, renderedAt }: { item: Prof
           </time>
           <span className="ml-auto flex shrink-0 items-center gap-2">
             {item.impact !== null ? (
-              <span className={cn("num text-sm font-medium", impactTones[direction])}>{formatSigned(item.impact, FORCE_IMPACT_DECIMALS)}</span>
+              <span className={cn("text-sm font-medium tabular-nums", impactTones[direction])}>{formatSigned(item.impact, FORCE_IMPACT_DECIMALS)}</span>
             ) : item.processed === false ? (
               <span className="text-label text-fg-faint">Unscored</span>
             ) : null}

@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { FEATURED, HERO } from "@/lib/landing/copy";
 import { CountdownTimer } from "@/components/ui/countdown-timer";
-import { directionAtPrecision, directionTone, formatChange } from "@/components/ui/direction-indicator";
+import { DirectionArrow, directionAtPrecision, directionTone, formatChange } from "@/components/ui/direction-indicator";
 import { LocalTime } from "@/components/ui/local-time";
 import { splitScore } from "@/components/ui/score-display";
 
@@ -94,9 +94,7 @@ function ScoreFigure({ score, flashKey }: { score: number; flashKey: number | nu
     <p className="num flex items-baseline gap-1 font-semibold leading-none tracking-tighter text-fg" aria-live="polite" aria-atomic="true">
       <span key={flashKey ?? "first"} className={cn("text-7xl sm:text-8xl", flashKey !== null && "animate-tick-flash")} aria-label={`Momentum Score ${whole}.${fraction}`}>
         {whole}
-      </span>
-      <span className="text-3xl font-medium text-fg-muted sm:text-4xl" aria-hidden>
-        .{fraction}
+        <span aria-hidden>.{fraction}</span>
       </span>
     </p>
   );
@@ -140,7 +138,8 @@ function ChangeChip({ label, value }: { label: string; value: number | null }) {
   return (
     <div className="flex flex-col justify-between gap-1 rounded-xl bg-surface-raised px-3 py-3 sm:px-4">
       <dt className="text-xs text-fg-muted">{label}</dt>
-      <dd className={cn("num text-lg font-medium leading-none sm:text-xl", known ? directionTone[direction] : "text-fg-faint")} aria-label={known ? undefined : "No reading yet"}>
+      <dd className={cn("inline-flex items-center gap-0.5 text-lg font-medium tabular-nums leading-none sm:text-xl", known ? directionTone[direction] : "text-fg-faint")} aria-label={known ? undefined : "No reading yet"}>
+        {known ? <DirectionArrow direction={direction} /> : null}
         {known ? formatChange(value, CHANGE_PRECISION) : "—"}
       </dd>
     </div>

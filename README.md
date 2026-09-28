@@ -3400,6 +3400,16 @@ select o.name, o.created_at
 - On production, after the migration: an account insert for an address with no invite was refused by the trigger (`signup_requires_invite`) inside a block that always rolled back; the auth and profile counts were unchanged afterwards.
 - Not exercised here: a real magic link through Supabase Auth, because this environment cannot reach Supabase's auth API and no local auth server could be installed. The first live invite is that check.
 
+## Numbers and arrows (Phase 33)
+
+A display pass, nothing else: no model, migration or copy changed.
+
+- **One arrow.** Every change on the platform draws its glyph through `DirectionArrow` (`components/ui/direction-indicator.tsx`): a straight ↑ for heating, a straight ↓ for cooling, and **no arrow** when the figure reads as flat (the neutral colour on its own). The diagonal ↗ / ↘ and the dash for flat are gone. It sits beside the Home cards and rows, the profile's change line, the Feed, every signed money figure (`Money signed`: the portfolio strip, positions, history, the position card, the sheet's estimated P&L), the header Mood and the landing page's change chips. The Forecast buttons keep their filled ▲ Rising / ▼ Falling: those are the two choices, not a reading. Colour still means direction only.
+- **The decimal is the number.** `ScoreDisplay` and the landing hero set the decimal at the same size, weight and colour as the integer: "69.4", not a large 69 with a small grey .4. Prices already read this way.
+- **Changes in Inter.** A change value is Inter with tabular figures (`tabular-nums`), the Phase 26 rule: the direction read, the Mood, the five forces' and the signals' impact figures, the Feed's impact and the position card's percentage were the last in the mono face. Scores, prices, the clock and the chart axes stay mono.
+
+`components/ui/numbers-and-arrows.test.ts` reads the three rules back from the markup.
+
 ## Open items
 
 - **Phase 32: before the switch is turned on.** Migration applied and deployed with the switch off (2026-09-26). Remaining, in order: the Supabase URL settings (Site URL and the redirect URL for `https://momentumterminal.app`), `NEXT_PUBLIC_SITE_URL` set to `https://momentumterminal.app` and redeployed, Supabase's "Allow new users to sign up" turned back on, then `BETA_SIGNUP_ENABLED=true` and a redeploy, then one invite to an address the operator controls, end to end, before any other. Counsel's review of the Terms before invites go beyond the operator's own testers.

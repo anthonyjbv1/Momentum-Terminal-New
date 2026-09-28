@@ -249,7 +249,7 @@ function EvidenceRow({ item, subject }: { item: FeedEvidence; subject: CardSubje
         ) : null}
       </div>
       {item.impact !== null ? (
-        <span className={cn("num shrink-0 text-xs font-medium", impactTones[directionAtPrecision(item.impact, FORCE_IMPACT_DECIMALS, 0)])}>
+        <span className={cn("shrink-0 text-xs font-medium tabular-nums", impactTones[directionAtPrecision(item.impact, FORCE_IMPACT_DECIMALS, 0)])}>
           {formatSigned(item.impact, FORCE_IMPACT_DECIMALS)}
         </span>
       ) : null}

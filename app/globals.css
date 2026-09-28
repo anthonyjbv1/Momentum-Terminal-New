@@ -90,6 +90,13 @@
   letter-spacing: -0.01em;
 }
 
+/* The direction arrow beside a change (Phase 33): the glyph takes the size
+   of the text it sits with, so one component fits every figure. */
+@utility arrow-em {
+  width: 1em;
+  height: 1em;
+}
+
 /* Section label: small, uppercase, quietly tracked, in the interface face. */
 @utility text-label {
   font-size: var(--text-xs);

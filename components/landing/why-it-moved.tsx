@@ -114,7 +114,7 @@ function ForceRow({ force, scale }: { force: FeaturedForce; scale: number }) {
       </div>
 
       <div className="w-16 shrink-0 text-right">
-        {idle ? <span className="text-label text-fg-faint">Idle</span> : <span className={cn("num text-sm font-medium", figureTones[direction])}>{formatSigned(force.impact ?? 0, FORCE_IMPACT_DECIMALS)}</span>}
+        {idle ? <span className="text-label text-fg-faint">Idle</span> : <span className={cn("text-sm font-medium tabular-nums", figureTones[direction])}>{formatSigned(force.impact ?? 0, FORCE_IMPACT_DECIMALS)}</span>}
       </div>
     </li>
   );
@@ -131,7 +131,7 @@ function SignalRow({ signal, now }: { signal: FeaturedSignal; now: number }) {
           {relativeTime(signal.occurredAt, now)}
         </time>
         {signal.impact !== null ? (
-          <span className={cn("num ml-auto shrink-0 font-medium", figureTones[direction])}>{formatSigned(signal.impact, FORCE_IMPACT_DECIMALS)}</span>
+          <span className={cn("ml-auto shrink-0 font-medium tabular-nums", figureTones[direction])}>{formatSigned(signal.impact, FORCE_IMPACT_DECIMALS)}</span>
         ) : null}
       </div>
       <p className="text-sm leading-relaxed text-fg">{signal.headline}</p>

@@ -1,5 +1,6 @@
 import { cn } from "@/lib/cn";
 import { formatCents } from "@/lib/money";
+import { DirectionArrow, type Direction } from "@/components/ui/direction-indicator";
 
 /**
  * Money on screen. Always integer cents in, always the same two-decimal
@@ -48,12 +49,18 @@ export function Money({ cents, signed = false, face = "mono", className }: Money
   const value = Number.isSafeInteger(cents) ? cents : 0;
   const numerals = face === "mono" ? "num" : "tabular-nums";
   if (!signed) return <span className={cn(numerals, className)}>{formatCents(value)}</span>;
+  // A signed figure is a change, and a change carries the platform's arrow
+  // (Phase 33): straight up, straight down, none when it is nothing.
+  const direction: Direction = value > 0 ? "heating" : value < 0 ? "cooling" : "neutral";
   const tone = value > 0 ? "text-positive" : value < 0 ? "text-negative" : "text-fg-muted";
   const sign = value > 0 ? "+" : value < 0 ? "−" : "";
   return (
-    <span className={cn(numerals, tone, className)}>
-      {sign}
-      {formatCents(Math.abs(value))}
+    <span className={cn("inline-flex items-center gap-0.5", numerals, tone, className)}>
+      <DirectionArrow direction={direction} />
+      <span>
+        {sign}
+        {formatCents(Math.abs(value))}
+      </span>
     </span>
   );
 }

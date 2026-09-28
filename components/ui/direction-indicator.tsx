@@ -1,4 +1,4 @@
-import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
+import { ArrowDown, ArrowUp } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 
@@ -52,10 +52,9 @@ export const directionLabels: Record<Direction, string> = {
 };
 
 /**
- * The direction's colour and its arrow, exported so a surface that composes
- * its own change line (the profile score card, Phase 26) draws the same
- * arrow in the same colour as every DirectionIndicator on the platform
- * rather than keeping a second copy of the mapping.
+ * The direction's colour, exported so a surface that composes its own change
+ * line (the profile score card, Phase 26) colours it the same as every
+ * DirectionIndicator on the platform rather than keeping a second copy.
  */
 export const directionTone: Record<Direction, string> = {
   heating: "text-positive",
@@ -63,11 +62,32 @@ export const directionTone: Record<Direction, string> = {
   neutral: "text-neutral",
 };
 
-export const directionIcon: Record<Direction, typeof ArrowUpRight> = {
-  heating: ArrowUpRight,
-  cooling: ArrowDownRight,
-  neutral: Minus,
+/**
+ * THE ARROW (Phase 33): straight up for heating, straight down for cooling,
+ * and NOTHING for flat. A change that reads as zero has no direction, so it
+ * gets no glyph: the figure stands alone in the neutral colour. Every change
+ * on the platform draws its arrow through this one component, so Home, the
+ * profile, the Feed, the portfolio and the header Mood cannot drift apart.
+ * The Forecast buttons keep their own filled ▲ / ▼: those are the two
+ * choices, not a reading.
+ */
+export const directionArrowIcon: Record<Direction, typeof ArrowUp | null> = {
+  heating: ArrowUp,
+  cooling: ArrowDown,
+  neutral: null,
 };
+
+export interface DirectionArrowProps {
+  direction: Direction;
+  /** Sizes the glyph; defaults to the text size so it sits with the figure. */
+  className?: string;
+}
+
+export function DirectionArrow({ direction, className }: DirectionArrowProps) {
+  const Icon = directionArrowIcon[direction];
+  if (!Icon) return null;
+  return <Icon className={cn("arrow-em shrink-0", className)} strokeWidth={2.5} aria-hidden />;
+}
 
 export type DirectionIndicatorSize = "sm" | "md" | "lg";
 
@@ -107,19 +127,21 @@ export function DirectionIndicator({ change, size = "md", withLabel = false, ico
   // precision: at the default (one decimal) that is the flat threshold
   // exactly, so nothing about the usual reading changes.
   const direction = directionAtPrecision(change, precision);
-  const Icon = directionIcon[direction];
   // No reading at all (the Engine has not moved this person yet) is a bare
   // dash: an arrow beside it would imply a measurement that does not exist.
   const unknown = change === null || change === undefined;
   const value = unknown ? "—" : formatChange(change, precision);
   const label = unknown ? "No change yet" : directionLabels[direction];
 
+  // Inter with tabular figures, not the mono face: a change is a reading in
+  // a sentence's typeface (the Phase 26 rule), and tabular digits keep it
+  // from jittering as it ticks.
   return (
     <span
-      className={cn("num inline-flex items-center gap-0.5 font-medium leading-none", sizes[size].text, directionTone[direction], className)}
+      className={cn("inline-flex items-center gap-0.5 font-medium tabular-nums leading-none", sizes[size].text, directionTone[direction], className)}
       aria-label={`${label}${unknown ? "" : `, ${value}`}`}
     >
-      {unknown ? null : <Icon className={cn(sizes[size].icon, "shrink-0")} strokeWidth={2.5} aria-hidden />}
+      {unknown ? null : <DirectionArrow direction={direction} className={sizes[size].icon} />}
       {iconOnly && !unknown ? null : <span>{value}</span>}
       {withLabel ? <span className="ml-1 text-label opacity-80">{label}</span> : null}
     </span>

@@ -1,5 +1,5 @@
 import { cn } from "@/lib/cn";
-import { directionAtPrecision, formatChange } from "@/components/ui/direction-indicator";
+import { DirectionArrow, directionAtPrecision, formatChange } from "@/components/ui/direction-indicator";
 
 /**
  * The platform pulse in the banner: overall Market Mood and whether the
@@ -46,7 +46,10 @@ export function PulseIndicator({ mood, status, windowMinutes = null, className }
     >
       <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", status === "live" ? "bg-fg animate-pulse-soft" : "bg-fg-faint")} />
       <span className="text-xs font-medium text-fg-muted">Mood</span>
-      <span className={cn("num text-xs font-semibold", tone)}>{value}</span>
+      <span className={cn("inline-flex items-center gap-0.5 text-xs font-semibold tabular-nums", tone)}>
+        {mood === null ? null : <DirectionArrow direction={direction} />}
+        {value}
+      </span>
     </div>
   );
 }
