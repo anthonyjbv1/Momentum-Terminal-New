@@ -182,8 +182,16 @@ export const MAX_SAMPLE_INTERVAL_MINUTES = 5;
  *   apart, every one after the first at laterSurgeConfidenceFactor.
  *
  *   Confidence reads from the threshold, not from zero: a step exactly at
- *   stepFraction is confidence 0 and fullConfidenceFraction is 1. Clip bursts
- *   the same, from burstMultiple to fullConfidenceMultiple.
+ *   stepFraction is confidence 0 and fullConfidenceStepFraction is 1 (decided
+ *   2026-09-28: +30% above the level before the step, not the source row's
+ *   +50%, which was set for a 20% threshold and read the 09-26 step of +12.7%
+ *   as 0.018). Clip bursts the same, from burstMultiple to
+ *   fullConfidenceMultiple.
+ *
+ *   Two readings are the minimum (decided 2026-09-28): the step read at the
+ *   previous sample and this sample's own reading holding it, eight minutes
+ *   apart at the four-minute cadence. A rise that holds two readings and then
+ *   reverts is a confirmed step under this rule, by acceptance.
  *
  *   A clip burst needs burstMinSessionMinutes of session and
  *   burstMinPriorClips clips before the window, at least burstMinClips in the
@@ -205,6 +213,8 @@ export interface LiveQualityRules {
   minBeforeSamples: number;
   /** The rise of AFTER over BEFORE that is a surge (replaces the source row's surgeFraction under the switch). */
   stepFraction: number;
+  /** The rise at which a surge is full confidence (replaces the source row's fullConfidenceFraction under the switch). */
+  fullConfidenceStepFraction: number;
   /** Nothing is judged before this minute of the session. */
   judgeFromMinutes: number;
   shapeMinSessions: number;
@@ -232,6 +242,7 @@ export const LIVE_QUALITY_DEFAULTS: LiveQualityRules = {
   minRecentDistinct: 2,
   minBeforeSamples: 2,
   stepFraction: 0.12,
+  fullConfidenceStepFraction: 0.3,
   judgeFromMinutes: 60,
   shapeMinSessions: 5,
   shapeSessions: 10,
@@ -702,7 +713,7 @@ export function qualitySurgeMoment(
   if (context.shape && step.after < context.shape.median * (1 + quality.shapeFraction)) return null;
 
   const later = context.surgesSoFar >= 1;
-  const confidence = round3(confidenceAboveThreshold(step.fraction, quality.stepFraction, config.fullConfidenceFraction) * (later ? quality.laterSurgeConfidenceFactor : 1));
+  const confidence = round3(confidenceAboveThreshold(step.fraction, quality.stepFraction, quality.fullConfidenceStepFraction) * (later ? quality.laterSurgeConfidenceFactor : 1));
   const shapeNote = context.shape ? `; usual at ${context.shape.bucketFromMinutes}–${context.shape.bucketToMinutes} min ${fmtCount(context.shape.median)} over ${context.shape.sessions} sessions` : "; no session shape yet";
   return {
     moment: "audience_surge",

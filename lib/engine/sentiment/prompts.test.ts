@@ -128,6 +128,8 @@ describe("the two prompt versions (Phase 31)", () => {
     const v2 = sentimentPrompt(2);
     expect(v2.name).toBe("sentiment_assessment_v2");
     expect(v2.systemPrompt).toContain('- salience: what the story says about THIS person\'s trajectory');
+    // 2026-09-28: a funding round the person leads (Bezos and Blue Sky) is relevant, not wealth_ranking.
+    expect(v2.systemPrompt).toContain('A funding round, an investment or a donation the person makes or leads is something they did, so it is "relevant", not "wealth_ranking", whatever the sum.');
     expect(v2.systemPrompt).toContain("as an analyst's note for a reader who follows this person");
     for (const banned of ['"signal"', '"noise"', '"digest"', '"routine"', '"adds no"', '"offset"', '"priced in"', '"net effect"']) expect(v2.systemPrompt).toContain(banned);
     expect(v2.systemPrompt).toContain("Never mention multiples, baselines, averages, comment volume or view counts.");

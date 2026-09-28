@@ -185,3 +185,27 @@ describe("buildNarrativesDetailed (Phase 31)", () => {
     expect(buildNarratives(withDirection("down"), DEFAULT_ENGINE_CONFIG.narratives)[0].source).toBe("llm");
   });
 });
+
+describe("the direction check judges the salience-weighted Signals force (2026-09-28)", () => {
+  const on = { ...DEFAULT_ENGINE_CONFIG.signalQuality, enabled: true };
+
+  it("passes 'flat' beside a raw impact of +1.61 that the salience weights bring to +0.48, and replaces it when the weighted force is still a narrative's worth", () => {
+    // Musk, 09-25 02:01: a state-dinner guest list scored +1.61 by version 1; incidental at 0.3, the force carried +0.48.
+    const note = "Elon Musk attended a White House state dinner for China's president alongside other tech leaders and media figures.";
+    const weighted: TickSummary = {
+      ...summary,
+      people: [person({ id: "e", slug: "elon-musk", displayName: "Elon Musk", previousScore: 60, newScore: 60.52, change: 0.52, forces: { gravity: 0.04, signals: 0.48 }, signalsProcessed: 1 })],
+      signals: [{ id: "s9", personSlug: "elon-musk", headline: "State dinner guest list", label: "positive", confidence: 0.9, direction: 1, impact: 1.61, salienceWeight: 0.3, ageHours: 0, freshness: 1, scorer: "llm", anomaly: "notable", salience: "incidental", narrative: note, narrativeDirection: "flat" }],
+    };
+    // The check reads person.forces.signals (the weighted force the tick applied), not the signal's own raw impact.
+    const passed = buildNarrativesDetailed(weighted, DEFAULT_ENGINE_CONFIG.narratives, on);
+    expect(passed.replaced).toEqual([]);
+    expect(passed.rows[0]).toMatchObject({ personId: "e", source: "llm", text: note });
+
+    // Zuckerberg on OpenAI stayed at +1.26 weighted: 'flat' is wrong there and is replaced.
+    const stillMoved: TickSummary = { ...weighted, people: [{ ...weighted.people[0], newScore: 61.3, change: 1.3, forces: { gravity: 0.04, signals: 1.26 } }] };
+    const replaced = buildNarrativesDetailed(stillMoved, DEFAULT_ENGINE_CONFIG.narratives, on);
+    expect(replaced.replaced).toEqual([{ personId: "e", reason: "direction", text: note }]);
+    expect(replaced.rows[0].source).toBe("template");
+  });
+});

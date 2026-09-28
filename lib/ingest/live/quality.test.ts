@@ -168,15 +168,40 @@ describe("an audience surge under the quality rules", () => {
     const { moment } = fired[0];
     expect(moment).toMatchObject({ moment: "audience_surge", direction: 1, rule: "quality", from: 40_050, to: 48_067, windowMinutes: 20 });
     expect(moment.magnitude).toBeCloseTo(0.2, 3);
-    expect(moment.confidence).toBeCloseTo(confidenceAboveThreshold(moment.magnitude, Q.stepFraction, 0.5), 3);
+    // Full confidence at +30% above the level before the step (2026-09-28), not the source row's +50%: a +20% step reads 0.44, not 0.21.
+    expect(Q.fullConfidenceStepFraction).toBe(0.3);
+    expect(moment.confidence).toBeCloseTo(confidenceAboveThreshold(moment.magnitude, Q.stepFraction, Q.fullConfidenceStepFraction), 2);
+    expect(moment.confidence).toBeCloseTo(0.445, 2);
     expect(moment.rationale).toContain("held at the next sample (52,000, +30%)");
+  });
+
+  it("reads the 09-26 step (+12.7%) at 0.04 and a +30% step at full confidence; the source row's +50% no longer applies", () => {
+    expect(confidenceAboveThreshold(0.127, Q.stepFraction, Q.fullConfidenceStepFraction)).toBeCloseTo(0.039, 3);
+    expect(confidenceAboveThreshold(0.15, Q.stepFraction, Q.fullConfidenceStepFraction)).toBeCloseTo(0.167, 3);
+    expect(confidenceAboveThreshold(0.3, Q.stepFraction, Q.fullConfidenceStepFraction)).toBe(1);
+    // A +50% jump is read one sample earlier than the +20% step (the AFTER window mean clears 12% at 104, with one new reading
+    // of 60,000 among three), so the magnitude at the confirmation is the window's mean, +16.7%, and the confidence follows it.
+    const big = (m: number) => (m < 104 ? 40_000 : 60_000);
+    const fired = surges(series(240, big));
+    expect(fired.map((f) => f.minute)).toEqual([108]);
+    expect(fired[0].moment.magnitude).toBeCloseTo(0.167, 2);
+    expect(fired[0].moment.confidence).toBeCloseTo(confidenceAboveThreshold(fired[0].moment.magnitude, Q.stepFraction, Q.fullConfidenceStepFraction), 2);
+  });
+
+  it("two readings are the minimum: the step at the previous sample and this sample holding it, eight minutes apart; a hold that reverts after is still a confirmed step", () => {
+    // Up at 104; the AFTER window (100, 104, 108) reads the step at 108 and 112's own reading holds it, so it fires at 112 whatever happens after.
+    const heldTwice = (m: number) => (m >= 104 && m <= 112 ? 52_000 : 40_000);
+    expect(surges(series(240, heldTwice)).map((f) => f.minute)).toEqual([112]);
+    // One reading alone (104 only) is not a step: 108's AFTER has it, but 108's own reading is back at the base.
+    const once = (m: number) => (m === 104 ? 52_000 : 40_000);
+    expect(surges(series(240, once))).toEqual([]);
   });
 
   it("allows two surges a session, an hour apart, the second at half confidence", () => {
     const stairs = (m: number) => (m < 104 ? 40_000 : m < 204 ? 52_000 : m < 304 ? 68_000 : 90_000);
     const fired = surges(series(400, stairs));
     expect(fired.map((f) => f.minute)).toEqual([112, 212]);
-    const raw = confidenceAboveThreshold(fired[1].moment.magnitude, Q.stepFraction, 0.5);
+    const raw = confidenceAboveThreshold(fired[1].moment.magnitude, Q.stepFraction, Q.fullConfidenceStepFraction);
     expect(fired[1].moment.confidence).toBeCloseTo(raw * 0.5, 2);
     expect(fired[1].moment.rationale).toContain("surge 2 of the session");
   });

@@ -355,12 +355,24 @@ async function main() {
       }
     }
 
-    const signalsImpact = signals.reduce((sum, s) => sum + s.impact_score, 0);
+    // The check judges against the SALIENCE-WEIGHTED impact, which is what the
+    // Signals force carries under the switch (2026-09-28): the stored impact
+    // was scored by version 1 without salience, and judging against it
+    // replaced sentences that were right about a weighted move (13 of 40
+    // instead of 7). Each signal's stored impact is scaled by the multiplier
+    // of the salience this run gave it.
+    const multipliers = DEFAULT_ENGINE_CONFIG.signalQuality.salienceMultipliers;
+    const rawImpact = signals.reduce((sum, s) => sum + s.impact_score, 0);
+    const signalsImpact = signals.reduce((sum, s) => {
+      const fresh = data.signals?.find((x) => x.id === s.id);
+      const salience = fresh?.salience && fresh.salience in multipliers ? fresh.salience : "relevant";
+      return sum + s.impact_score * multipliers[salience];
+    }, 0);
     if (data.narrative) {
       const check = checkNarrative(data.narrative, data.narrative_direction, signalsImpact, DEFAULT_ENGINE_CONFIG.narratives.minAbsChange);
       directionChecks += 1;
       if (check.ok) directionAgreed += 1;
-      else replaced.push(`${person.display_name} (${check.reason}), signals ${signalsImpact >= 0 ? "+" : ""}${signalsImpact.toFixed(2)}, declared ${data.narrative_direction ?? "n/a"}\n    was: ${narrative.text}\n    now: ${data.narrative}`);
+      else replaced.push(`${person.display_name} (${check.reason}), signals weighted ${signalsImpact >= 0 ? "+" : ""}${signalsImpact.toFixed(2)} (stored ${rawImpact >= 0 ? "+" : ""}${rawImpact.toFixed(2)}), declared ${data.narrative_direction ?? "n/a"}\n    was: ${narrative.text}\n    now: ${data.narrative}`);
       records.narratives.push({ id: narrative.id, person: person.display_name, was: narrative.text, now: data.narrative, direction: data.narrative_direction ?? null, signalsImpact, check: check.ok ? "ok" : String(check.reason) });
       const move = narrative.score_after - narrative.score_before;
       sentences.push(
