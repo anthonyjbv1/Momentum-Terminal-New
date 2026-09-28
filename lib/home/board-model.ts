@@ -83,9 +83,30 @@ function toNullableNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-/** "creator" -> "Creator". Category values are single lowercase words. */
+/**
+ * THE CATEGORY WORDS. The stored values (single lowercase words the Engine,
+ * its prompts and the database use) never change; only what the reader sees
+ * does. One person is singular ("Category: Artist" on Drake's page, the line
+ * under a name on a card); a filter names a group, so it is plural
+ * ("Artists 3"). A value with no entry here reads as itself, capitalised.
+ */
+const CATEGORY_WORDS: Record<string, { one: string; many: string }> = {
+  executive: { one: "Billionaire", many: "Billionaires" },
+  musician: { one: "Artist", many: "Artists" },
+  athlete: { one: "Athlete", many: "Athletes" },
+  creator: { one: "Creator", many: "Creators" },
+};
+
+const capitalised = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
+
+/** One person's category: "executive" -> "Billionaire". */
 export function categoryLabel(category: string): string {
-  return category.charAt(0).toUpperCase() + category.slice(1);
+  return CATEGORY_WORDS[category]?.one ?? capitalised(category);
+}
+
+/** A category as a group, for filters: "executive" -> "Billionaires". */
+export function categoryGroupLabel(category: string): string {
+  return CATEGORY_WORDS[category]?.many ?? `${capitalised(category)}s`;
 }
 
 /**
@@ -143,7 +164,7 @@ export function categoryOptions(people: Array<{ category: string }>): CategoryOp
   for (const person of people) counts.set(person.category, (counts.get(person.category) ?? 0) + 1);
 
   const options = [...counts.entries()]
-    .map(([value, count]) => ({ value, label: categoryLabel(value), count }))
+    .map(([value, count]) => ({ value, label: categoryGroupLabel(value), count }))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 
   return [{ value: "all", label: "All", count: people.length }, ...options];

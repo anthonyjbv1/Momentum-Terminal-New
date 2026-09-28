@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildBoard,
+  categoryGroupLabel,
   categoryLabel,
   categoryOptions,
   filterPeople,
@@ -135,14 +136,19 @@ describe("categoryOptions", () => {
     const ranked = rankPeople([DRAKE, MRBEAST, KAI, ELON], []);
     expect(categoryOptions(ranked)).toEqual([
       { value: "all", label: "All", count: 4 },
-      { value: "creator", label: "Creator", count: 2 },
-      { value: "executive", label: "Executive", count: 1 },
-      { value: "musician", label: "Musician", count: 1 },
+      { value: "creator", label: "Creators", count: 2 },
+      // Ties read alphabetically by what the reader sees.
+      { value: "musician", label: "Artists", count: 1 },
+      { value: "executive", label: "Billionaires", count: 1 },
     ]);
   });
 
-  it("labels categories for display", () => {
+  it("names one person singular and a group plural; the stored values are untouched", () => {
+    expect(["executive", "musician", "athlete", "creator"].map(categoryLabel)).toEqual(["Billionaire", "Artist", "Athlete", "Creator"]);
+    expect(["executive", "musician", "athlete", "creator"].map(categoryGroupLabel)).toEqual(["Billionaires", "Artists", "Athletes", "Creators"]);
+    // A category added later reads as itself until it is given words.
     expect(categoryLabel("founder")).toBe("Founder");
+    expect(categoryGroupLabel("founder")).toBe("Founders");
   });
 });
 
