@@ -5,7 +5,7 @@ import { fakeFetchRoutes, makePerson, makeSource } from "@/lib/__tests__/fixture
 import { buildPublisherPolicy } from "@/lib/ingest/publishers";
 import { personNames } from "@/lib/ingest/stories";
 
-import { EARLIEST_PLAUSIBLE_PUBLISHED_AT, FUTURE_TOLERANCE_MS, articleSignal, feedUrlFor, hasBelievableDate, isStaleItem, newsVolume, parseFeed, readRssConfig, resetFeedCache, rssConnector, type FeedItem } from "./rss";
+import { EARLIEST_PLAUSIBLE_PUBLISHED_AT, FUTURE_TOLERANCE_MS, LEAD_MAX_CHARS, articleSignal, feedUrlFor, leadParagraph, hasBelievableDate, isStaleItem, newsVolume, parseFeed, readRssConfig, resetFeedCache, rssConnector, type FeedItem } from "./rss";
 import { ConnectorError } from "./types";
 
 const NOW = new Date("2026-09-12T12:00:00.000Z");
@@ -66,7 +66,7 @@ describe("parseFeed", () => {
     const feed = parseFeed(RSS);
     expect(feed.title).toBe('"MrBeast" - Google News');
     expect(feed.items).toHaveLength(3);
-    expect(feed.items[0]).toEqual({ title: "MrBeast opens a theme park - Example Times", link: "https://news.google.com/rss/articles/one", guid: "one-guid", publishedAt: new Date("2026-09-12T10:30:00Z"), outlet: "Example Times", sourceUrl: "https://example.com", hasDescription: false });
+    expect(feed.items[0]).toEqual({ title: "MrBeast opens a theme park - Example Times", link: "https://news.google.com/rss/articles/one", guid: "one-guid", publishedAt: new Date("2026-09-12T10:30:00Z"), outlet: "Example Times", sourceUrl: "https://example.com", hasDescription: false, lead: null });
     expect(feed.items[1]).toMatchObject({ guid: null, outlet: '"MrBeast" - Google News', publishedAt: new Date("2026-09-11T09:00:00Z"), sourceUrl: null });
     expect(feed.items[2].publishedAt).toBeNull();
   });
@@ -74,7 +74,7 @@ describe("parseFeed", () => {
   it("reads Atom, preferring the alternate link", () => {
     const feed = parseFeed(ATOM);
     expect(feed.title).toBe("Outlet tag feed");
-    expect(feed.items).toEqual([{ title: "Drake announces a tour", link: "https://outlet.example/drake-tour", guid: "tag:outlet.example,2026:1", publishedAt: new Date("2026-09-12T08:00:00Z"), outlet: "Outlet", sourceUrl: null, hasDescription: false }]);
+    expect(feed.items).toEqual([{ title: "Drake announces a tour", link: "https://outlet.example/drake-tour", guid: "tag:outlet.example,2026:1", publishedAt: new Date("2026-09-12T08:00:00Z"), outlet: "Outlet", sourceUrl: null, hasDescription: false, lead: null }]);
   });
 
   it("refuses what is not a feed", () => {
@@ -413,5 +413,45 @@ describe("the signal-quality rules (Phase 31)", () => {
     expect(isStaleItem(item(new Date(POLL.getTime() - 168 * 3_600_000 - 1)), POLL, quality)).toBe(true);
     expect(isStaleItem(item(null), POLL, quality)).toBe(false);
     expect(isStaleItem(item(new Date(2020, 0, 1)), POLL, undefined)).toBe(false);
+  });
+});
+
+describe("the first paragraph, for the name requirement (2026-09-29)", () => {
+  it("reads the first paragraph of a description, tags and entities stripped, capped, and nothing from an empty one", () => {
+    expect(leadParagraph("<p>Larry Ellison &amp; Safra Catz were asked to appear.</p><p>The second paragraph names nobody.</p>")).toBe("Larry Ellison & Safra Catz were asked to appear.");
+    expect(leadParagraph("First line<br/>second line")).toBe("First line");
+    expect(leadParagraph("  <div> </div> ")).toBeNull();
+    expect(leadParagraph(null)).toBeNull();
+    expect(leadParagraph(`<p>${"x".repeat(LEAD_MAX_CHARS + 50)}</p>`)?.length).toBe(LEAD_MAX_CHARS);
+  });
+
+  it("carries the lead in memory from RSS and Atom, and never into the stored signal", () => {
+    const rss = parseFeed(`<?xml version="1.0"?><rss version="2.0"><channel><title>Outlet</title><item><title>Oracle leaders receive subpoenas</title><link>https://outlet.example/a</link><guid>a</guid><pubDate>Fri, 12 Sep 2026 10:30:00 GMT</pubDate><description><![CDATA[<p>Larry Ellison and Safra Catz were asked to appear.</p>]]></description></item></channel></rss>`);
+    expect(rss.items[0].lead).toBe("Larry Ellison and Safra Catz were asked to appear.");
+    const signal = articleSignal(rss.items[0], new Date("2026-09-12T12:00:00Z"));
+    expect(JSON.stringify(signal)).not.toContain("Safra Catz");
+  });
+
+  it("on: a listed publisher's item that names the subject only in its first paragraph is kept; one that names them nowhere is refused", async () => {
+    const OUTLET = `<?xml version="1.0"?><rss version="2.0"><channel><title>Bloomberg</title>
+      <item><title>Oracle leaders receive subpoenas to appear before House VA Committee</title><link>https://www.bloomberg.com/a</link><guid>a</guid><pubDate>Fri, 25 Sep 2026 12:00:00 GMT</pubDate><description><![CDATA[<p>Larry Ellison and Safra Catz were asked to appear next month.</p>]]></description></item>
+      <item><title>Oracle shares slide after earnings</title><link>https://www.bloomberg.com/b</link><guid>b</guid><pubDate>Fri, 25 Sep 2026 11:00:00 GMT</pubDate><description><![CDATA[<p>The database company missed on cloud revenue.</p>]]></description></item>
+    </channel></rss>`;
+    resetFeedCache();
+    const larry = makePerson({ id: "p-ellison", slug: "larry-ellison", display_name: "Larry Ellison", full_name: "Lawrence Joseph Ellison", category: "executive" });
+    const excluded: Array<{ headline: string; reason: string }> = [];
+    const fetch = fakeFetchRoutes([{ match: "bloomberg.com/feed", body: OUTLET }]);
+    const context = {
+      now: new Date("2026-09-26T00:00:00.000Z"),
+      fetch,
+      config: {},
+      personConfig: {},
+      publishers: buildPublisherPolicy([{ domain: "bloomberg.com", status: "allowed", tier: 1 }]),
+      exclude: (item: { headline: string; reason: string }) => excluded.push(item),
+      quality: { maxAgeHours: 168 },
+    };
+    const signals = await rssConnector.fetchForPerson(larry, "https://www.bloomberg.com/feed", context as unknown as Parameters<typeof rssConnector.fetchForPerson>[2]);
+    expect(signals.map((s) => s.headline)).toEqual(["Oracle leaders receive subpoenas to appear before House VA Committee"]);
+    expect(excluded).toEqual([{ headline: "Oracle shares slide after earnings", reason: "namesake_unnamed", term: null }]);
   });
 });

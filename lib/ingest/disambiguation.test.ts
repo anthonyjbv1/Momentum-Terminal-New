@@ -139,22 +139,27 @@ describe("applyQueryExclusions", () => {
 // Phase 31: the namesake who shares the surname
 // ---------------------------------------------------------------------------
 
-import { namesSubject, obituaryReason, subjectNames } from "./disambiguation";
+import { exclusionSubject, namesSubject, obituaryReason, subjectNames, subjectSurname } from "./disambiguation";
 
 describe("the name-conditional rules (Phase 31)", () => {
   const ellison = readDisambiguation({
     disambiguation: { exclude_unless_named: ["David Ellison", "Skydance", "Paramount"], namesake_guard: true, aliases: ["Larry", "Oracle founder", "Oracle co-founder"] },
   });
   const larry = subjectNames({ display_name: "Larry Ellison", full_name: "Lawrence Joseph Ellison" }, ellison);
-  const known = { names: larry, unknownPublisher: false };
-  const unknown = { names: larry, unknownPublisher: true };
+  // The subject is the same whatever the publisher's tier (decided 2026-09-29): both names stand for the two halves of the old test.
+  const known = exclusionSubject({ display_name: "Larry Ellison", full_name: "Lawrence Joseph Ellison" }, ellison);
+  const unknown = known;
 
   it("reads the new keys and treats them as no rules when absent or malformed", () => {
     expect(ellison.exclude_unless_named).toEqual(["david ellison", "skydance", "paramount"]);
-    expect(ellison.namesake_guard).toBe(true);
+    expect(ellison.namesake_guard).toBe(true); // read, and ignored: the requirement is no longer a flag
     expect(ellison.aliases).toEqual(["larry", "oracle founder", "oracle co-founder"]);
     expect(hasRules(ellison)).toBe(true);
     expect(readDisambiguation({ disambiguation: { namesake_guard: "yes", aliases: "Larry", exclude_unless_named: null } })).toEqual(EMPTY_DISAMBIGUATION);
+    expect(hasRules(readDisambiguation({ disambiguation: { namesake_guard: true } }))).toBe(false);
+    expect(known).toEqual({ names: larry, surname: "Ellison" });
+    expect(subjectSurname({ display_name: "Drake" })).toBeNull();
+    expect(subjectSurname({ display_name: "Kai Carlo Cenat III" })).toBe("III");
     // Aliases come out of the config lower-cased like every other term; naming is judged case-insensitively anyway.
     expect(larry).toEqual(["Larry Ellison", "Lawrence Joseph Ellison", "larry", "oracle founder", "oracle co-founder"]);
   });
@@ -172,14 +177,23 @@ describe("the name-conditional rules (Phase 31)", () => {
     expect(excludeReason("Paramount deal rests on the Oracle founder's fortune", ellison, known)).toBeNull();
   });
 
-  it("the namesake guard refuses an unknown publisher's item that does not name the subject, and only then", () => {
+  it("the name requirement refuses an item that names the subject nowhere, whatever the publisher's tier (decided 2026-09-29)", () => {
     expect(excludeReason("Oracle leaders receive subpoenas to appear before House VA Committee", ellison, unknown)).toEqual({ reason: "namesake_unnamed", term: null });
-    expect(excludeReason("Oracle leaders receive subpoenas to appear before House VA Committee", ellison, known)).toBeNull();
-    expect(excludeReason("Ellison Pledges $9.2 Billion More in Oracle Shares as Collateral", ellison, unknown)).toEqual({ reason: "namesake_unnamed", term: null });
+    // A listed publisher's item is held to the same requirement: listing changes trust, not naming.
+    expect(excludeReason("Oracle leaders receive subpoenas to appear before House VA Committee", ellison, known)).toEqual({ reason: "namesake_unnamed", term: null });
+    // The surname names him for the requirement ("Ellison pledges" is Larry), but not for the exclusions ("David Ellison attends" is not).
+    expect(excludeReason("Ellison Pledges $9.2 Billion More in Oracle Shares as Collateral", ellison, unknown)).toBeNull();
     expect(excludeReason("Larry Ellison Pledges $9.2 Billion More in Oracle Shares as Collateral", ellison, unknown)).toBeNull();
-    // Off for a subject without the guard, whatever the publisher.
+    expect(excludeReason("The Ellisons Have Made This Movie Before", ellison, known)).toEqual({ reason: "namesake_unnamed", term: null });
+    // The retired flag changes nothing either way.
     const withoutGuard = { ...ellison, namesake_guard: false };
-    expect(excludeReason("Oracle leaders receive subpoenas", withoutGuard, unknown)).toBeNull();
+    expect(excludeReason("Oracle leaders receive subpoenas", withoutGuard, unknown)).toEqual({ reason: "namesake_unnamed", term: null });
+    // A one-word name has no separate surname: the name itself is the requirement.
+    const drake = exclusionSubject({ display_name: "Drake", full_name: "Aubrey Drake Graham" }, EMPTY_DISAMBIGUATION);
+    expect(excludeReason("Drake drops a surprise album", EMPTY_DISAMBIGUATION, drake)).toBeNull();
+    expect(excludeReason("OVO Sound signs a new artist", EMPTY_DISAMBIGUATION, drake)).toEqual({ reason: "namesake_unnamed", term: null });
+    // The first paragraph counts: a headline that names nobody, a lead that names him.
+    expect(excludeReason("Oracle leaders receive subpoenas\nLarry Ellison and Safra Catz were asked to appear.", ellison, known)).toBeNull();
   });
 
   it("without a subject the two rules never run: the Phase 10 function is byte-for-byte what it was", () => {
@@ -199,10 +213,12 @@ describe("the name-conditional rules (Phase 31)", () => {
   });
 
   it("Page Auto Group is not Larry Page, and needs no publisher to be refused", () => {
-    const page = readDisambiguation({ disambiguation: { exclude_unless_named: ["Page Auto"], namesake_guard: true } });
-    const names = subjectNames({ display_name: "Larry Page", full_name: "Lawrence Edward Page" }, page);
-    expect(excludeReason("Page Auto Group owner planning mixed-use project with Sheetz and townhomes in Mechanicsville", page, { names, unknownPublisher: false })).toEqual({ reason: "excluded_unless_named", term: "page auto" });
-    expect(excludeReason("Google Co-Founder Larry Page Is Reportedly Exiting California In Style", page, { names, unknownPublisher: true })).toBeNull();
+    const page = readDisambiguation({ disambiguation: { exclude_unless_named: ["Page Auto"] } });
+    const subject = exclusionSubject({ display_name: "Larry Page", full_name: "Lawrence Edward Page" }, page);
+    expect(excludeReason("Page Auto Group owner planning mixed-use project with Sheetz and townhomes in Mechanicsville", page, subject)).toEqual({ reason: "excluded_unless_named", term: "page auto" });
+    expect(excludeReason("Google Co-Founder Larry Page Is Reportedly Exiting California In Style", page, subject)).toBeNull();
+    // A Google company story that names neither founder is not a Larry Page story, from any outlet.
+    expect(excludeReason("Google's Gemini adds a new model", page, subject)).toEqual({ reason: "namesake_unnamed", term: null });
   });
 });
 

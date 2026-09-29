@@ -47,10 +47,12 @@ import type { Json } from "@/types/database";
  *   exclude_unless_named   a term that marks a namesake's story ("David
  *                          Ellison", "Page Auto", "Paramount") UNLESS the
  *                          subject is named alongside it
- *   namesake_guard         an item from a publisher the allowlist does not
- *                          know (the tier floor) must name the subject in its
- *                          headline; a body match alone is not enough from an
- *                          unknown outlet
+ *   the name requirement   every item must name the subject, by full name,
+ *                          alias or surname, in its headline or its first
+ *                          paragraph, whatever its publisher's tier (decided
+ *                          2026-09-29; until then a `namesake_guard` flag
+ *                          applied it to unknown publishers only, and the key
+ *                          is still read, and ignored)
  *   aliases                the names that count as naming the subject, beyond
  *                          their display and full name ("Larry" inside Larry
  *                          Ellison's own feed, "Nvidia CEO" for Jensen Huang)
@@ -75,7 +77,7 @@ export interface Disambiguation {
   require_any: string[];
   /** Phase 31. An item naming any of these is a different entity UNLESS the subject is named too. */
   exclude_unless_named: string[];
-  /** Phase 31. An item from an unknown publisher must name the subject in its headline. */
+  /** Retired 2026-09-29: the name requirement now holds for every publisher. The key is read and ignored, so an existing row is not an error. */
   namesake_guard: boolean;
   /** Phase 31. What else counts as naming the subject, beyond their display and full name. Word-boundary matched. */
   aliases: string[];
@@ -110,7 +112,7 @@ export function readDisambiguation(config: Record<string, Json | undefined> | nu
 }
 
 export function hasRules(rules: Disambiguation): boolean {
-  return rules.exclude_terms.length > 0 || rules.require_any.length > 0 || rules.exclude_unless_named.length > 0 || rules.namesake_guard;
+  return rules.exclude_terms.length > 0 || rules.require_any.length > 0 || rules.exclude_unless_named.length > 0;
 }
 
 export interface ExclusionVerdict {
@@ -126,8 +128,14 @@ export interface ExclusionVerdict {
 export interface ExclusionSubject {
   /** The names that count as naming the subject: display name, full name, configured aliases. */
   names: string[];
-  /** The item's publisher is unknown to the allowlist (the tier floor). */
-  unknownPublisher: boolean;
+  /**
+   * The subject's surname, which names them for the NAME REQUIREMENT but not
+   * for the name-conditional exclusions: "Ellison pledges shares" is Larry,
+   * "David Ellison attends" is not, and the exclusion term decides the second
+   * before the surname is consulted. Null for a one-word name (Drake, MrBeast),
+   * whose names list already is the surname.
+   */
+  surname: string | null;
 }
 
 /** Lower case, ASCII-folded (é → e), whitespace collapsed. */
@@ -158,6 +166,17 @@ export function namesSubject(text: string, names: string[]): boolean {
   });
 }
 
+/** The subject's surname: the last word of a display name of two or more words; null otherwise. */
+export function subjectSurname(person: { display_name: string }): string | null {
+  const parts = person.display_name.trim().split(/\s+/).filter(Boolean);
+  return parts.length >= 2 ? parts[parts.length - 1] : null;
+}
+
+/** The subject as the rules judge an item against them: their names and aliases, and their surname. */
+export function exclusionSubject(person: { display_name: string; full_name: string | null }, rules: Disambiguation): ExclusionSubject {
+  return { names: subjectNames(person, rules), surname: subjectSurname(person) };
+}
+
 /** The names an item must carry to count as naming the subject: their display and full name, plus the configured aliases. */
 export function subjectNames(person: { display_name: string; full_name: string | null }, rules: Disambiguation): string[] {
   const out = new Set<string>();
@@ -177,9 +196,11 @@ export function subjectNames(person: { display_name: string; full_name: string |
  *
  * With a subject (Phase 31) two more rules run, both conditional on whether
  * the subject is NAMED in the text: an `exclude_unless_named` term refuses the
- * item only when the subject is absent, and the namesake guard refuses an
- * unknown publisher's item that does not name the subject at all. Without a
- * subject the function is exactly what it was.
+ * item only when the subject is absent, and THE NAME REQUIREMENT refuses any
+ * item that names the subject nowhere, by full name, alias or surname. The
+ * requirement holds for every publisher at every tier (decided 2026-09-29:
+ * listing an outlet must not bypass it; a tier changes trust and grave-claim
+ * eligibility only). Without a subject the function is exactly what it was.
  */
 export function excludeReason(text: string, rules: Disambiguation, subject?: ExclusionSubject): ExclusionVerdict | null {
   const haystack = text.toLowerCase();
@@ -191,13 +212,12 @@ export function excludeReason(text: string, rules: Disambiguation, subject?: Exc
   }
   if (!subject) return null;
   const named = namesSubject(text, subject.names);
-  if (!named) {
-    for (const term of rules.exclude_unless_named) {
-      if (haystack.includes(term)) return { reason: "excluded_unless_named", term };
-    }
-    if (rules.namesake_guard && subject.unknownPublisher) return { reason: "namesake_unnamed", term: null };
+  if (named) return null;
+  for (const term of rules.exclude_unless_named) {
+    if (haystack.includes(term)) return { reason: "excluded_unless_named", term };
   }
-  return null;
+  if (subject.surname && namesSubject(text, [subject.surname])) return null;
+  return { reason: "namesake_unnamed", term: null };
 }
 
 // ---------------------------------------------------------------------------

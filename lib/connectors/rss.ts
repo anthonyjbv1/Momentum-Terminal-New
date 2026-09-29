@@ -1,6 +1,6 @@
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
-import { EMPTY_DISAMBIGUATION, applyQueryExclusions, excludeReason, hasRules, obituaryReason, readDisambiguation, subjectNames, type ExclusionVerdict } from "@/lib/ingest/disambiguation";
+import { EMPTY_DISAMBIGUATION, applyQueryExclusions, exclusionSubject, excludeReason, hasRules, obituaryReason, readDisambiguation, type ExclusionVerdict } from "@/lib/ingest/disambiguation";
 import { publisherDomainOf, type PublisherPolicy } from "@/lib/ingest/publishers";
 import { collapseStories, personNames, storyTokens, stripOutletSuffix } from "@/lib/ingest/stories";
 import type { Person } from "@/types";
@@ -85,6 +85,32 @@ export interface FeedItem {
   sourceUrl: string | null;
   /** Whether the item carries a description or body beyond its headline. Read for feed health only; the text itself is never kept. */
   hasDescription?: boolean;
+  /**
+   * The first paragraph of the item's description, tags stripped, held in
+   * memory for the name requirement only (Phase 31): it is judged with the
+   * headline and never stored. Null when the feed sends no description, or
+   * when the description is not the article's own text (Google News sends a
+   * list of related coverage, whose headlines are other outlets').
+   */
+  lead?: string | null;
+}
+
+/** The first paragraph of a description: entities and tags stripped, cut at the first paragraph break, capped. */
+export const LEAD_MAX_CHARS = 1000;
+export function leadParagraph(html: string | null | undefined): string | null {
+  if (!html) return null;
+  const paragraphs = html
+    .replace(/<\s*br\s*\/?>/gi, "\n")
+    .replace(/<\/\s*(p|div|li|h[1-6]|blockquote)\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCodePoint(Number(code)))
+    .replace(/&(amp|lt|gt|quot|apos);/gi, (_, name: string) => ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" })[name.toLowerCase()] ?? " ")
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter((line) => line.length > 0);
+  const first = paragraphs[0];
+  return first ? first.slice(0, LEAD_MAX_CHARS) : null;
 }
 
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_", textNodeName: "#text", cdataPropName: "#cdata", trimValues: true });
@@ -148,6 +174,7 @@ export function parseFeed(xml: string): { title: string | null; items: FeedItem[
           outlet: text(item.source) ?? channelTitle,
           sourceUrl: attribute(item.source, "url"),
           hasDescription: (text(item.description) ?? text(item["content:encoded"])) !== null,
+          lead: leadParagraph(text(item.description) ?? text(item["content:encoded"])),
         },
       ];
     });
@@ -174,6 +201,7 @@ export function parseFeed(xml: string): { title: string | null; items: FeedItem[
           outlet: text(source?.title) ?? feedTitle,
           sourceUrl: sourceLink ? text(sourceLink) : null,
           hasDescription: (text(entry.summary) ?? text(entry.content)) !== null,
+          lead: leadParagraph(text(entry.summary) ?? text(entry.content)),
         },
       ];
     });
@@ -332,25 +360,28 @@ async function loadFeed(person: Person, identifier: string, context: ConnectorCo
   // Athletics") counts as evidence too.
   //
   // With the quality rules on (Phase 31) every item is judged against the
-  // SUBJECT as well: the name-conditional exclusions, the namesake guard for
-  // an unknown publisher, and the obituary guard, which needs no rules at all.
-  // The subject is judged on the headline alone, without the outlet suffix: an
-  // outlet's name is evidence for an exclusion, never evidence of naming.
+  // SUBJECT as well: the name-conditional exclusions, the name requirement
+  // (every publisher, every tier: the item must name the subject in its
+  // headline or first paragraph), and the obituary guard, which needs no
+  // rules at all. The headline is judged without the outlet suffix: an
+  // outlet's name is evidence for an exclusion, never evidence of naming. A
+  // Google News description is a list of related coverage, not the article's
+  // first paragraph, so it is not consulted.
   const quality = context.quality;
-  const names = quality ? subjectNames(person, rules) : [];
+  const subject = quality ? exclusionSubject(person, rules) : null;
+  const googleNews = /(^|\.)news\.google\.com$/i.test(new URL(url).hostname);
   const items: FeedItem[] = [];
   const refused: Array<{ item: FeedItem; verdict: ExclusionVerdict }> = [];
   if (hasRules(rules) || quality) {
     for (const item of parsed.items) {
       // The Phase 10 rules, exactly as before: substring, title and outlet.
       let verdict = excludeReason(`${item.title} ${item.outlet ?? ""}`, rules);
-      if (!verdict && quality) {
+      if (!verdict && subject) {
         const headline = stripOutletSuffix(item.title, item.outlet);
         const publisher = publisherDomainOf(item);
-        const resolution = context.publishers?.resolve(publisher.domain) ?? { status: "unknown" as const };
-        const subject = { names, unknownPublisher: resolution.status === "unknown" };
+        const judged = googleNews || !item.lead ? headline : `${headline}\n${item.lead}`;
         verdict =
-          excludeReason(headline, { ...EMPTY_DISAMBIGUATION, exclude_unless_named: rules.exclude_unless_named, namesake_guard: rules.namesake_guard, aliases: rules.aliases }, subject) ??
+          excludeReason(judged, { ...EMPTY_DISAMBIGUATION, exclude_unless_named: rules.exclude_unless_named, aliases: rules.aliases }, subject) ??
           obituaryReason({ headline, outlet: item.outlet, domain: publisher.domain });
       }
       if (verdict) refused.push({ item, verdict });
