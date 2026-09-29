@@ -111,6 +111,9 @@ describe("a Wikimedia Commons portrait", () => {
     expect(commonsAvatarFrom("File:X.jpg", { ...info, extmetadata: { ...info.extmetadata, LicenseShortName: { value: "Fair use" } } }, NOW)).toBeNull();
     expect(commonsAvatarFrom("File:X.jpg", { ...info, thumburl: "https://example.com/x.jpg", url: "https://example.com/x.jpg" }, NOW)).toBeNull();
     expect(commonsAvatarFrom("File:X.jpg", undefined, NOW)).toBeNull();
+    // Commons answers scaled thumbnails from thumb.wikimedia.org with tracking appended (seen 2026-09-29); the host is Commons', the query is not the picture.
+    expect(commonsAvatarFrom("File:X.jpg", { ...info, thumburl: "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d3/X.jpg/960px-X.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo" }, NOW)?.url).toBe("https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d3/X.jpg/960px-X.jpg");
+    expect(readAvatarRecord({ avatar: { ...avatarRecordJson(record!), url: "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d3/X.jpg/960px-X.jpg" } })?.url).toContain("thumb.wikimedia.org");
     expect(commonsAvatarFrom("File:X.jpg", { ...info, extmetadata: { LicenseShortName: { value: "Public domain" } } }, NOW)?.channel).toBe("Unknown author");
     for (const ok of ["CC0", "CC0 1.0", "Public domain", "CC BY 2.0", "CC BY-SA 4.0", "CC BY-SA 3.0", "CC BY 4.0 International"]) expect(COMMONS_ALLOWED_LICENSES.test(ok), ok).toBe(true);
     for (const no of ["Fair use", "CC BY-NC 2.0", "CC BY-ND 4.0", "GFDL", "All rights reserved"]) expect(COMMONS_ALLOWED_LICENSES.test(no), no).toBe(false);

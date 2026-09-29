@@ -49,7 +49,8 @@ export const AVATAR_CATEGORIES: ReadonlySet<string> = new Set(["creator", "music
 const AVATAR_HOSTS: Readonly<Record<AvatarSource, RegExp>> = {
   youtube: /^https:\/\/(yt3\.ggpht\.com|yt3\.googleusercontent\.com|[a-z0-9-]+\.googleusercontent\.com)\//i,
   twitch: /^https:\/\/static-cdn\.jtvnw\.net\//i,
-  commons: /^https:\/\/upload\.wikimedia\.org\/wikipedia\/commons\//i,
+  // Commons serves originals from upload.wikimedia.org and, since 2026-09, scaled thumbnails from thumb.wikimedia.org.
+  commons: /^https:\/\/(upload|thumb)\.wikimedia\.org\/wikipedia\/commons\//i,
 };
 
 // ---------------------------------------------------------------------------
@@ -238,7 +239,8 @@ function plainText(html: string | undefined | null, max: number): string | null 
  * (a public-domain file may name none; "Unknown author" is then written).
  */
 export function commonsAvatarFrom(fileTitle: string | null | undefined, info: CommonsImageInfo | undefined, now: Date): AvatarRecord | null {
-  const url = info?.thumburl ?? info?.url ?? null;
+  // Commons appends utm_* tracking to the URLs it answers with; the picture is the path.
+  const url = (info?.thumburl ?? info?.url ?? null)?.replace(/\?.*$/, "") ?? null;
   const license = plainText(info?.extmetadata?.LicenseShortName?.value, 60);
   if (!fileTitle || !url || !license || !isAvatarUrl(url, "commons") || !COMMONS_ALLOWED_LICENSES.test(license)) return null;
   const artist = plainText(info?.extmetadata?.Artist?.value, 120) ?? plainText(info?.extmetadata?.Credit?.value, 120) ?? "Unknown author";
