@@ -21,7 +21,7 @@ import type { Json } from "@/types/database";
  * itself no longer loads).
  */
 
-export type AvatarSource = "youtube" | "twitch" | "commons";
+export type AvatarSource = "youtube" | "twitch" | "commons" | "apisports";
 
 /** What is kept about an avatar, on the person's platform mapping. Never the image. */
 export interface AvatarRecord {
@@ -29,7 +29,7 @@ export interface AvatarRecord {
   source: AvatarSource;
   /** The channel's display name, for the credit. */
   channel: string;
-  /** The channel's handle or login, for the credit's link; for a Commons portrait, the file's title. */
+  /** The channel's handle or login, for the credit's link; for a Commons portrait, the file's title; for an API-Sports headshot, the player id. */
   handle: string | null;
   refreshedAt: string;
   /** A Commons portrait's licence, as Commons names it ("CC BY-SA 4.0"), and the licence's page; absent for a platform avatar. */
@@ -40,7 +40,7 @@ export interface AvatarRecord {
 }
 
 /** How old a record may be, per platform, before it is read again. */
-export const AVATAR_REFRESH_HOURS: Readonly<Record<AvatarSource, number>> = { youtube: 30 * 24, twitch: 24, commons: 30 * 24 };
+export const AVATAR_REFRESH_HOURS: Readonly<Record<AvatarSource, number>> = { youtube: 30 * 24, twitch: 24, commons: 30 * 24, apisports: 30 * 24 };
 
 /** The categories whose channels are their own: creators and musicians. */
 export const AVATAR_CATEGORIES: ReadonlySet<string> = new Set(["creator", "musician"]);
@@ -51,7 +51,18 @@ const AVATAR_HOSTS: Readonly<Record<AvatarSource, RegExp>> = {
   twitch: /^https:\/\/static-cdn\.jtvnw\.net\//i,
   // Commons serves originals from upload.wikimedia.org and, since 2026-09, scaled thumbnails from thumb.wikimedia.org.
   commons: /^https:\/\/(upload|thumb)\.wikimedia\.org\/wikipedia\/commons\//i,
+  apisports: /^https:\/\/media\.api-sports\.io\//i,
 };
+
+/**
+ * ATHLETES: API-SPORTS HEADSHOTS (decided 2026-09-29). An athlete with an
+ * API-Sports player mapping (the id the game connector already reads) shows
+ * the player headshot API-Sports serves from its own media host, read from
+ * the player endpoint of the sport's host and credited "API-Sports" on the
+ * profile. Their terms allow the images inside an application that uses
+ * the API; the picture is not copied here. Same 30-day refresh as YouTube.
+ */
+export const APISPORTS_AVATAR_CATEGORIES: ReadonlySet<string> = new Set(["athlete"]);
 
 // ---------------------------------------------------------------------------
 // Wikimedia Commons portraits (decided 2026-09-29)
@@ -114,6 +125,10 @@ export interface AvatarChannel {
 export function avatarChannelFor(person: { category: string; slug?: string }, mappings: readonly AvatarMapping[]): AvatarChannel | null {
   const platform = platformChannelFor(person, mappings);
   if (platform) return platform;
+  if (APISPORTS_AVATAR_CATEGORIES.has(person.category)) {
+    const player = mappings.find((mapping) => mapping.source === "apisports" && /^\d+$/.test(mapping.externalIdentifier.trim()));
+    if (player) return { source: "apisports", identifier: player.externalIdentifier.trim(), mappingSource: "apisports" };
+  }
   // A pinned Commons portrait, kept on the person's news mapping (every tracked person has one).
   const title = person.slug ? COMMONS_PORTRAITS[person.slug] : undefined;
   if (!title) return null;
@@ -149,7 +164,7 @@ export function readAvatarRecord(config: Record<string, Json | undefined> | null
   const block = config?.avatar;
   if (!block || typeof block !== "object" || Array.isArray(block)) return null;
   const record = block as Record<string, Json | undefined>;
-  const source = record.source === "youtube" || record.source === "twitch" || record.source === "commons" ? record.source : null;
+  const source = record.source === "youtube" || record.source === "twitch" || record.source === "commons" || record.source === "apisports" ? record.source : null;
   const url = text(record.url, 2048);
   const channel = text(record.channel, 200);
   const refreshedAt = text(record.refreshed_at, 40);
@@ -210,6 +225,22 @@ export function twitchAvatarFrom(user: { login?: string; display_name?: string; 
   return { url, source: "twitch", channel, handle: text(user?.login, 120), refreshedAt: now.toISOString() };
 }
 
+/** The public fields of an API-Sports player this reads: the id, the name and the headshot. */
+export interface ApiSportsPlayer {
+  id?: number | string;
+  name?: string;
+  image?: string;
+}
+
+/** An API-Sports player's headshot on their media host, with the player's name. Null without a usable image. */
+export function apisportsAvatarFrom(player: ApiSportsPlayer | undefined, now: Date): AvatarRecord | null {
+  const url = text(player?.image, 2048);
+  const channel = text(player?.name, 200);
+  if (!url || !channel || !isAvatarUrl(url, "apisports")) return null;
+  const id = player?.id === undefined || player?.id === null ? null : String(player.id);
+  return { url, source: "apisports", channel, handle: id, refreshedAt: now.toISOString() };
+}
+
 /** What Commons answers about a file: the thumbnail, the file page and the extended metadata this reads. */
 export interface CommonsImageInfo {
   thumburl?: string;
@@ -261,18 +292,19 @@ export function commonsAvatarFrom(fileTitle: string | null | undefined, info: Co
 // ---------------------------------------------------------------------------
 
 export interface AvatarCredit {
-  platform: "YouTube" | "Twitch" | "Wikimedia Commons";
+  platform: "YouTube" | "Twitch" | "Wikimedia Commons" | "API-Sports";
   channel: string;
   /** The channel's page on the platform. */
   url: string;
 }
 
-/** "Photo: YouTube · MrBeast", linked to the channel; "Photo: Wikimedia Commons · Steve Jurvetson (CC BY 2.0)", linked to the file page. */
+/** "Photo: YouTube · MrBeast", linked to the channel; "Photo: Wikimedia Commons · Steve Jurvetson (CC BY 2.0)", linked to the file page; "Photo: API-Sports · Patrick Mahomes", linked to API-Sports. */
 export function avatarCredit(record: AvatarRecord | null): AvatarCredit | null {
   if (!record) return null;
   if (record.source === "commons") {
     return { platform: "Wikimedia Commons", channel: record.license ? `${record.channel} (${record.license})` : record.channel, url: record.pageUrl ?? "https://commons.wikimedia.org/" };
   }
+  if (record.source === "apisports") return { platform: "API-Sports", channel: record.channel, url: "https://api-sports.io/" };
   if (record.source === "youtube") {
     const url = record.handle ? `https://www.youtube.com/${encodeURIComponent(record.handle)}` : "https://www.youtube.com/";
     return { platform: "YouTube", channel: record.channel, url };

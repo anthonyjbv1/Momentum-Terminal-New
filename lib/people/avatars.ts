@@ -1,12 +1,14 @@
 import "server-only";
 
+import { envelopeErrors, readApiSportsConfig, type ApiSportsEnvelope } from "@/lib/connectors/apisports";
 import { fetchTwitchToken } from "@/lib/connectors/twitch";
 import { youtubeGet } from "@/lib/connectors/youtube";
-import { getTwitchCredentialsOrNull, getYouTubeApiKeyOrNull } from "@/lib/env";
+import { getApiSportsKeyOrNull, getTwitchCredentialsOrNull, getYouTubeApiKeyOrNull } from "@/lib/env";
 import type { TypedSupabaseClient } from "@/types";
 import type { Json } from "@/types/database";
 
 import {
+  apisportsAvatarFrom,
   avatarChannelFor,
   avatarRecordJson,
   commonsAvatarFrom,
@@ -15,6 +17,7 @@ import {
   readAvatarRecord,
   twitchAvatarFrom,
   youtubeAvatarFrom,
+  type ApiSportsPlayer,
   type AvatarChannel,
   type AvatarMapping,
   type AvatarRecord,
@@ -32,7 +35,7 @@ import {
  * last URL as they are, and is logged.
  */
 
-const AVATAR_SOURCES = ["youtube", "twitch", "youtube_trending", "rss", "publisher_rss"] as const;
+const AVATAR_SOURCES = ["youtube", "twitch", "youtube_trending", "rss", "publisher_rss", "apisports"] as const;
 
 /** Wikimedia's API etiquette asks for a User-Agent that names the caller. */
 const WIKIMEDIA_UA = "MomentumTerminal/1.0 (https://momentumterminal.app; info@momentumterminal.app)";
@@ -57,7 +60,7 @@ interface MappingRow {
   person_id: string;
   external_identifier: string | null;
   config: Json | null;
-  data_sources: { name: string } | null;
+  data_sources: { name: string; config: Json | null } | null;
 }
 
 async function readYouTubeAvatar(channel: AvatarChannel, fetchImpl: typeof fetch, now: Date): Promise<AvatarRecord | null> {
@@ -78,6 +81,28 @@ async function readTwitchAvatar(channel: AvatarChannel, fetchImpl: typeof fetch,
   if (!response.ok) throw new Error(`Twitch API responded ${response.status} for /users`);
   const body = (await response.json()) as { data?: Array<{ login?: string; display_name?: string; profile_image_url?: string }> };
   return twitchAvatarFrom(body.data?.[0], now);
+}
+
+/**
+ * An athlete's API-Sports headshot: the player endpoint of the sport's host
+ * (the host the game connector is configured with), the player's image on
+ * API-Sports' media host. A player the host does not list yields nothing.
+ */
+async function readApiSportsAvatar(channel: AvatarChannel, sourceConfig: Json | null, fetchImpl: typeof fetch, now: Date): Promise<AvatarRecord | null> {
+  const key = getApiSportsKeyOrNull();
+  if (!key) throw new Error("APISPORTS_API_KEY is not set");
+  const config = readApiSportsConfig((sourceConfig && typeof sourceConfig === "object" && !Array.isArray(sourceConfig) ? sourceConfig : {}) as Record<string, unknown>);
+  const path = `/players?id=${encodeURIComponent(channel.identifier)}`;
+  const response = await fetchImpl(`https://${config.host}${path}`, { headers: { "x-apisports-key": key, accept: "application/json" } });
+  if (!response.ok) throw new Error(`API-Sports responded ${response.status} for ${path} on ${config.host}`);
+  const body = (await response.json()) as ApiSportsEnvelope<ApiSportsPlayer>;
+  const errors = envelopeErrors(body.errors);
+  if (errors.length > 0) throw new Error(`API-Sports refused ${path} on ${config.host}: ${errors.join("; ")}`);
+  const player = body.response?.[0];
+  if (!player) throw new AvatarRefused(`API-Sports lists no player ${channel.identifier} on ${config.host}`);
+  const record = apisportsAvatarFrom(player, now);
+  if (!record) throw new AvatarRefused(`API-Sports player ${channel.identifier} has no headshot on media.api-sports.io (image ${player.image ?? "none"})`);
+  return record;
 }
 
 /**
@@ -130,7 +155,7 @@ export async function refreshPersonAvatars(options: { client: TypedSupabaseClien
 
   const mappings = await client
     .from("person_data_sources")
-    .select("id, person_id, external_identifier, config, data_sources!inner(name)")
+    .select("id, person_id, external_identifier, config, data_sources!inner(name, config)")
     .eq("is_active", true)
     .in("person_id", ids)
     .in("data_sources.name", [...AVATAR_SOURCES]);
@@ -151,7 +176,13 @@ export async function refreshPersonAvatars(options: { client: TypedSupabaseClien
 
     try {
       const record =
-        channel.source === "youtube" ? await readYouTubeAvatar(channel, fetchImpl, now) : channel.source === "twitch" ? await readTwitchAvatar(channel, fetchImpl, now) : await readCommonsAvatar(channel, fetchImpl, now);
+        channel.source === "youtube"
+          ? await readYouTubeAvatar(channel, fetchImpl, now)
+          : channel.source === "twitch"
+            ? await readTwitchAvatar(channel, fetchImpl, now)
+            : channel.source === "apisports"
+              ? await readApiSportsAvatar(channel, mapping.data_sources?.config ?? null, fetchImpl, now)
+              : await readCommonsAvatar(channel, fetchImpl, now);
       if (!record) {
         result.failed.push({ slug: person.slug, reason: channel.source === "commons" ? "no free Commons portrait for the article" : "the platform listed no avatar" });
         continue;

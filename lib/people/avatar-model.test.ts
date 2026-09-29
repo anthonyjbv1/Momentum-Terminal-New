@@ -4,6 +4,7 @@ import { copyViolations } from "@/lib/copy-rules";
 
 import {
   AVATAR_REFRESH_HOURS,
+  apisportsAvatarFrom,
   COMMONS_ALLOWED_LICENSES,
   COMMONS_PORTRAITS,
   commonsAvatarFrom,
@@ -32,7 +33,17 @@ describe("which channel a person's avatar comes from", () => {
     // Everyone else keeps initials, whatever is mapped, unless a Commons portrait is pinned for them.
     expect(avatarChannelFor({ category: "executive", slug: "someone-new" }, [{ source: "youtube", externalIdentifier: "UC123456", config: null }])).toBeNull();
     expect(avatarChannelFor({ category: "athlete", slug: "patrick-mahomes" }, [trending])).toBeNull();
+    // An athlete's own channel is not used; API-Sports is (below).
+    expect(avatarChannelFor({ category: "athlete", slug: "patrick-mahomes" }, [{ source: "youtube", externalIdentifier: "UC123456", config: null }])).toBeNull();
     expect(avatarChannelFor({ category: "founder", slug: "anthony-baptiste" }, [trending])).toBeNull();
+  });
+
+  it("is the API-Sports headshot for an athlete with a player mapping (decided 2026-09-29)", () => {
+    const player = { source: "apisports", externalIdentifier: "1197", config: null };
+    expect(avatarChannelFor({ category: "athlete", slug: "patrick-mahomes" }, [trending, player])).toEqual({ source: "apisports", identifier: "1197", mappingSource: "apisports" });
+    // A mapping that is not a player id, or a person outside the athlete category, is not a headshot.
+    expect(avatarChannelFor({ category: "athlete", slug: "patrick-mahomes" }, [{ ...player, externalIdentifier: "mahomes" }])).toBeNull();
+    expect(avatarChannelFor({ category: "executive", slug: "someone-new" }, [player])).toBeNull();
   });
 
   it("is the pinned Wikimedia Commons portrait for an executive, kept on their news mapping (decided 2026-09-29)", () => {
@@ -68,7 +79,7 @@ describe("the record", () => {
     expect(isAvatarStale(record, youtube, Date.parse(record.refreshedAt) + AVATAR_REFRESH_HOURS.youtube * 3_600_000 + 1)).toBe(true);
     expect(isAvatarStale(null, youtube, fresh)).toBe(true);
     expect(isAvatarStale(record, { source: "twitch", identifier: "x", mappingSource: "twitch" }, fresh)).toBe(true);
-    expect(AVATAR_REFRESH_HOURS).toEqual({ youtube: 720, twitch: 24, commons: 720 });
+    expect(AVATAR_REFRESH_HOURS).toEqual({ youtube: 720, twitch: 24, commons: 720, apisports: 720 });
   });
 });
 
@@ -84,6 +95,20 @@ describe("what the platforms answer", () => {
     const user = { login: "kaicenat", display_name: "KaiCenat", profile_image_url: "https://static-cdn.jtvnw.net/jtv_user_pictures/x-profile_image-300x300.png" };
     expect(twitchAvatarFrom(user, NOW)).toEqual({ url: user.profile_image_url, source: "twitch", channel: "KaiCenat", handle: "kaicenat", refreshedAt: NOW.toISOString() });
     expect(twitchAvatarFrom({ login: "x" }, NOW)).toBeNull();
+  });
+});
+
+describe("an API-Sports headshot", () => {
+  it("takes the player's image on API-Sports' media host and their name; nothing off that host or without an image", () => {
+    const player = { id: 1197, name: "Patrick Mahomes", image: "https://media.api-sports.io/american-football/players/1197.png" };
+    const record = apisportsAvatarFrom(player, NOW);
+    expect(record).toEqual({ url: player.image, source: "apisports", channel: "Patrick Mahomes", handle: "1197", refreshedAt: NOW.toISOString() });
+    expect(readAvatarRecord({ avatar: avatarRecordJson(record!) })).toEqual(record);
+    expect(apisportsAvatarFrom({ ...player, image: "https://example.com/1197.png" }, NOW)).toBeNull();
+    expect(apisportsAvatarFrom({ id: 1197, name: "Patrick Mahomes" }, NOW)).toBeNull();
+    expect(apisportsAvatarFrom(undefined, NOW)).toBeNull();
+    expect(avatarCredit(record)).toEqual({ platform: "API-Sports", channel: "Patrick Mahomes", url: "https://api-sports.io/" });
+    expect(copyViolations("Photo: API-Sports · Patrick Mahomes")).toEqual([]);
   });
 });
 
