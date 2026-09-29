@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { copyViolations } from "@/lib/copy-rules";
+
 import { CREATOR_ONLY_NOUNS, METRIC_VOICE } from "@/lib/signals/metric-language";
 
 import {
@@ -20,6 +22,9 @@ import {
   signalCard,
   signedMove,
   sourceNoun,
+  storyCard,
+  storyDays,
+  storyMove,
   streamHeadline,
   type CardCopy,
   type CardEvidenceInput,
@@ -448,5 +453,45 @@ describe("rule 8: one card per fact", () => {
     expect(isNarrativeEvidence([])).toBe(false);
     expect(isNarrativeEvidence(null)).toBe(false);
     expect(isNarrativeEvidence(undefined)).toBe(false);
+  });
+});
+
+describe("the story card (Part B)", () => {
+  it("says the move today and over the story's life, once when they are the same", () => {
+    expect(storyMove(-0.6, -1.4, 3)).toBe("−0.6 today · −1.4 over 3 days");
+    expect(storyMove(0.6, 1.4, 1)).toBe("+1.4 today");
+    expect(storyMove(1.4, 1.4, 3)).toBe("+1.4 today");
+    expect(storyDays("2026-09-26T12:00:00Z", "2026-09-28T15:30:00Z")).toBe(3);
+    expect(storyDays("2026-09-26T12:00:00Z", "2026-09-26T13:00:00Z")).toBe(1);
+    expect(storyDays("bad", "2026-09-26T13:00:00Z")).toBe(1);
+  });
+
+  it("renders the leader's title under its outlet, linked, and names the person once in the line with where the copies came from", () => {
+    const copy = storyCard({
+      subject: zuck,
+      headline: "Mark Zuckerberg Loses $9 Billion In A Day Amid AI Overspending Fears",
+      impactToday: -0.2,
+      impactTotal: -1.26,
+      days: 2,
+      evidence: [
+        evidence({ id: "lead", headline: "Mark Zuckerberg Loses $9 Billion In A Day Amid AI Overspending Fears", detail: article("Forbes", "forbes.com", "https://www.forbes.com/lead") }),
+        evidence({ id: "copy", headline: "Mark Zuckerberg Loses $9 Billion In A Day As Goldman Sachs Pours Cold Water On Meta Stock Rally", detail: article("Yahoo Finance", "finance.yahoo.com") }),
+      ],
+    });
+    expect(copy).toEqual({
+      label: "Forbes",
+      headline: "Mark Zuckerberg Loses $9 Billion In A Day Amid AI Overspending Fears",
+      link: "https://www.forbes.com/lead",
+      line: "2 stories in Forbes and Yahoo Finance · −0.2 today · −1.3 over 2 days.",
+      attribution: "Forbes, Yahoo Finance",
+      quoted: true,
+    });
+    for (const text of words(copy)) expect(copyViolations(text)).toEqual([]);
+    expect(countNames(ours(copy), zuck)).toBe(0);
+
+    // A headline of ours that does not name the person: the line does, once.
+    const metricStory = storyCard({ subject: musk, headline: "x", impactToday: 0.3, impactTotal: 0.3, days: 1, evidence: [evidence({ sourceName: "Finnhub", payload: metric("company_news_volume_24h", 2.2) })] });
+    expect(metricStory.line).toBe("Company news · Musk +0.3 today.");
+    expect(countNames(ours(metricStory), musk)).toBe(1);
   });
 });

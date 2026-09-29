@@ -989,6 +989,92 @@ export type Database = {
         }
         Relationships: []
       }
+      stories: {
+        Row: {
+          created_at: string
+          first_at: string
+          headline: string
+          id: string
+          impact_total: number
+          last_at: string
+          person_id: string
+          signal_count: number
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          first_at: string
+          headline: string
+          id?: string
+          impact_total?: number
+          last_at: string
+          person_id: string
+          signal_count?: number
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          first_at?: string
+          headline?: string
+          id?: string
+          impact_total?: number
+          last_at?: string
+          person_id?: string
+          signal_count?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stories_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      story_signals: {
+        Row: {
+          anchor: string | null
+          joined_at: string
+          role: string
+          signal_id: string
+          similarity: number | null
+          story_id: string
+        }
+        Insert: {
+          anchor?: string | null
+          joined_at?: string
+          role?: string
+          signal_id: string
+          similarity?: number | null
+          story_id: string
+        }
+        Update: {
+          anchor?: string | null
+          joined_at?: string
+          role?: string
+          signal_id?: string
+          similarity?: number | null
+          story_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "story_signals_signal_id_fkey"
+            columns: ["signal_id"]
+            isOneToOne: true
+            referencedRelation: "signals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "story_signals_story_id_fkey"
+            columns: ["story_id"]
+            isOneToOne: false
+            referencedRelation: "stories"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       narrative_signals: {
         Row: {
           created_at: string
@@ -2845,6 +2931,8 @@ export type Database = {
           score_after: number
           score_before: number
           sources: string[]
+          story_first_at: string | null
+          story_signals: number | null
           text: string
           tick_number: number
         }[]
@@ -3066,6 +3154,7 @@ export type Database = {
           score: number
         }[]
       }
+      record_story_clusters: { Args: { p_clusters: Json }; Returns: number }
       person_score_series: {
         Args: { p_person_id: string; p_points?: number; p_since?: string }
         Returns: {

@@ -67,6 +67,8 @@ export interface ScoredSignal {
   story?: StoryConfirmation;
 }
 
+import type { StoryClusterRecord } from "./story-records";
+
 /** How a confirming copy of an already-scored story was bounded (Phase 31). */
 export interface StoryConfirmation {
   /** The signal whose story this one repeats: a recently scored one, or the strongest copy in this tick. */
@@ -295,6 +297,8 @@ export interface TickPersistence {
   }>;
   signals: Array<{ id: string; impactScore: number; sentimentLabel: SentimentResult["label"]; sentimentConfidence: number }>;
   events: Array<{ personId: string; force: ForceName; impact: number; details: Record<string, unknown> }>;
+  /** The story clusters this tick confirmed (Phase 31), for the story record. Empty while the switch is off. */
+  stories: StoryClusterRecord[];
 }
 
 export interface TickPersistenceResult {

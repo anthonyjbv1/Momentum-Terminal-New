@@ -15,6 +15,8 @@ import type {
 import type { InversePair, Person, TypedSupabaseClient } from "@/types";
 import type { Json } from "@/types/database";
 
+import { storyRecordsPayload, type StoryClusterRecord } from "./story-records";
+
 /**
  * Persistence boundary for the Engine. The Supabase implementation runs in
  * production with the service-role client (reads several tables, persists
@@ -235,6 +237,15 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
       const { data, error } = await client.rpc("apply_engine_tick", { p_tick: payload as unknown as Json });
       if (error) throw new Error(`apply_engine_tick failed: ${error.message}`);
 
+      // The story record (Part B): after the tick has committed, so every
+      // member is a processed signal. Idempotent, and a failure here is
+      // logged rather than thrown: the tick is published; the story rows
+      // catch up on the next tick that confirms the same story.
+      if (tick.stories.length > 0) {
+        const stories = await client.rpc("record_story_clusters", { p_clusters: storyRecordsPayload(tick.stories) as unknown as Json });
+        if (stories.error) console.warn("[engine] record_story_clusters failed:", stories.error.message);
+      }
+
       const result = (data ?? {}) as Record<string, unknown>;
       return {
         tickNumber: Number(result.tick_number ?? tick.expectedTickNumber),
@@ -270,6 +281,8 @@ export interface MemoryEngineSeed {
 
 export interface MemoryEngineStore extends EngineStore {
   readonly people: Person[];
+  /** The story clusters every tick confirmed, in order (Part B). */
+  readonly stories: StoryClusterRecord[];
   readonly signals: NonNullable<MemoryEngineSeed["signals"]>;
   readonly ticks: TickPersistence[];
   readonly scoreHistory: Array<{ personId: string; score: number; tickNumber: number; recordedAt: Date }>;
@@ -281,6 +294,7 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
   const people = seed.people.map((p) => ({ ...p }));
   const signals = (seed.signals ?? []).map((s) => ({ ...s }));
   const ticks: TickPersistence[] = [];
+  const stories: StoryClusterRecord[] = [];
   const scoreHistory: MemoryEngineStore["scoreHistory"] = [];
   const scoreEvents: MemoryEngineStore["scoreEvents"] = [];
   const processedSignals: TickPersistence["signals"] = [];
@@ -290,6 +304,7 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
     people,
     signals,
     ticks,
+    stories,
     scoreHistory,
     scoreEvents,
     processedSignals,
@@ -361,6 +376,7 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
       const tickNumber = lastTickNumber + 1;
       lastTickNumber = tickNumber;
       ticks.push(tick);
+      stories.push(...tick.stories);
 
       let peopleUpdated = 0;
       for (const update of tick.people) {

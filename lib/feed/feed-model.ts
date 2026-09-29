@@ -10,6 +10,8 @@ import {
   showsAsCard,
   signalCard,
   signalDetailLines,
+  storyCard,
+  storyDays,
   type CardCopy,
   type CardEvidenceInput,
   type CardSubject,
@@ -60,6 +62,9 @@ export const PINNED_WINDOW_HOURS = 24;
 /** At most this many pinned entries. */
 export const PINNED_MAX = 3;
 
+/** A story's "today": its members' impact in this many hours up to its last update (Part B). */
+export const STORY_TODAY_HOURS = 24;
+
 /** Entries per page from the database. */
 export const FEED_PAGE_SIZE = 24;
 
@@ -73,7 +78,20 @@ export const FEED_PREFETCH_MARGIN_PX = 600;
 // Entries
 // ---------------------------------------------------------------------------
 
-export type FeedEntryKind = "narrative" | "signal";
+export type FeedEntryKind = "narrative" | "signal" | "story";
+
+/**
+ * A story's span (Part B): several signals the Engine judged one event,
+ * across hours or days. `impactToday` is the members' impact in the 24 hours
+ * up to the last update; `impactTotal` is all of them together.
+ */
+export interface FeedStory {
+  firstAt: string;
+  lastAt: string;
+  signalCount: number;
+  impactToday: number;
+  impactTotal: number;
+}
 
 export interface FeedPerson {
   id: string;
@@ -137,6 +155,8 @@ export interface FeedEntry {
   evidence: FeedEvidence[];
   /** A signal card's detail lines: the source, then a metric's arithmetic. Empty for a narrative. */
   detailLines: MetricDetailLine[];
+  /** The story's span, for a story entry (Part B); absent otherwise. */
+  story?: FeedStory | null;
 }
 
 /** A row of feed_entries() as the database returns it. */
@@ -156,6 +176,9 @@ export interface FeedRow {
   occurred_at: string;
   sources: string[] | null;
   evidence: unknown;
+  /** Story entries only (Part B): when the story began, and how many signals it holds. */
+  story_first_at?: string | null;
+  story_signals?: number | string | null;
 }
 
 /** What the server read alongside a page (Phase 30): signal detail by signal id, company by person id. */
@@ -241,7 +264,7 @@ export function evidenceDetailLines(item: FeedEvidence, subject: CardSubject): M
 }
 
 export function toFeedEntry(row: FeedRow, context: FeedRowContext = EMPTY_CONTEXT): FeedEntry | null {
-  const kind: FeedEntryKind | null = row.kind === "narrative" ? "narrative" : row.kind === "signal" ? "signal" : null;
+  const kind: FeedEntryKind | null = row.kind === "narrative" ? "narrative" : row.kind === "signal" ? "signal" : row.kind === "story" ? "story" : null;
   if (!kind || !row.id || !row.person_id || !row.occurred_at) return null;
 
   const evidence = toEvidence(row.evidence, context.details);
@@ -288,6 +311,32 @@ export function toFeedEntry(row: FeedRow, context: FeedRowContext = EMPTY_CONTEX
     };
   }
 
+  if (kind === "story") {
+    const lastAt = row.occurred_at;
+    const firstAt = row.story_first_at ?? lastAt;
+    const since = Date.parse(lastAt) - STORY_TODAY_HOURS * 3_600_000;
+    const impactToday = evidence.reduce((sum, item) => (Date.parse(item.occurredAt) >= since && item.impact !== null ? sum + item.impact : sum), 0);
+    const impactTotal = impact ?? evidence.reduce((sum, item) => sum + (item.impact ?? 0), 0);
+    const story: FeedStory = { firstAt, lastAt, signalCount: toNullableNumber(row.story_signals) ?? evidence.length, impactToday, impactTotal };
+    return {
+      id: row.id,
+      kind,
+      person,
+      text: row.text,
+      copy: storyCard({ subject, headline: row.text, impactToday, impactTotal, days: storyDays(firstAt, lastAt), evidence: evidence.map(toEvidenceInput) }),
+      impact: impactTotal,
+      direction: directionAtPrecision(impactTotal, FEED_IMPACT_DECIMALS, 0),
+      scoreBefore: null,
+      scoreAfter: null,
+      tickNumber: null,
+      occurredAt: lastAt,
+      sources,
+      evidence,
+      detailLines: [],
+      story,
+    };
+  }
+
   return {
     id: row.id,
     kind,
@@ -312,7 +361,7 @@ export function toFeedEntry(row: FeedRow, context: FeedRowContext = EMPTY_CONTEX
  * read it and only when its move prints as something other than zero.
  */
 export function isCard(entry: FeedEntry): boolean {
-  if (entry.kind === "narrative") return true;
+  if (entry.kind === "narrative" || entry.kind === "story") return true;
   return showsAsCard(entry.impact, entry.evidence[0]?.processed ?? null);
 }
 

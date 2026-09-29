@@ -11,6 +11,7 @@ import { isFreeSignal, selectTickSignals } from "@/lib/engine/selection";
 import { getSentimentScorer } from "@/lib/engine/sentiment";
 import { volumeWeight } from "@/lib/engine/signal-volume";
 import { confirmStories, storyOptions } from "@/lib/engine/stories";
+import { storyRecords } from "@/lib/engine/story-records";
 import { personNames } from "@/lib/ingest/stories";
 import { DORMANT_TARGET_DRIFT, advanceTargetDrift, effectiveTarget, readTargetDriftState, type TargetDriftState } from "@/lib/engine/target-drift";
 import { TickCallBudget, type DeferralReason } from "@/lib/engine/sentiment/budget";
@@ -212,7 +213,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     });
     const openCapital = context.openCapitalCentsByPerson.get(person.id) ?? 0;
     const concentration = Number(person.max_allocation_cents) > 0 ? openCapital / Number(person.max_allocation_cents) : 0;
-    return { person, previousScore, deltaHours, gravity, target, drift, scoredSignals, signals, openCapital, concentration };
+    return { person, previousScore, deltaHours, gravity, target, drift, scoredSignals, signals, openCapital, concentration, storyClusters };
   });
 
   const signalsImpactByPerson = new Map(partial.map((p) => [p.person.id, p.signals.impact]));
@@ -412,6 +413,8 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
         .filter((f) => f.impact !== 0)
         .map((f) => ({ personId: r.person.id, force: f.force, impact: round(f.impact, FORCE_DECIMALS), details: f.details })),
     ),
+
+    stories: partial.flatMap((p) => storyRecords(p.person.id, p.storyClusters)),
   };
 
   const applied = await store.applyTick(persistence);

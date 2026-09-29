@@ -68,7 +68,7 @@ describe("the Forecast force weight", () => {
     const tables = [...store.matchAll(/\.from\("([a-z_]+)"\)/g)].map((match) => match[1]);
     expect(new Set(tables)).toEqual(new Set(["people", "signals", "positions", "trade_events", "inverse_pairs", "engine_ticks", "score_events"]));
     const rpcs = [...store.matchAll(/\.rpc\("([a-z_]+)"/g)].map((match) => match[1]);
-    expect(new Set(rpcs)).toEqual(new Set(["person_signal_volume", "apply_engine_tick"]));
+    expect(new Set(rpcs)).toEqual(new Set(["person_signal_volume", "apply_engine_tick", "record_story_clusters"]));
   });
 });
 

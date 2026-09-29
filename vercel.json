@@ -16,7 +16,8 @@
   ],
   "git": {
     "deploymentEnabled": {
-      "phase31-matching-narrative": false
+      "phase31-matching-narrative": false,
+      "feed-stories": false
     }
   }
 }
