@@ -92,7 +92,9 @@ async function readCommonsAvatar(channel: AvatarChannel, fetchImpl: typeof fetch
   if (!page.ok) throw new Error(`Wikipedia responded ${page.status} for ${channel.identifier}`);
   const pageBody = (await page.json()) as { query?: { pages?: Array<{ title?: string; missing?: boolean; pageimage?: string }> } };
   const article = pageBody.query?.pages?.[0];
-  if (!article || article.missing || !article.pageimage) return null;
+  // Each refusal says which step refused, so the reason can be read back from the mapping.
+  if (!article || article.missing) throw new AvatarRefused(`no Wikipedia article for "${channel.identifier}"`);
+  if (!article.pageimage) throw new AvatarRefused(`the article "${article.title ?? channel.identifier}" has no lead image`);
   const fileTitle = `File:${article.pageimage}`;
   const info = await fetchImpl(
     `https://commons.wikimedia.org/w/api.php?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=${COMMONS_THUMB_WIDTH}&iiextmetadatafilter=Artist|LicenseShortName|LicenseUrl|Credit&titles=${encodeURIComponent(fileTitle)}`,
@@ -101,9 +103,18 @@ async function readCommonsAvatar(channel: AvatarChannel, fetchImpl: typeof fetch
   if (!info.ok) throw new Error(`Commons responded ${info.status} for ${fileTitle}`);
   const infoBody = (await info.json()) as { query?: { pages?: Array<{ missing?: boolean; imageinfo?: CommonsImageInfo[] }> } };
   const file = infoBody.query?.pages?.[0];
-  if (!file || file.missing) return null;
-  return commonsAvatarFrom(fileTitle, file.imageinfo?.[0], now);
+  if (!file || file.missing) throw new AvatarRefused(`${fileTitle} is not on Commons`);
+  const imageinfo = file.imageinfo?.[0];
+  const record = commonsAvatarFrom(fileTitle, imageinfo, now);
+  if (!record) {
+    const license = imageinfo?.extmetadata?.LicenseShortName?.value ?? "no licence stated";
+    throw new AvatarRefused(`${fileTitle} refused: licence "${license.replace(/<[^>]+>/g, "").trim()}", url ${imageinfo?.thumburl ?? imageinfo?.url ?? "none"}`);
+  }
+  return record;
 }
+
+/** A source answered, and what it answered is not a picture the rules accept: not an outage, and worth recording on the mapping. */
+class AvatarRefused extends Error {}
 
 export async function refreshPersonAvatars(options: { client: TypedSupabaseClient; fetch?: typeof fetch; now?: Date; limit?: number }): Promise<AvatarRefreshResult> {
   const { client } = options;
@@ -145,7 +156,9 @@ export async function refreshPersonAvatars(options: { client: TypedSupabaseClien
         result.failed.push({ slug: person.slug, reason: channel.source === "commons" ? "no free Commons portrait for the article" : "the platform listed no avatar" });
         continue;
       }
-      const config = { ...((mapping.config as Record<string, Json | undefined> | null) ?? {}), avatar: avatarRecordJson(record) } as Json;
+      const rest = { ...((mapping.config as Record<string, Json | undefined> | null) ?? {}) };
+      delete rest.avatar_error;
+      const config = { ...rest, avatar: avatarRecordJson(record) } as Json;
       const wroteMapping = await client.from("person_data_sources").update({ config }).eq("id", mapping.id);
       if (wroteMapping.error) throw new Error(wroteMapping.error.message);
       const wrotePerson = await client.from("people").update({ avatar_url: record.url }).eq("id", person.id);
@@ -155,6 +168,10 @@ export async function refreshPersonAvatars(options: { client: TypedSupabaseClien
       const reason = error instanceof Error ? error.message : String(error);
       console.warn(`[avatars] ${person.slug}: ${reason}`);
       result.failed.push({ slug: person.slug, reason });
+      // The last refusal is kept on the mapping (never the picture), so an operator can read why the initials stand.
+      const config = { ...((mapping.config as Record<string, Json | undefined> | null) ?? {}), avatar_error: { at: now.toISOString(), reason: reason.slice(0, 400) } } as Json;
+      const wrote = await client.from("person_data_sources").update({ config }).eq("id", mapping.id);
+      if (wrote.error) console.warn(`[avatars] ${person.slug}: could not record the refusal: ${wrote.error.message}`);
     }
   }
   return result;
