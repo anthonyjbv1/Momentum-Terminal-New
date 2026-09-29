@@ -15,6 +15,7 @@ import {
   type CardSubject,
   type SignalDetail,
 } from "./card-copy";
+import { sparkAcross, type SparkPoint } from "./story-card";
 
 /**
  * The Feed's shape and the pure logic behind it: the entry, the high-impact
@@ -137,6 +138,8 @@ export interface FeedEntry {
   evidence: FeedEvidence[];
   /** A signal card's detail lines: the source, then a metric's arithmetic. Empty for a narrative. */
   detailLines: MetricDetailLine[];
+  /** The person's score across the move (Phase 34), oldest first, for the card's sparkline. Null when the server had too little to draw. */
+  spark: number[] | null;
 }
 
 /** A row of feed_entries() as the database returns it. */
@@ -162,6 +165,8 @@ export interface FeedRow {
 export interface FeedRowContext {
   details: ReadonlyMap<string, SignalDetail>;
   companies: ReadonlyMap<string, string>;
+  /** Each person's score series over the page's span (Phase 34), by person id, for the sparklines. Absent means no sparkline. */
+  series?: ReadonlyMap<string, readonly SparkPoint[]>;
 }
 
 export const EMPTY_CONTEXT: FeedRowContext = { details: new Map(), companies: new Map() };
@@ -260,6 +265,7 @@ export function toFeedEntry(row: FeedRow, context: FeedRowContext = EMPTY_CONTEX
     company: context.companies.get(row.person_id) ?? null,
   };
   const subject = subjectOf(person);
+  const spark = sparkAcross(context.series?.get(row.person_id) ?? [], row.occurred_at);
 
   if (kind === "signal") {
     const own = evidence[0];
@@ -289,6 +295,7 @@ export function toFeedEntry(row: FeedRow, context: FeedRowContext = EMPTY_CONTEX
       sources,
       evidence,
       detailLines: signalDetailLines(input),
+      spark,
     };
   }
 
@@ -307,6 +314,7 @@ export function toFeedEntry(row: FeedRow, context: FeedRowContext = EMPTY_CONTEX
     sources,
     evidence,
     detailLines: [],
+    spark,
   };
 }
 

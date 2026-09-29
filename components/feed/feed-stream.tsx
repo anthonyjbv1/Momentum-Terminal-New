@@ -17,6 +17,7 @@ import {
   type FeedPage,
 } from "@/lib/feed/feed-model";
 import { rankFeed } from "@/lib/feed/ranking";
+import { groupStream } from "@/lib/feed/story-card";
 import type { CategoryOption } from "@/lib/home/board-model";
 import { CategoryFilter } from "@/components/home/category-filter";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,7 @@ import { Card } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/page-header";
 import { SkeletonFeedItem } from "@/components/ui/skeleton";
 
+import { AlsoMoving } from "./also-moving";
 import { FeedEmpty } from "./feed-empty";
 import { FeedEntry } from "./feed-entry";
 import { FEED_SURFACE, logFeedEvent, useFeedLogging } from "./use-feed-logging";
@@ -35,6 +37,10 @@ import { FEED_SURFACE, logFeedEvent, useFeedLogging } from "./use-feed-logging";
  *
  * Ordering is chronological, newest first, through `rankFeed`: that call is
  * the one place a personalised ranker will plug in later.
+ *
+ * Phase 34: each story is its own card; a run of small moves between the
+ * stories is folded into one "Also moving" card of compact rows
+ * (`groupStream`), in the stream's order, nothing dropped.
  */
 export interface FeedStreamProps {
   initialPage: FeedPage;
@@ -113,6 +119,9 @@ export function FeedStream({ initialPage, categories, roster, loggingEnabled, re
     const pinnedIds = new Set(pinned.map((entry) => entry.id));
     return visible.filter((entry) => !pinnedIds.has(entry.id));
   }, [visible, pinned]);
+  const blocks = useMemo(() => groupStream(stream), [stream]);
+  // Each entry's index in the visible stream, pinned first, for the impression log.
+  const positions = useMemo(() => new Map(stream.map((entry, index) => [entry.id, pinned.length + index])), [stream, pinned.length]);
 
   useFeedLogging(listRef, { enabled: loggingEnabled, key: `${category}:${visible.length}:${pinned.length}` });
 
@@ -149,11 +158,13 @@ export function FeedStream({ initialPage, categories, roster, loggingEnabled, re
       {pinned.length > 0 ? (
         <section className="flex flex-col gap-4" aria-label="Notable moves">
           <SectionHeader title="Notable moves" meta="Last 24h" />
-          <Card className="flex flex-col divide-y divide-line">
+          <div className="flex flex-col gap-4">
             {pinned.map((entry, index) => (
-              <FeedEntry key={entry.id} entry={entry} position={index} prominent now={now} onOpen={onOpen} onExpand={onExpand} />
+              <Card key={entry.id}>
+                <FeedEntry entry={entry} position={index} prominent now={now} onOpen={onOpen} onExpand={onExpand} />
+              </Card>
             ))}
-          </Card>
+          </div>
         </section>
       ) : null}
 
@@ -165,18 +176,26 @@ export function FeedStream({ initialPage, categories, roster, loggingEnabled, re
             <p className="px-6 py-10 text-center text-sm text-fg-muted">Nothing from {categoryName} in the Feed yet.</p>
           </Card>
         ) : (
-          <Card className="flex flex-col divide-y divide-line">
-            {stream.map((entry, index) => (
-              <FeedEntry key={entry.id} entry={entry} position={pinned.length + index} now={now} onOpen={onOpen} onExpand={onExpand} />
-            ))}
-            {/* The next page's rows take shape in place, inside the same card, so nothing jumps when they land. */}
+          <div className="flex flex-col gap-4">
+            {blocks.map((block) =>
+              block.type === "card" ? (
+                <Card key={block.entry.id}>
+                  <FeedEntry entry={block.entry} position={positions.get(block.entry.id) ?? 0} now={now} onOpen={onOpen} onExpand={onExpand} />
+                </Card>
+              ) : (
+                <Card key={`also-${block.entries[0].id}`}>
+                  <AlsoMoving entries={block.entries} position={positions.get(block.entries[0].id) ?? 0} now={now} onOpen={onOpen} />
+                </Card>
+              ),
+            )}
+            {/* The next page's rows take shape in place, so nothing jumps when they land. */}
             {loading ? (
-              <>
+              <Card className="flex flex-col divide-y divide-line">
                 <SkeletonFeedItem />
                 <SkeletonFeedItem />
-              </>
+              </Card>
             ) : null}
-          </Card>
+          </div>
         )}
 
         {failed ? (

@@ -61,6 +61,7 @@ function entry(overrides: Partial<FeedEntry> & { id: string }): FeedEntry {
     sources: [],
     evidence: [],
     detailLines: [],
+    spark: null,
     ...overrides,
   };
 }
@@ -157,6 +158,22 @@ describe("toFeedEntry", () => {
   it("drops rows it cannot place", () => {
     expect(toFeedEntry(row({ kind: "mystery" }))).toBeNull();
     expect(toFeedEntry(row({ occurred_at: "" }))).toBeNull();
+  });
+
+  it("draws the person's score across the move from the page's series, and nothing without one (Phase 34)", () => {
+    const at = NOW - 120_000;
+    const series = [
+      { at: iso(at - 4 * 3_600_000), score: 49 }, // outside the window
+      { at: iso(at - 2 * 3_600_000), score: 49.8 },
+      { at: iso(at - 3_600_000), score: 50 },
+      { at: iso(at), score: 51.4 },
+      { at: iso(at + 3_600_000), score: 51.2 },
+      { at: iso(at + 4 * 3_600_000), score: 52 }, // outside the window
+    ];
+    const context = { details: new Map(), companies: new Map(), series: new Map([["dda851f2-38e8-4b46-ace0-de4bbba33a0b", series]]) };
+    expect(toFeedEntry(row(), context)?.spark).toEqual([49.8, 50, 51.4, 51.2]);
+    expect(toFeedEntry(row())?.spark).toBeNull();
+    expect(toFeedEntry(row({ person_id: "someone-else" }), context)?.spark).toBeNull();
   });
 
   it("shortens source names to a handle for logs", () => {

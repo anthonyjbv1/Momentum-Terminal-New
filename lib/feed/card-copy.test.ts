@@ -347,6 +347,29 @@ describe("the server's projection of a payload", () => {
     expect(projectSignalDetail(null).kind).toBeNull();
   });
 
+  it("names the media the platform publishes for embedding, by id only, and a game's scoreboard (Phase 34)", () => {
+    const trending = projectSignalDetail({ kind: "trending", video_id: "y56D2WIeKxg", videoTitle: "DRAKE - QUEBEC", channel_id: "UCByOQJjav0CUDwxCk-jVNRQ", view_count: 1220369 });
+    expect(trending.media).toEqual({ kind: "youtube", videoId: "y56D2WIeKxg", title: "DRAKE - QUEBEC" });
+    expect(JSON.stringify(trending)).not.toContain("UCByOQJjav0CUDwxCk-jVNRQ");
+    const digest = projectSignalDetail({ kind: "comment_digest", lean: "mixed", sampled: 10, videoId: "CEJXqm2eiJ0", videoTitle: "A video", comments: [{ text: "private" }] });
+    expect(digest.media).toEqual({ kind: "youtube", videoId: "CEJXqm2eiJ0", title: "A video" });
+    expect(JSON.stringify(digest)).not.toContain("private");
+    // An id that is not an id is not embedded.
+    expect(projectSignalDetail({ kind: "trending", video_id: "../evil?x=1" }).media).toBeUndefined();
+
+    const moment = projectSignalDetail({ kind: "live_moment", channel: "KaiCenat", moment: "audience_surge", rationale: "internal", stream_id: "320393470558" });
+    expect(moment.media).toEqual({ kind: "twitch", channel: "kaicenat", clip: null, title: null });
+    expect(JSON.stringify(moment)).not.toContain("internal");
+    expect(projectSignalDetail({ kind: "stream", channel: "kaicenat", title: "WOLVERINE MARATHON", clip_slug: "FunnyClip-abc_123" }).media).toEqual({ kind: "twitch", channel: "kaicenat", clip: "FunnyClip-abc_123", title: "WOLVERINE MARATHON" });
+    expect(projectSignalDetail({ kind: "stream", channel: "not a login" }).media).toBeUndefined();
+    // An article has no media: nothing is scraped from it.
+    expect(projectSignalDetail({ kind: "article", link: "https://forbes.com/a", video_id: "y56D2WIeKxg" }).media).toBeUndefined();
+
+    const game = projectSignalDetail({ kind: "game_result", week: "Week 3", home: "Miami Dolphins", away: "Kansas City Chiefs", home_score: 10, away_score: 24, game_id: "21550", subject: "Patrick Mahomes" });
+    expect(game.game).toEqual({ week: "Week 3", home: "Miami Dolphins", away: "Kansas City Chiefs", homeScore: 10, awayScore: 24 });
+    expect(projectSignalDetail({ kind: "game_result", home: "Only one side" }).game).toBeUndefined();
+  });
+
   it("says where a narrative came from", () => {
     expect(engineLead([])).toBe("The Engine");
     expect(engineLead([evidence({ detail: article("ESPN", "espn.com") }), evidence({ id: "2", detail: article("MARCA", "marca.com") }), evidence({ id: "3", detail: article("Yahoo Sports", "sports.yahoo.com") })])).toBe("The Engine, from 3 stories in ESPN and 2 others");

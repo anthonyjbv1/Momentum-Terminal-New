@@ -58,12 +58,70 @@ export interface SignalDetail {
   digest: { lean: "positive" | "negative" | "mixed" | null; videoTitle: string | null; sampled: number | null } | null;
   /** The operator voided the signal as a false input: no card, no evidence line. */
   voided?: boolean;
+  /**
+   * Media the platform itself publishes for embedding (the story card, Phase
+   * 34): a YouTube video's id, a Twitch channel and, when a payload carries
+   * one, a clip's slug. Ids only; the card builds the official embed from
+   * them. Never a hosted copy of anyone's picture.
+   */
+  media?: CardMedia | null;
+  /** A game result's public scoreboard, for the game card. */
+  game?: CardGame | null;
+}
+
+export type CardMedia = { kind: "youtube"; videoId: string; title: string | null } | { kind: "twitch"; channel: string; clip: string | null; title: string | null };
+
+export interface CardGame {
+  week: string | null;
+  home: string;
+  away: string;
+  homeScore: number | null;
+  awayScore: number | null;
 }
 
 export const NO_DETAIL: SignalDetail = { kind: null, outlet: null, domain: null, link: null, digest: null };
 
 function detailText(value: unknown, max: number): string | null {
   return typeof value === "string" && value.trim() ? value.trim().slice(0, max) : null;
+}
+
+/** A YouTube video id as YouTube issues them; anything else is not an id and is not embedded. */
+const YOUTUBE_ID = /^[A-Za-z0-9_-]{6,20}$/;
+/** A Twitch login, and a clip slug: the characters Twitch uses, nothing that could carry a path or a query. */
+const TWITCH_LOGIN = /^[A-Za-z0-9_]{2,30}$/;
+const TWITCH_CLIP = /^[A-Za-z0-9_-]{4,120}$/;
+
+function detailCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * The media a payload names, by kind. A trending appearance and a comment
+ * digest name a YouTube video (`video_id` / `videoId`); a Twitch stream,
+ * live moment or stream summary names the channel and, when the payload
+ * carries one, a clip (`clip_slug` / `clip_id`). Nothing else has media.
+ */
+export function projectMedia(record: Record<string, unknown>, kind: string | null): CardMedia | null {
+  if (kind === "trending" || kind === "comment_digest") {
+    const videoId = detailText(record.video_id ?? record.videoId, 20);
+    return videoId && YOUTUBE_ID.test(videoId) ? { kind: "youtube", videoId, title: detailText(record.videoTitle, 200) } : null;
+  }
+  if (kind === "stream" || kind === "live_moment" || kind === "stream_summary") {
+    const channel = detailText(record.channel, 30);
+    if (!channel || !TWITCH_LOGIN.test(channel)) return null;
+    const clip = detailText(record.clip_slug ?? record.clip_id, 120);
+    return { kind: "twitch", channel: channel.toLowerCase(), clip: clip && TWITCH_CLIP.test(clip) ? clip : null, title: detailText(record.title, 200) };
+  }
+  return null;
+}
+
+/** The scoreboard of a game result: teams, scores and the week. Null unless both teams are named. */
+export function projectGame(record: Record<string, unknown>, kind: string | null): CardGame | null {
+  if (kind !== "game_result") return null;
+  const home = detailText(record.home, 80);
+  const away = detailText(record.away, 80);
+  if (!home || !away) return null;
+  return { week: detailText(record.week, 40), home, away, homeScore: detailCount(record.home_score), awayScore: detailCount(record.away_score) };
 }
 
 /**
@@ -78,6 +136,8 @@ export function projectSignalDetail(payload: unknown): SignalDetail {
   const link = detailText(record.link, 2048);
   const lean = record.lean === "positive" || record.lean === "negative" || record.lean === "mixed" ? record.lean : null;
   const sampled = typeof record.sampled === "number" && Number.isFinite(record.sampled) ? record.sampled : null;
+  const media = projectMedia(record, kind);
+  const game = projectGame(record, kind);
   return {
     kind,
     outlet: detailText(record.outlet, 120),
@@ -85,6 +145,8 @@ export function projectSignalDetail(payload: unknown): SignalDetail {
     link: link && /^https?:\/\//i.test(link) ? link : null,
     digest: kind === "comment_digest" ? { lean, videoTitle: detailText(record.videoTitle, 200), sampled } : null,
     ...(isVoidedPayload(payload) ? { voided: true } : {}),
+    ...(media ? { media } : {}),
+    ...(game ? { game } : {}),
   };
 }
 
