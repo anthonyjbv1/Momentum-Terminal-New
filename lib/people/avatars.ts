@@ -9,6 +9,8 @@ import type { Json } from "@/types/database";
 import {
   avatarChannelFor,
   avatarRecordJson,
+  commonsAvatarFrom,
+  type CommonsImageInfo,
   isAvatarStale,
   readAvatarRecord,
   twitchAvatarFrom,
@@ -21,14 +23,21 @@ import {
 
 /**
  * The refresh (server only): for every creator and musician with a channel
- * of their own, read the channel's avatar from its platform when the kept
- * record is older than the platform's window, and write the URL to the
- * person and the record to the mapping. Bounded per call; runs at the end
+ * of their own, read the channel's avatar from its platform, and for every
+ * person with a pinned Wikimedia Commons portrait (the executives), the
+ * article's lead image with its licence, when the kept record is older
+ * than the source's window; write the URL to the person and the record to
+ * the mapping (the news mapping, for a portrait). Bounded per call; runs at the end
  * of the ingestion cron. A read that fails leaves the last record and the
  * last URL as they are, and is logged.
  */
 
-const AVATAR_SOURCES = ["youtube", "twitch", "youtube_trending"] as const;
+const AVATAR_SOURCES = ["youtube", "twitch", "youtube_trending", "rss", "publisher_rss"] as const;
+
+/** Wikimedia's API etiquette asks for a User-Agent that names the caller. */
+const WIKIMEDIA_UA = "MomentumTerminal/1.0 (https://momentumterminal.app; info@momentumterminal.app)";
+/** The thumbnail width asked of Commons: enough for the largest avatar at 2x. */
+const COMMONS_THUMB_WIDTH = 512;
 
 export interface AvatarRefreshResult {
   considered: number;
@@ -71,6 +80,31 @@ async function readTwitchAvatar(channel: AvatarChannel, fetchImpl: typeof fetch,
   return twitchAvatarFrom(body.data?.[0], now);
 }
 
+/**
+ * A pinned Commons portrait: the lead image of the person's English
+ * Wikipedia article (pageimages), then that file's thumbnail, author and
+ * licence from Commons itself. A file that is not on Commons (a local
+ * non-free image on Wikipedia) is not found there and yields nothing.
+ */
+async function readCommonsAvatar(channel: AvatarChannel, fetchImpl: typeof fetch, now: Date): Promise<AvatarRecord | null> {
+  const headers = { "user-agent": WIKIMEDIA_UA, accept: "application/json" };
+  const page = await fetchImpl(`https://en.wikipedia.org/w/api.php?action=query&format=json&formatversion=2&redirects=1&prop=pageimages&piprop=name&titles=${encodeURIComponent(channel.identifier)}`, { headers });
+  if (!page.ok) throw new Error(`Wikipedia responded ${page.status} for ${channel.identifier}`);
+  const pageBody = (await page.json()) as { query?: { pages?: Array<{ title?: string; missing?: boolean; pageimage?: string }> } };
+  const article = pageBody.query?.pages?.[0];
+  if (!article || article.missing || !article.pageimage) return null;
+  const fileTitle = `File:${article.pageimage}`;
+  const info = await fetchImpl(
+    `https://commons.wikimedia.org/w/api.php?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=${COMMONS_THUMB_WIDTH}&iiextmetadatafilter=Artist|LicenseShortName|LicenseUrl|Credit&titles=${encodeURIComponent(fileTitle)}`,
+    { headers },
+  );
+  if (!info.ok) throw new Error(`Commons responded ${info.status} for ${fileTitle}`);
+  const infoBody = (await info.json()) as { query?: { pages?: Array<{ missing?: boolean; imageinfo?: CommonsImageInfo[] }> } };
+  const file = infoBody.query?.pages?.[0];
+  if (!file || file.missing) return null;
+  return commonsAvatarFrom(fileTitle, file.imageinfo?.[0], now);
+}
+
 export async function refreshPersonAvatars(options: { client: TypedSupabaseClient; fetch?: typeof fetch; now?: Date; limit?: number }): Promise<AvatarRefreshResult> {
   const { client } = options;
   const fetchImpl = options.fetch ?? fetch;
@@ -78,7 +112,7 @@ export async function refreshPersonAvatars(options: { client: TypedSupabaseClien
   const limit = options.limit ?? 5;
   const result: AvatarRefreshResult = { considered: 0, refreshed: [], failed: [] };
 
-  const people = await client.from("people").select("id, slug, category, avatar_url").eq("is_active", true).in("category", ["creator", "musician"]);
+  const people = await client.from("people").select("id, slug, category, avatar_url").eq("is_active", true);
   if (people.error) throw new Error(`Could not load people for avatars: ${people.error.message}`);
   const ids = (people.data ?? []).map((row) => row.id);
   if (ids.length === 0) return result;
@@ -105,9 +139,10 @@ export async function refreshPersonAvatars(options: { client: TypedSupabaseClien
     if (!isAvatarStale(current, channel, now.getTime()) && person.avatar_url === current?.url) continue;
 
     try {
-      const record = channel.source === "youtube" ? await readYouTubeAvatar(channel, fetchImpl, now) : await readTwitchAvatar(channel, fetchImpl, now);
+      const record =
+        channel.source === "youtube" ? await readYouTubeAvatar(channel, fetchImpl, now) : channel.source === "twitch" ? await readTwitchAvatar(channel, fetchImpl, now) : await readCommonsAvatar(channel, fetchImpl, now);
       if (!record) {
-        result.failed.push({ slug: person.slug, reason: "the platform listed no avatar" });
+        result.failed.push({ slug: person.slug, reason: channel.source === "commons" ? "no free Commons portrait for the article" : "the platform listed no avatar" });
         continue;
       }
       const config = { ...((mapping.config as Record<string, Json | undefined> | null) ?? {}), avatar: avatarRecordJson(record) } as Json;

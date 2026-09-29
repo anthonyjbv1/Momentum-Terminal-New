@@ -4,6 +4,9 @@ import { copyViolations } from "@/lib/copy-rules";
 
 import {
   AVATAR_REFRESH_HOURS,
+  COMMONS_ALLOWED_LICENSES,
+  COMMONS_PORTRAITS,
+  commonsAvatarFrom,
   avatarChannelFor,
   avatarCredit,
   avatarRecordJson,
@@ -26,10 +29,22 @@ describe("which channel a person's avatar comes from", () => {
     expect(avatarChannelFor({ category: "musician" }, [{ source: "youtube_trending", externalIdentifier: "Drake", config: { channel_ids: ["UCByOQJjav0CUDwxCk-jVNRQ", "UCQznUf1SjfDqx65hX3zRDiA"] } }])).toEqual({ source: "youtube", identifier: "UCByOQJjav0CUDwxCk-jVNRQ", mappingSource: "youtube_trending" });
     // A name-matched Trending mapping with no pinned channel is not a channel of their own.
     expect(avatarChannelFor({ category: "creator" }, [{ source: "youtube_trending", externalIdentifier: "Someone", config: { channel_ids: [] } }])).toBeNull();
-    // Everyone else keeps initials, whatever is mapped.
-    expect(avatarChannelFor({ category: "executive" }, [{ source: "youtube", externalIdentifier: "UC123456", config: null }])).toBeNull();
-    expect(avatarChannelFor({ category: "athlete" }, [trending])).toBeNull();
-    expect(avatarChannelFor({ category: "founder" }, [trending])).toBeNull();
+    // Everyone else keeps initials, whatever is mapped, unless a Commons portrait is pinned for them.
+    expect(avatarChannelFor({ category: "executive", slug: "someone-new" }, [{ source: "youtube", externalIdentifier: "UC123456", config: null }])).toBeNull();
+    expect(avatarChannelFor({ category: "athlete", slug: "patrick-mahomes" }, [trending])).toBeNull();
+    expect(avatarChannelFor({ category: "founder", slug: "anthony-baptiste" }, [trending])).toBeNull();
+  });
+
+  it("is the pinned Wikimedia Commons portrait for an executive, kept on their news mapping (decided 2026-09-29)", () => {
+    const rss = { source: "rss", externalIdentifier: '"Elon Musk"', config: null };
+    expect(avatarChannelFor({ category: "executive", slug: "elon-musk" }, [trending, rss])).toEqual({ source: "commons", identifier: "Elon Musk", mappingSource: "rss" });
+    expect(avatarChannelFor({ category: "executive", slug: "elon-musk" }, [{ source: "publisher_rss", externalIdentifier: "musk", config: null }])).toEqual({ source: "commons", identifier: "Elon Musk", mappingSource: "publisher_rss" });
+    // No news mapping to keep the record on: no portrait.
+    expect(avatarChannelFor({ category: "executive", slug: "elon-musk" }, [trending])).toBeNull();
+    // A creator's own channel wins over a portrait.
+    expect(avatarChannelFor({ category: "creator", slug: "mrbeast" }, [rss, { source: "youtube", externalIdentifier: "UCX6OQ3DkcsbYNE6H8uQQuVA", config: null }])?.source).toBe("youtube");
+    // The nine executives, and nobody else, are pinned.
+    expect(Object.keys(COMMONS_PORTRAITS).sort()).toEqual(["elon-musk", "jeff-bezos", "jensen-huang", "larry-ellison", "larry-page", "mark-zuckerberg", "michael-dell", "sergey-brin", "warren-buffett"]);
   });
 });
 
@@ -53,7 +68,7 @@ describe("the record", () => {
     expect(isAvatarStale(record, youtube, Date.parse(record.refreshedAt) + AVATAR_REFRESH_HOURS.youtube * 3_600_000 + 1)).toBe(true);
     expect(isAvatarStale(null, youtube, fresh)).toBe(true);
     expect(isAvatarStale(record, { source: "twitch", identifier: "x", mappingSource: "twitch" }, fresh)).toBe(true);
-    expect(AVATAR_REFRESH_HOURS).toEqual({ youtube: 720, twitch: 24 });
+    expect(AVATAR_REFRESH_HOURS).toEqual({ youtube: 720, twitch: 24, commons: 720 });
   });
 });
 
@@ -69,6 +84,43 @@ describe("what the platforms answer", () => {
     const user = { login: "kaicenat", display_name: "KaiCenat", profile_image_url: "https://static-cdn.jtvnw.net/jtv_user_pictures/x-profile_image-300x300.png" };
     expect(twitchAvatarFrom(user, NOW)).toEqual({ url: user.profile_image_url, source: "twitch", channel: "KaiCenat", handle: "kaicenat", refreshedAt: NOW.toISOString() });
     expect(twitchAvatarFrom({ login: "x" }, NOW)).toBeNull();
+  });
+});
+
+describe("a Wikimedia Commons portrait", () => {
+  const info = {
+    thumburl: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a1/Elon_Musk.jpg/512px-Elon_Musk.jpg",
+    url: "https://upload.wikimedia.org/wikipedia/commons/a/a1/Elon_Musk.jpg",
+    descriptionurl: "https://commons.wikimedia.org/wiki/File:Elon_Musk.jpg",
+    extmetadata: { Artist: { value: '<a href="https://www.flickr.com/people/x">Steve Jurvetson</a>' }, LicenseShortName: { value: "CC BY 2.0" }, LicenseUrl: { value: "https://creativecommons.org/licenses/by/2.0" } },
+  };
+
+  it("keeps the thumbnail on Commons' host, the author as plain text, the licence and the file page; refuses a licence off the list or a file off Commons", () => {
+    const record = commonsAvatarFrom("File:Elon_Musk.jpg", info, NOW);
+    expect(record).toEqual({
+      url: info.thumburl,
+      source: "commons",
+      channel: "Steve Jurvetson",
+      handle: "File:Elon_Musk.jpg",
+      refreshedAt: NOW.toISOString(),
+      license: "CC BY 2.0",
+      licenseUrl: "https://creativecommons.org/licenses/by/2.0",
+      pageUrl: "https://commons.wikimedia.org/wiki/File:Elon_Musk.jpg",
+    });
+    expect(readAvatarRecord({ avatar: avatarRecordJson(record!) })).toEqual(record);
+    expect(commonsAvatarFrom("File:X.jpg", { ...info, extmetadata: { ...info.extmetadata, LicenseShortName: { value: "Fair use" } } }, NOW)).toBeNull();
+    expect(commonsAvatarFrom("File:X.jpg", { ...info, thumburl: "https://example.com/x.jpg", url: "https://example.com/x.jpg" }, NOW)).toBeNull();
+    expect(commonsAvatarFrom("File:X.jpg", undefined, NOW)).toBeNull();
+    expect(commonsAvatarFrom("File:X.jpg", { ...info, extmetadata: { LicenseShortName: { value: "Public domain" } } }, NOW)?.channel).toBe("Unknown author");
+    for (const ok of ["CC0", "CC0 1.0", "Public domain", "CC BY 2.0", "CC BY-SA 4.0", "CC BY-SA 3.0", "CC BY 4.0 International"]) expect(COMMONS_ALLOWED_LICENSES.test(ok), ok).toBe(true);
+    for (const no of ["Fair use", "CC BY-NC 2.0", "CC BY-ND 4.0", "GFDL", "All rights reserved"]) expect(COMMONS_ALLOWED_LICENSES.test(no), no).toBe(false);
+  });
+
+  it("is credited with the author and licence, linked to the file page", () => {
+    const record = commonsAvatarFrom("File:Elon_Musk.jpg", info, NOW);
+    expect(avatarCredit(record)).toEqual({ platform: "Wikimedia Commons", channel: "Steve Jurvetson (CC BY 2.0)", url: "https://commons.wikimedia.org/wiki/File:Elon_Musk.jpg" });
+    expect(copyViolations("Photo: Wikimedia Commons · Steve Jurvetson (CC BY 2.0)")).toEqual([]);
+    expect(AVATAR_REFRESH_HOURS.commons).toBe(720);
   });
 });
 

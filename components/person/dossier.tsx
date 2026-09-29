@@ -96,7 +96,7 @@ export function Dossier({ person, state, conviction, className }: DossierProps) 
                 target="_blank"
                 rel="noopener noreferrer"
                 className="max-w-32 truncate text-2xs text-fg-faint underline-offset-4 transition-colors hover:text-fg-muted hover:underline"
-                title={`${person.avatarCredit.platform} channel: ${person.avatarCredit.channel}`}
+                title={`${person.avatarCredit.platform}: ${person.avatarCredit.channel}`}
               >
                 Photo: {person.avatarCredit.platform} · {person.avatarCredit.channel}
               </a>

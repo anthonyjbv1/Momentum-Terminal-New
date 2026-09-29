@@ -21,7 +21,7 @@ import type { Json } from "@/types/database";
  * itself no longer loads).
  */
 
-export type AvatarSource = "youtube" | "twitch";
+export type AvatarSource = "youtube" | "twitch" | "commons";
 
 /** What is kept about an avatar, on the person's platform mapping. Never the image. */
 export interface AvatarRecord {
@@ -29,13 +29,18 @@ export interface AvatarRecord {
   source: AvatarSource;
   /** The channel's display name, for the credit. */
   channel: string;
-  /** The channel's handle or login, for the credit's link. */
+  /** The channel's handle or login, for the credit's link; for a Commons portrait, the file's title. */
   handle: string | null;
   refreshedAt: string;
+  /** A Commons portrait's licence, as Commons names it ("CC BY-SA 4.0"), and the licence's page; absent for a platform avatar. */
+  license?: string | null;
+  licenseUrl?: string | null;
+  /** The file's page on Commons, where the licence and the author are stated. */
+  pageUrl?: string | null;
 }
 
 /** How old a record may be, per platform, before it is read again. */
-export const AVATAR_REFRESH_HOURS: Readonly<Record<AvatarSource, number>> = { youtube: 30 * 24, twitch: 24 };
+export const AVATAR_REFRESH_HOURS: Readonly<Record<AvatarSource, number>> = { youtube: 30 * 24, twitch: 24, commons: 30 * 24 };
 
 /** The categories whose channels are their own: creators and musicians. */
 export const AVATAR_CATEGORIES: ReadonlySet<string> = new Set(["creator", "musician"]);
@@ -44,7 +49,36 @@ export const AVATAR_CATEGORIES: ReadonlySet<string> = new Set(["creator", "music
 const AVATAR_HOSTS: Readonly<Record<AvatarSource, RegExp>> = {
   youtube: /^https:\/\/(yt3\.ggpht\.com|yt3\.googleusercontent\.com|[a-z0-9-]+\.googleusercontent\.com)\//i,
   twitch: /^https:\/\/static-cdn\.jtvnw\.net\//i,
+  commons: /^https:\/\/upload\.wikimedia\.org\/wikipedia\/commons\//i,
 };
+
+// ---------------------------------------------------------------------------
+// Wikimedia Commons portraits (decided 2026-09-29)
+// ---------------------------------------------------------------------------
+
+/**
+ * The executives' portraits come from Wikimedia Commons: the lead image of
+ * each person's English Wikipedia article, resolved at refresh time, kept
+ * only when the file is on Commons under a free licence (below), and
+ * credited with its author and licence on the profile. Pinned by article
+ * title so the choice of picture is a reviewed constant, not a search
+ * result; a title that no longer resolves, or resolves to a file that is
+ * not free, yields no picture and the initials stay.
+ */
+export const COMMONS_PORTRAITS: Readonly<Record<string, string>> = {
+  "elon-musk": "Elon Musk",
+  "jeff-bezos": "Jeff Bezos",
+  "mark-zuckerberg": "Mark Zuckerberg",
+  "jensen-huang": "Jensen Huang",
+  "larry-ellison": "Larry Ellison",
+  "larry-page": "Larry Page",
+  "sergey-brin": "Sergey Brin",
+  "warren-buffett": "Warren Buffett",
+  "michael-dell": "Michael Dell",
+};
+
+/** The licences a portrait may carry, as Commons names them in LicenseShortName. Anything else is refused. */
+export const COMMONS_ALLOWED_LICENSES = /^(CC0(?: 1\.0)?|Public domain|CC BY(?:-SA)? [1-4]\.0(?: [A-Za-z]+)?|CC-BY(?:-SA)?-[1-4]\.0)$/i;
 
 export function isAvatarUrl(url: string, source: AvatarSource): boolean {
   return AVATAR_HOSTS[source].test(url);
@@ -76,7 +110,17 @@ export interface AvatarChannel {
  * outside the creator and musician categories, and for anyone with no
  * channel of their own.
  */
-export function avatarChannelFor(person: { category: string }, mappings: readonly AvatarMapping[]): AvatarChannel | null {
+export function avatarChannelFor(person: { category: string; slug?: string }, mappings: readonly AvatarMapping[]): AvatarChannel | null {
+  const platform = platformChannelFor(person, mappings);
+  if (platform) return platform;
+  // A pinned Commons portrait, kept on the person's news mapping (every tracked person has one).
+  const title = person.slug ? COMMONS_PORTRAITS[person.slug] : undefined;
+  if (!title) return null;
+  const home = mappings.find((mapping) => mapping.source === "rss") ?? mappings.find((mapping) => mapping.source === "publisher_rss");
+  return home ? { source: "commons", identifier: title, mappingSource: home.source } : null;
+}
+
+function platformChannelFor(person: { category: string }, mappings: readonly AvatarMapping[]): AvatarChannel | null {
   if (!AVATAR_CATEGORIES.has(person.category)) return null;
   const youtube = mappings.find((mapping) => mapping.source === "youtube" && mapping.externalIdentifier.trim());
   if (youtube) return { source: "youtube", identifier: youtube.externalIdentifier.trim(), mappingSource: "youtube" };
@@ -104,17 +148,31 @@ export function readAvatarRecord(config: Record<string, Json | undefined> | null
   const block = config?.avatar;
   if (!block || typeof block !== "object" || Array.isArray(block)) return null;
   const record = block as Record<string, Json | undefined>;
-  const source = record.source === "youtube" || record.source === "twitch" ? record.source : null;
+  const source = record.source === "youtube" || record.source === "twitch" || record.source === "commons" ? record.source : null;
   const url = text(record.url, 2048);
   const channel = text(record.channel, 200);
   const refreshedAt = text(record.refreshed_at, 40);
   if (!source || !url || !channel || !refreshedAt || !Number.isFinite(Date.parse(refreshedAt)) || !isAvatarUrl(url, source)) return null;
-  return { url, source, channel, handle: text(record.handle, 120), refreshedAt };
+  return {
+    url,
+    source,
+    channel,
+    handle: text(record.handle, 300),
+    refreshedAt,
+    ...(source === "commons" ? { license: text(record.license, 60), licenseUrl: text(record.license_url, 300), pageUrl: text(record.page_url, 600) } : {}),
+  };
 }
 
 /** The record as it is written to the mapping's config. */
 export function avatarRecordJson(record: AvatarRecord): Record<string, Json> {
-  return { url: record.url, source: record.source, channel: record.channel, handle: record.handle, refreshed_at: record.refreshedAt };
+  return {
+    url: record.url,
+    source: record.source,
+    channel: record.channel,
+    handle: record.handle,
+    refreshed_at: record.refreshedAt,
+    ...(record.source === "commons" ? { license: record.license ?? null, license_url: record.licenseUrl ?? null, page_url: record.pageUrl ?? null } : {}),
+  };
 }
 
 /** Whether a record is older than its platform's window (or absent, or from another platform than the channel now mapped). */
@@ -151,20 +209,68 @@ export function twitchAvatarFrom(user: { login?: string; display_name?: string; 
   return { url, source: "twitch", channel, handle: text(user?.login, 120), refreshedAt: now.toISOString() };
 }
 
+/** What Commons answers about a file: the thumbnail, the file page and the extended metadata this reads. */
+export interface CommonsImageInfo {
+  thumburl?: string;
+  url?: string;
+  descriptionurl?: string;
+  extmetadata?: Partial<Record<"Artist" | "LicenseShortName" | "LicenseUrl" | "Credit", { value?: string }>>;
+}
+
+/** Tags stripped, entities the credit line meets decoded, whitespace collapsed. */
+function plainText(html: string | undefined | null, max: number): string | null {
+  if (!html) return null;
+  const stripped = html
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return stripped ? stripped.slice(0, max) : null;
+}
+
+/**
+ * A Commons portrait's record: the thumbnail on Commons' own host, the
+ * author and the licence, the file page for the credit. Null unless the
+ * file is on Commons under an allowed licence with an author to credit
+ * (a public-domain file may name none; "Unknown author" is then written).
+ */
+export function commonsAvatarFrom(fileTitle: string | null | undefined, info: CommonsImageInfo | undefined, now: Date): AvatarRecord | null {
+  const url = info?.thumburl ?? info?.url ?? null;
+  const license = plainText(info?.extmetadata?.LicenseShortName?.value, 60);
+  if (!fileTitle || !url || !license || !isAvatarUrl(url, "commons") || !COMMONS_ALLOWED_LICENSES.test(license)) return null;
+  const artist = plainText(info?.extmetadata?.Artist?.value, 120) ?? plainText(info?.extmetadata?.Credit?.value, 120) ?? "Unknown author";
+  return {
+    url,
+    source: "commons",
+    channel: artist,
+    handle: fileTitle,
+    refreshedAt: now.toISOString(),
+    license,
+    licenseUrl: plainText(info?.extmetadata?.LicenseUrl?.value, 300),
+    pageUrl: info?.descriptionurl ?? `https://commons.wikimedia.org/wiki/${encodeURIComponent(fileTitle.replace(/ /g, "_"))}`,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The credit
 // ---------------------------------------------------------------------------
 
 export interface AvatarCredit {
-  platform: "YouTube" | "Twitch";
+  platform: "YouTube" | "Twitch" | "Wikimedia Commons";
   channel: string;
   /** The channel's page on the platform. */
   url: string;
 }
 
-/** "Photo: YouTube · MrBeast", linked to the channel. */
+/** "Photo: YouTube · MrBeast", linked to the channel; "Photo: Wikimedia Commons · Steve Jurvetson (CC BY 2.0)", linked to the file page. */
 export function avatarCredit(record: AvatarRecord | null): AvatarCredit | null {
   if (!record) return null;
+  if (record.source === "commons") {
+    return { platform: "Wikimedia Commons", channel: record.license ? `${record.channel} (${record.license})` : record.channel, url: record.pageUrl ?? "https://commons.wikimedia.org/" };
+  }
   if (record.source === "youtube") {
     const url = record.handle ? `https://www.youtube.com/${encodeURIComponent(record.handle)}` : "https://www.youtube.com/";
     return { platform: "YouTube", channel: record.channel, url };
