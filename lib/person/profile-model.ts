@@ -691,8 +691,8 @@ export interface ProfileSignal {
   headline: string;
   /** The article, when the headline is its title. */
   link: string | null;
-  /** The card's one line: what it was and how far it moved the score. */
-  line: string;
+  /** The card's one line, when it adds a reading (an article's "Read as …"); null when it would only restate the source and the move. */
+  line: string | null;
   occurredAt: string;
   /** Score impact, when one was recorded: the signal's impact_score, or the narrative's before → after move. */
   impact: number | null;

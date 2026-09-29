@@ -122,7 +122,7 @@ export function FeedEntry({ entry, position, prominent = false, now, onOpen, onE
             {headline}
           </Link>
         )}
-        <p className={cn("leading-relaxed text-fg-secondary", prominent ? "text-base" : "text-sm")}>{copy.line}</p>
+        {copy.line ? <p className={cn("leading-relaxed text-fg-secondary", prominent ? "text-base" : "text-sm")}>{copy.line}</p> : null}
       </div>
 
       {media ? <StoryMedia media={media} title={media.title ?? copy.headline} /> : null}

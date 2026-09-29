@@ -81,8 +81,8 @@ describe("toFeedEntry", () => {
       tickNumber: 512,
       sources: ["YouTube"],
     });
-    // Rule 2: the quoted signal is the headline; the move is in the line; nothing is nested.
-    expect(made?.copy).toEqual({ label: null, headline: "channel adds 516K subscribers in 24 hours", link: null, line: "YouTube · Drake +1.4.", attribution: "The Engine · YouTube", quoted: false });
+    // Rule 2: the quoted signal is the headline; the move is in the move block, not a line; nothing is nested.
+    expect(made?.copy).toEqual({ label: null, headline: "channel adds 516K subscribers in 24 hours", link: null, line: null, attribution: "The Engine · YouTube", quoted: false });
     expect(made?.evidence).toHaveLength(1);
     expect(made?.evidence[0]).toMatchObject({ source: "YouTube", impact: 1.4, sentiment: "positive", confidence: 0.82, relation: "direct", person: null, detail: null });
   });
@@ -126,7 +126,7 @@ describe("toFeedEntry", () => {
       }),
     );
     expect(read?.copy.headline).toBe("New upload, day one");
-    expect(read?.copy.line).toBe("YouTube · Drake +0.2.");
+    expect(read?.copy.line).toBeNull();
     expect(read?.direction).toBe("heating");
     expect(read ? isCard(read) : null).toBe(true);
     expect(read?.detailLines).toEqual([{ label: "Source", value: "YouTube" }]);
@@ -151,7 +151,7 @@ describe("toFeedEntry", () => {
     );
     expect(made?.person.company).toBe("Tesla");
     expect(made?.copy.headline).toContain("Tesla");
-    expect(made?.copy.line).toBe("Company news · Musk +0.8.");
+    expect(made?.copy.line).toBeNull();
     expect(made?.detailLines.map((line) => line.label)).toContain("Source");
   });
 
@@ -299,7 +299,7 @@ describe("a metric signal reads as plain language, whenever it was stored (Phase
     expect(made?.text).toContain("momentum slipped on");
     expect(made?.copy.headline).not.toMatch(/σ|momentum slipped/);
     expect(made?.copy.headline).toContain("Mark Zuckerberg");
-    expect(made?.copy.line).toBe("News coverage · −0.4.");
+    expect(made?.copy.line).toBeNull();
     expect(made?.copy.attribution).toBe("The Engine · News coverage");
   });
 

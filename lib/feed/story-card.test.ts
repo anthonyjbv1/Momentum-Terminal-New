@@ -11,6 +11,7 @@ import {
   groupStream,
   isAlsoMoving,
   mediaLink,
+  sourceGlyph,
   sourceIconUrl,
   sparkAcross,
   storyKind,
@@ -110,6 +111,21 @@ describe("the source strip", () => {
 
   it("asks the icon service for the outlet's own icon, by domain", () => {
     expect(sourceIconUrl("www.Forbes.com")).toBe("https://icons.duckduckgo.com/ip3/forbes.com.ico");
+  });
+
+  it("gives a platform its own mark, a publisher its favicon, and a metric or data source a neutral glyph, never a letter (2026-09-29)", () => {
+    expect(sourceGlyph({ name: "YouTube", domain: "youtube.com" })).toBe("youtube");
+    expect(sourceGlyph({ name: "YouTube comments", domain: null })).toBe("youtube");
+    expect(sourceGlyph({ name: "Twitch", domain: "twitch.tv" })).toBe("twitch");
+    expect(sourceGlyph({ name: "Twitch", domain: null })).toBe("twitch");
+    expect(sourceGlyph({ name: "Forbes", domain: "forbes.com" })).toBe("favicon");
+    expect(sourceGlyph({ name: "HotNewHipHop", domain: "hotnewhiphop.com" })).toBe("favicon");
+    expect(sourceGlyph({ name: "News coverage", domain: null })).toBe("news");
+    expect(sourceGlyph({ name: "Company news", domain: null })).toBe("news");
+    expect(sourceGlyph({ name: "Game data", domain: null })).toBe("game");
+    expect(sourceGlyph({ name: "Company filings", domain: null })).toBe("filing");
+    expect(sourceGlyph({ name: "Spotify", domain: null })).toBe("metric");
+    expect(sourceGlyph({ name: "Signal", domain: null })).toBe("metric");
   });
 });
 

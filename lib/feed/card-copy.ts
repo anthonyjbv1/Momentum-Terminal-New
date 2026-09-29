@@ -30,8 +30,10 @@ import { decodeEntities } from "@/lib/text/entities";
  *      metric (`categoryGroup` in metric-language).
  *   6. Zero-impact items are not cards (`showsAsCard`); they stay in detail
  *      panels.
- *   7. The person is named ONCE in the body: our headline or the line, never
- *      both. An article's title is the publisher's text and does not count.
+ *   7. The person is named at most ONCE in the body: our headline or the
+ *      line, never both. An article's title is the publisher's text and does
+ *      not count. The header names them regardless; the line no longer
+ *      repeats a surname the headline left out (2026-09-29).
  */
 
 // ---------------------------------------------------------------------------
@@ -193,8 +195,13 @@ export interface CardCopy {
   headline: string;
   /** Where the headline goes: the article. Null when the headline is our own sentence. */
   link: string | null;
-  /** The one plain line under the headline: what it was, and the move. */
-  line: string;
+  /**
+   * The one plain line under the headline, only when it adds a reading the
+   * strip and the move block do not already carry: "Read as negative for
+   * Zuckerberg · +0.3", "Waiting for the Engine's next read." Null when it
+   * would only restate the source and the number (2026-09-29).
+   */
+  line: string | null;
   /** The footer: where it came from. */
   attribution: string;
   /** True when the headline is the publisher's title rather than the Engine's words. */
@@ -368,14 +375,15 @@ export function showsAsCard(impact: number | null, processed: boolean | null): b
 }
 
 /**
- * The line: a lead, then the move, with the surname between them when our
- * headline did not name the person (rule 7). "Company news · Musk +0.8."
- * where the headline said Tesla; "YouTube · +0.9." where it said MrBeast.
+ * The line, when there is one: the Engine's reading of an article, then the
+ * move, with no period after the number. "Read as positive for Zuckerberg ·
+ * +0.3". A line that would only restate the strip's source and the move
+ * ("News coverage · +0.4", "The Engine, from Forbes · Cenat +0.6") is not
+ * written: the card's strip and move block carry those (2026-09-29).
  */
-function line(lead: string, subject: CardSubject, impact: number | null, headlineNamesPerson: boolean): string {
+function readingLine(lead: string, impact: number | null): string {
   if (impact === null) return `${lead}.`;
-  const who = headlineNamesPerson || !subject.name.trim() ? "" : `${shortName(subject.name)} `;
-  return `${lead} · ${who}${signedMove(impact)}.`;
+  return `${lead} · ${signedMove(impact)}`;
 }
 
 const LEAN_PHRASE = { positive: "lean positive", negative: "lean negative", mixed: "are mixed" } as const;
@@ -427,10 +435,10 @@ export function signalCard(input: SignalCardInput): CardCopy {
   if (quoted) {
     // The title is the publisher's, so the person has not been named by us
     // yet: the lead does it, once, and the line adds only the move.
-    return { label: outlet, headline, link: detail?.link ?? null, line: line(readingLead(input.sentiment, subject), subject, input.impact, true), attribution, quoted };
+    return { label: outlet, headline, link: detail?.link ?? null, line: readingLine(readingLead(input.sentiment, subject), input.impact), attribution, quoted };
   }
 
-  return { label: null, headline, link: null, line: line(noun, subject, input.impact, namesPerson(headline, subject.name)), attribution, quoted };
+  return { label: null, headline, link: null, line: null, attribution, quoted };
 }
 
 // ---------------------------------------------------------------------------
@@ -525,7 +533,7 @@ export function narrativeCard(input: NarrativeCardInput): CardCopy {
           label: outlet,
           headline: rendered.headline,
           link: quotedItem.detail?.link ?? null,
-          line: line(`The Engine, from ${outlet}`, subject, input.impact, false),
+          line: null,
           attribution: `The Engine · ${outlet}`,
           quoted: true,
         };
@@ -534,14 +542,14 @@ export function narrativeCard(input: NarrativeCardInput): CardCopy {
         label: null,
         headline: rendered.headline,
         link: null,
-        line: line(noun, subject, input.impact, namesPerson(rendered.headline, subject.name)),
+        line: null,
         attribution: `The Engine · ${noun}`,
         quoted: false,
       };
     }
     // Quoted text with no evidence to un-nest into: say it plainly, without the nesting.
     const headline = template.quoted;
-    return { label: null, headline, link: null, line: line("The Engine", subject, input.impact, namesPerson(headline, subject.name)), attribution: "The Engine", quoted: false };
+    return { label: null, headline, link: null, line: null, attribution: "The Engine", quoted: false };
   }
 
   // The Engine's own sentence, as written.
@@ -550,7 +558,7 @@ export function narrativeCard(input: NarrativeCardInput): CardCopy {
     label: null,
     headline,
     link: null,
-    line: line(engineLead(evidence), subject, input.impact, namesPerson(headline, subject.name)),
+    line: null,
     attribution: engineAttribution(evidence),
     quoted: false,
   };

@@ -1,19 +1,21 @@
 "use client";
 
-import { ArrowUpRight } from "lucide-react";
+import { Activity, ArrowUpRight, FileText, Newspaper, Trophy } from "lucide-react";
 import Image from "next/image";
 import { useState } from "react";
 
 import { cn } from "@/lib/cn";
-import { sourceIconUrl, type StorySource } from "@/lib/feed/story-card";
+import { sourceGlyph, sourceIconUrl, type StorySource } from "@/lib/feed/story-card";
+import { TwitchMark, YouTubeMark } from "@/components/ui/brand-marks";
 
 /**
  * The source strip (Phase 34): every source behind a story, each with its
  * icon, its name, how many of the story's signals it supplied when more than
- * one, and a link to the piece where there is one. The icon is the outlet's
- * own favicon, fetched from the icon service at render; when it does not
- * arrive, the outlet's initial stands in. Small, grey, last: the strip is
- * attribution, not decoration.
+ * one, and a link to the piece where there is one. A platform's icon is its
+ * own mark (YouTube, Twitch); a publisher's is its favicon, fetched from the
+ * icon service at render, with its initial standing in when the icon does
+ * not arrive; a metric or data source's is a neutral glyph. Small, grey,
+ * last: the strip is attribution, not decoration.
  */
 export function SourceStrip({ sources, className }: { sources: StorySource[]; className?: string }) {
   if (sources.length === 0) return null;
@@ -46,8 +48,17 @@ export function SourceStrip({ sources, className }: { sources: StorySource[]; cl
   );
 }
 
+const NEUTRAL_GLYPHS = { news: Newspaper, game: Trophy, filing: FileText, metric: Activity } as const;
+
 function SourceIcon({ source }: { source: StorySource }) {
   const [failed, setFailed] = useState(false);
+  const glyph = sourceGlyph(source);
+  if (glyph === "youtube") return <YouTubeMark />;
+  if (glyph === "twitch") return <TwitchMark />;
+  if (glyph !== "favicon") {
+    const Glyph = NEUTRAL_GLYPHS[glyph];
+    return <Glyph className="size-4 shrink-0 text-fg-faint" aria-hidden />;
+  }
   const url = source.domain && !failed ? sourceIconUrl(source.domain) : null;
   if (url) {
     return (

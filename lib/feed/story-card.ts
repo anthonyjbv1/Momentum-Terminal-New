@@ -103,6 +103,27 @@ export interface StorySource {
   count: number;
 }
 
+/**
+ * What stands before a source's name in the strip (Phase 34b). A platform
+ * source shows the platform's own mark (YouTube's icon, Twitch's Glitch, per
+ * their brand guidelines); a publisher shows its favicon with its initial as
+ * the fallback; a metric or data source ("News coverage", "Game data") shows
+ * a neutral glyph, never a letter tile.
+ */
+export type SourceGlyph = "youtube" | "twitch" | "favicon" | "news" | "game" | "filing" | "metric";
+
+export function sourceGlyph(source: Pick<StorySource, "name" | "domain">): SourceGlyph {
+  const name = source.name.toLowerCase();
+  const domain = source.domain?.toLowerCase() ?? "";
+  if (name.startsWith("youtube") || /(^|\.)youtube\.com$/.test(domain)) return "youtube";
+  if (name.startsWith("twitch") || /(^|\.)twitch\.tv$/.test(domain)) return "twitch";
+  if (source.domain) return "favicon";
+  if (/\bnews\b|\bcoverage\b/.test(name)) return "news";
+  if (/\bgame\b/.test(name)) return "game";
+  if (/\bfilings?\b/.test(name)) return "filing";
+  return "metric";
+}
+
 function sourceOf(item: Pick<FeedEvidence, "source" | "detail" | "payload">): StorySource {
   const detail = item.detail;
   if (detail?.kind === "article") {

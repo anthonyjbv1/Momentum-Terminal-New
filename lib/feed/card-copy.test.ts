@@ -70,9 +70,9 @@ function words(copy: CardCopy): string[] {
   return [copy.label, copy.headline, copy.line, copy.attribution].filter((text): text is string => text !== null);
 }
 
-/** Our own words: the headline when it is ours, and always the line. An article's title is the publisher's. */
+/** Our own words: the headline when it is ours, and the line when there is one. An article's title is the publisher's. */
 function ours(copy: CardCopy): string {
-  return copy.quoted ? copy.line : `${copy.headline} ${copy.line}`;
+  return copy.quoted ? (copy.line ?? "") : `${copy.headline} ${copy.line ?? ""}`;
 }
 
 function countNames(text: string, subject: CardSubject): number {
@@ -128,11 +128,11 @@ function everyCard(): Array<{ copy: CardCopy; subject: CardSubject; why: string 
 }
 
 describe("the approved cards", () => {
-  it("names the company, not the person's company, and puts the move in the line (card 1)", () => {
+  it("names the company, not the person's company, and writes no line: the strip and the move block carry the rest (card 1)", () => {
     const copy = signal(musk, { sourceName: "Finnhub", impact: 0.8, headline: "Elon Musk's company is in the news more than usual", payload: metric("company_news_volume_24h", 2.2) });
     expect(copy.headline).toContain("Tesla");
     expect(copy.headline).not.toMatch(/company|Musk/);
-    expect(copy.line).toBe("Company news · Musk +0.8.");
+    expect(copy.line).toBeNull();
     expect(copy.attribution).toBe("Company news");
     expect(copy.label).toBeNull();
     expect(copy.link).toBeNull();
@@ -144,7 +144,7 @@ describe("the approved cards", () => {
       label: "Yahoo Finance",
       headline: "What Meta's Muse event reveals about Mark Zuckerberg's mindset right now",
       link: "https://finance.yahoo.com/news/meta-muse",
-      line: "Read as positive for Zuckerberg · +0.3.",
+      line: "Read as positive for Zuckerberg · +0.3",
       attribution: "Yahoo Finance",
       quoted: true,
     });
@@ -156,7 +156,7 @@ describe("the approved cards", () => {
     expect(copy.headline).not.toMatch(CREATOR_ONLY_NOUNS);
     expect(copy.headline).not.toMatch(/momentum climbed/);
     expect(copy.headline).toContain("Larry Page");
-    expect(copy.line).toBe("News coverage · +0.8.");
+    expect(copy.line).toBeNull();
     expect(copy.attribution).toBe("The Engine · News coverage");
     // The same reading on a creator keeps the creator nouns (the variant is a hash of the day; some days say "everywhere").
     const creatorDays = ["2026-09-19", "2026-09-20", "2026-09-21", "2026-09-22"].map((day) => signal(mrbeast, { occurredAt: `${day}T12:00:00Z`, payload: metric("viral_moment_rate", 2.8, { observed: 12, baseline: 3, window_hours: 720 }) }).headline);
@@ -168,46 +168,57 @@ describe("the approved cards", () => {
     const copy = narrativeCard({ subject: musk, text: `Elon Musk's momentum climbed on "${stored}".`, impact: 1.1, evidence: [evidence({ headline: stored, sourceName: "Finnhub", payload: metric("company_news_volume_24h", 2.95, { observed: 61, baseline: 28.81 }) })] });
     expect(copy.headline).toMatch(/61 stories about Tesla today — 2x its usual pace|Coverage of Tesla is running at 2x its usual pace/);
     expect(copy.headline).not.toMatch(/their/);
-    expect(copy.line).toBe("Company news · Musk +1.1.");
+    expect(copy.line).toBeNull();
   });
 
   it("re-renders an old sigma headline for the company (card 6)", () => {
     const copy = signal(buffett, { sourceName: "Finnhub", impact: -0.77, headline: "Warren Buffett's company news volume is running -2.0σ below their own trailing fortnight", payload: metric("company_news_volume_24h", -2.0) });
     expect(copy.headline).toMatch(/Berkshire Hathaway/);
     expect(copy.headline).not.toMatch(/σ|Buffett/);
-    expect(copy.line).toBe("Company news · Buffett −0.8.");
+    expect(copy.line).toBeNull();
   });
 
   it("keeps the Engine's own sentence and says where it came from (card 7)", () => {
     const text = "Goldman Sachs downgrade triggers $9B selloff, tempering Meta's post-Connect momentum despite successful AI hardware launches and viral coverage surge.";
     const copy = narrativeCard({ subject: zuck, text, impact: -1.11, evidence: [evidence({ headline: "Mark Zuckerberg Loses $9 Billion In A Day", sourceName: "Publisher feeds", detail: article("Forbes - Business", "forbes.com") })] });
     expect(copy.headline).toBe(text);
-    expect(copy.line).toBe("The Engine, from Forbes · Zuckerberg −1.1.");
+    expect(copy.line).toBeNull();
     expect(copy.attribution).toBe("The Engine · Forbes");
     expect(copy.quoted).toBe(false);
   });
 
   it("does not repeat a name the Engine's sentence already carries", () => {
     const copy = narrativeCard({ subject: musk, text: "Musk nets modest momentum from political engagement and a state dinner appearance.", impact: 0.58, evidence: [evidence({ detail: article("Bloomberg.com", "bloomberg.com") }), evidence({ id: "s2", detail: article("Fortune", "fortune.com") })] });
-    expect(copy.line).toBe("The Engine, from 2 stories in Bloomberg and Fortune · +0.6.");
+    expect(copy.line).toBeNull();
+    expect(engineLead(copy.quoted ? [] : [evidence({ detail: article("Bloomberg.com", "bloomberg.com") }), evidence({ id: "s2", detail: article("Fortune", "fortune.com") })])).toBe("The Engine, from 2 stories in Bloomberg and Fortune");
   });
 
   it("names the person once under a metric headline that did not (card 13 against card 1)", () => {
     const views = signal(mrbeast, { sourceName: "YouTube", impact: 0.9, payload: metric("view_count", 2.26, { window_hours: 168, delta_kind: "relative_rate" }) });
     expect(views.headline).toContain("MrBeast");
-    expect(views.line).toBe("YouTube · +0.9.");
+    expect(views.line).toBeNull();
     expect(views.attribution).toBe("YouTube");
   });
 
   it("re-renders a comment digest from its shape, without the comments, and a game result as stored", () => {
     const digest = signal(mrbeast, { sourceName: "YouTube comments", impact: 0.1, headline: 'Comments on MrBeast\'s "Can We Build an Entire Village?" are mixed, 10 sampled.', detail: { kind: "comment_digest", outlet: null, domain: null, link: null, digest: { lean: "mixed", videoTitle: "Can We Build an Entire Village?", sampled: 10 } } });
     expect(digest.headline).toBe("Comments under “Can We Build an Entire Village?” are mixed.");
-    expect(digest.line).toBe("YouTube comments · MrBeast +0.1.");
+    expect(digest.line).toBeNull();
     const game = signal(mahomes, { sourceName: "API-Sports", impact: 1.0, headline: "Week 2: Kansas City Chiefs beat Indianapolis Colts 33-30.", detail: { kind: "game_result", outlet: null, domain: null, link: null, digest: null } });
     expect(game.headline).toBe("Week 2: Kansas City Chiefs beat Indianapolis Colts 33-30.");
-    expect(game.line).toBe("Game data · Mahomes +1.0.");
+    expect(game.line).toBeNull();
     const filing = signal(buffett, { sourceName: "Finnhub", impact: 0.4, headline: "Warren Buffett bought shares.", detail: { kind: "insider_filing", outlet: null, domain: null, link: null, digest: null } });
     expect(filing.attribution).toBe("Company filings");
+  });
+
+  it("keeps a line only when it adds a reading, and never ends one with a period after the number (2026-09-29)", () => {
+    for (const { copy, why } of everyCard()) {
+      if (copy.line === null) continue;
+      expect(copy.line, why).toMatch(/^Read (as \w+ )?for |^Waiting for/);
+      expect(copy.line, why).not.toMatch(/\d\.$/);
+    }
+    const negative = signal(zuck, { sentiment: "negative", impact: -0.42, headline: "Meta stumbles", detail: article("Forbes", "forbes.com") });
+    expect(negative.line).toBe("Read as negative for Zuckerberg · −0.4");
   });
 
   it("shows an unread signal as waiting, with no move", () => {
@@ -236,7 +247,7 @@ describe("rule 2: no template inside a template", () => {
   it("falls back to the quoted text when a template's evidence is gone", () => {
     const copy = narrativeCard({ subject: musk, text: 'Elon Musk\'s momentum climbed on "fresh news".', impact: 0.5, evidence: [] });
     expect(copy.headline).toBe("fresh news");
-    expect(copy.line).toBe("The Engine · Musk +0.5.");
+    expect(copy.line).toBeNull();
   });
 });
 
@@ -283,7 +294,7 @@ describe("rule 5: words fit the person", () => {
       if (copy.quoted) continue;
       if (subject.category === "creator" || subject.category === "musician") continue;
       expect(copy.headline, why).not.toMatch(CREATOR_ONLY_NOUNS);
-      expect(copy.line, why).not.toMatch(CREATOR_ONLY_NOUNS);
+      expect(copy.line ?? "", why).not.toMatch(CREATOR_ONLY_NOUNS);
     }
   });
 });
@@ -308,13 +319,15 @@ describe("rule 6: zero-impact items are not cards", () => {
   });
 });
 
-describe("rule 7: the person is named once in the body", () => {
-  it("across every card type and every person", () => {
+describe("rule 7: the person is named at most once in the body", () => {
+  it("across every card type and every person; exactly once when the line stands", () => {
     for (const { copy, subject, why } of everyCard()) {
       if (copy.line === "Waiting for the Engine's next read.") continue;
       const named = countNames(ours(copy), subject);
       // A company metric names the company; Dell Technologies carries Dell's surname and counts as the one mention.
-      expect(named, `${why}: "${ours(copy)}"`).toBe(1);
+      // Without a line, a headline that names the company alone names nobody: the header names them (2026-09-29).
+      expect(named, `${why}: "${ours(copy)}"`).toBeLessThanOrEqual(1);
+      if (copy.line !== null) expect(named, `${why}: "${ours(copy)}"`).toBe(1);
     }
   });
 
