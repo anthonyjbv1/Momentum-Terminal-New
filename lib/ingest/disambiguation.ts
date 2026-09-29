@@ -61,6 +61,11 @@ import type { Json } from "@/types/database";
  *                          off by default, so "Dell" is a company, "Page" a
  *                          word and "Ross", "Lamar", "Huang" other people
  *                          until the full name or an alias appears)
+ *   surname_context        where surname_alone is off, words beside which
+ *                          the bare surname still names the subject:
+ *                          "Ellison" with "Oracle" is Larry, "Huang" with
+ *                          "Nvidia" is Jensen. The exclusions always win:
+ *                          "David Ellison" with "Oracle" is still David.
  *
  * and one rule that needs no configuration at all: an OBITUARY (a funeral
  * home's notice for a namesake) is never about a public figure who is alive,
@@ -88,9 +93,11 @@ export interface Disambiguation {
   aliases: string[];
   /** Whether the bare surname names the subject for the name requirement (2026-09-29). Off unless the row says `true`. */
   surname_alone: boolean;
+  /** Words beside which the bare surname names the subject when surname_alone is off ("Oracle" for Ellison, "Nvidia" for Huang). Lower-cased, substring matched like every term. */
+  surname_context: string[];
 }
 
-export const EMPTY_DISAMBIGUATION: Disambiguation = { exclude_terms: [], require_any: [], exclude_unless_named: [], namesake_guard: false, aliases: [], surname_alone: false };
+export const EMPTY_DISAMBIGUATION: Disambiguation = { exclude_terms: [], require_any: [], exclude_unless_named: [], namesake_guard: false, aliases: [], surname_alone: false, surname_context: [] };
 
 function termList(value: Json | undefined): string[] {
   if (!Array.isArray(value)) return [];
@@ -115,6 +122,7 @@ export function readDisambiguation(config: Record<string, Json | undefined> | nu
     exclude_unless_named: termList(record.exclude_unless_named),
     namesake_guard: record.namesake_guard === true,
     surname_alone: record.surname_alone === true,
+    surname_context: termList(record.surname_context),
     aliases: termList(record.aliases),
   };
 }
@@ -137,15 +145,17 @@ export interface ExclusionSubject {
   /** The names that count as naming the subject: display name, full name, configured aliases. */
   names: string[];
   /**
-   * The subject's surname, when their row says it is distinctive enough to
-   * name them on its own (`surname_alone`). It names them for the NAME
-   * REQUIREMENT but not for the name-conditional exclusions: "Ellison pledges
-   * shares" is Larry, "David Ellison attends" is not, and the exclusion term
-   * decides the second before the surname is consulted. Null when the row
-   * says nothing, and for a one-word name (Drake, MrBeast), whose names list
-   * already is the surname.
+   * The subject's surname, for the NAME REQUIREMENT only, never for the
+   * name-conditional exclusions: "Ellison pledges shares" can be Larry,
+   * "David Ellison attends" is not, and the exclusion term decides the second
+   * before the surname is consulted. Null for a one-word name (Drake,
+   * MrBeast), whose names list already is the surname.
    */
   surname: string | null;
+  /** The row says the surname is distinctive enough to name the subject on its own. */
+  surnameAlone: boolean;
+  /** Otherwise, the words beside which it still does (lower-cased). */
+  surnameContext: string[];
 }
 
 /** Lower case, ASCII-folded (é → e), whitespace collapsed. */
@@ -186,7 +196,15 @@ export function subjectSurname(person: { display_name: string }): string | null 
 
 /** The subject as the rules judge an item against them: their names and aliases, and their surname. */
 export function exclusionSubject(person: { display_name: string; full_name: string | null }, rules: Disambiguation): ExclusionSubject {
-  return { names: subjectNames(person, rules), surname: rules.surname_alone ? subjectSurname(person) : null };
+  return { names: subjectNames(person, rules), surname: subjectSurname(person), surnameAlone: rules.surname_alone, surnameContext: rules.surname_context };
+}
+
+/** Whether the bare surname names the subject here: on its own when the row says so, else beside one of the row's context words. */
+export function namesBySurname(text: string, subject: ExclusionSubject): boolean {
+  if (!subject.surname || !namesSubject(text, [subject.surname])) return false;
+  if (subject.surnameAlone) return true;
+  const haystack = fold(text);
+  return subject.surnameContext.some((term) => haystack.includes(fold(term)));
 }
 
 /** The names an item must carry to count as naming the subject: their display and full name, plus the configured aliases. */
@@ -228,7 +246,7 @@ export function excludeReason(text: string, rules: Disambiguation, subject?: Exc
   for (const term of rules.exclude_unless_named) {
     if (haystack.includes(term)) return { reason: "excluded_unless_named", term };
   }
-  if (subject.surname && namesSubject(text, [subject.surname])) return null;
+  if (namesBySurname(text, subject)) return null;
   return { reason: "namesake_unnamed", term: null };
 }
 

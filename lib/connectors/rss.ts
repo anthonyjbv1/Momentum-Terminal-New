@@ -380,9 +380,11 @@ async function loadFeed(person: Person, identifier: string, context: ConnectorCo
         const headline = stripOutletSuffix(item.title, item.outlet);
         const publisher = publisherDomainOf(item);
         const judged = googleNews || !item.lead ? headline : `${headline}\n${item.lead}`;
+        // The obituary guard first: a funeral notice is refused as one, whether
+        // or not it happens to name the subject, so the log says what it was.
         verdict =
-          excludeReason(judged, { ...EMPTY_DISAMBIGUATION, exclude_unless_named: rules.exclude_unless_named, aliases: rules.aliases }, subject) ??
-          obituaryReason({ headline, outlet: item.outlet, domain: publisher.domain });
+          obituaryReason({ headline, outlet: item.outlet, domain: publisher.domain }) ??
+          excludeReason(judged, { ...EMPTY_DISAMBIGUATION, exclude_unless_named: rules.exclude_unless_named, aliases: rules.aliases, surname_alone: rules.surname_alone, surname_context: rules.surname_context }, subject);
       }
       if (verdict) refused.push({ item, verdict });
       else items.push(item);

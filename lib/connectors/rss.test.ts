@@ -350,7 +350,7 @@ describe("the signal-quality rules (Phase 31)", () => {
     { domain: "barrons.com", status: "allowed", tier: 1 },
     { domain: "forbes.com", status: "allowed", tier: 1 },
   ]);
-  const rules = { disambiguation: { exclude_unless_named: ["David Ellison", "Skydance", "Paramount"], aliases: ["Larry"], surname_alone: true } };
+  const rules = { disambiguation: { exclude_unless_named: ["David Ellison", "Skydance", "Paramount"], aliases: ["Oracle founder", "Larry and David Ellison"], surname_context: ["Oracle"] } };
 
   const ctx = (fetch: typeof globalThis.fetch, on: boolean, excluded: unknown[] = [], notes: string[] = []) => ({
     source: makeSource({ name: "rss" }),
@@ -388,6 +388,7 @@ describe("the signal-quality rules (Phase 31)", () => {
     ]);
     expect(excluded.map((e) => [e.reason, e.term])).toEqual([
       ["excluded_unless_named", "david ellison"],
+      // A funeral notice is refused as one before the name requirement is asked, whatever it names.
       ["obituary", "obituary"],
       ["namesake_unnamed", null],
     ]);

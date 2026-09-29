@@ -45,10 +45,10 @@ const PEOPLE: Record<string, { display_name: string; full_name: string | null; r
   drake: { display_name: "Drake", full_name: "Aubrey Drake Graham" },
   "elon-musk": { display_name: "Elon Musk", full_name: "Elon Reeve Musk", rules: { surname_alone: true } },
   "jeff-bezos": { display_name: "Jeff Bezos", full_name: "Jeffrey Preston Bezos", rules: { surname_alone: true, exclude_unless_named: ["Mark Bezos", "HighPost"] } },
-  "jensen-huang": { display_name: "Jensen Huang", full_name: "Jen-Hsun Huang", rules: { surname_alone: false, aliases: ["Nvidia CEO", "Nvidia's CEO", "Nvidia's Huang", "CEO Huang"] } },
+  "jensen-huang": { display_name: "Jensen Huang", full_name: "Jen-Hsun Huang", rules: { surname_alone: false, surname_context: ["Nvidia"], aliases: ["Nvidia CEO", "Nvidia's CEO", "Nvidia's Huang", "CEO Huang"] } },
   "kai-cenat": { display_name: "Kai Cenat", full_name: "Kai Carlo Cenat III", rules: { surname_alone: true } },
   "kendrick-lamar": { display_name: "Kendrick Lamar", full_name: "Kendrick Lamar Duckworth", rules: { surname_alone: false } },
-  "larry-ellison": { display_name: "Larry Ellison", full_name: "Lawrence Joseph Ellison", rules: { surname_alone: false, exclude_unless_named: ["David Ellison", "Skydance", "Paramount"], aliases: ["Larry", "Oracle founder", "Oracle co-founder", "Oracle's Ellison", "Oracle chairman"] } },
+  "larry-ellison": { display_name: "Larry Ellison", full_name: "Lawrence Joseph Ellison", rules: { surname_alone: false, surname_context: ["Oracle"], exclude_unless_named: ["David Ellison", "Skydance", "Paramount"], aliases: ["Oracle founder", "Oracle co-founder", "Oracle's Ellison", "Oracle chairman", "Larry and David Ellison"] } },
   "larry-page": { display_name: "Larry Page", full_name: "Lawrence Edward Page", rules: { surname_alone: false, exclude_unless_named: ["Page Auto"], aliases: ["Google co-founder Page"] } },
   "mark-zuckerberg": { display_name: "Mark Zuckerberg", full_name: "Mark Elliot Zuckerberg", rules: { surname_alone: true } },
   "michael-dell": { display_name: "Michael Dell", full_name: "Michael Saul Dell", rules: { surname_alone: false, aliases: ["Dell founder", "Dell's founder", "Dell CEO", "Dell Family Office"] } },
@@ -93,6 +93,12 @@ function surnameForAllVerdict(row: Row, headline: string): string | null {
   const person = PEOPLE[row.slug];
   const base = readDisambiguation({ disambiguation: { exclude_unless_named: (person.rules?.exclude_unless_named as string[] | undefined)?.filter((t) => ["David Ellison", "Skydance", "Paramount", "Page Auto"].includes(t)) ?? [], aliases: person.rules?.aliases && row.slug === "jensen-huang" ? ["Nvidia CEO"] : [], surname_alone: true } } as unknown as Parameters<typeof readDisambiguation>[0]);
   return excludeReason(headline, base, exclusionSubject(person, base))?.reason ?? null;
+}
+
+/** The settings of e2f2607, before the context words. */
+function withoutContextVerdict(row: Row, headline: string, rules: Disambiguation): string | null {
+  const bare = { ...rules, surname_context: [] };
+  return excludeReason(headline, bare, exclusionSubject(PEOPLE[row.slug], bare))?.reason ?? null;
 }
 
 function newVerdict(row: Row, headline: string, rules: Disambiguation): string | null {
@@ -180,6 +186,34 @@ function main() {
       console.log(`  ${slug}: ${list.length} items, |${list.reduce((sum, row) => sum + Math.abs(row.impact ?? 0), 0).toFixed(2)}|`);
       for (const row of list) console.log(`      - ${stripOutletSuffix(row.headline, row.outlet).slice(0, 110)} [${row.outlet ?? row.domain} t${row.tier} ${(row.impact ?? 0).toFixed(2)}]`);
     }
+  }
+
+  console.log("\nTHE CONTEXT WORDS (Ellison: Oracle; Huang: Nvidia) against the settings without them: what comes back, and whether anything of David Ellison, the Dell company or Page is admitted");
+  const back = new Map<string, Row[]>();
+  const suspect: string[] = [];
+  const retained = new Map<string, { kept: number; all: number; keptItems: number; items: number }>();
+  for (const row of rows) {
+    const rules = rulesFor(row.slug);
+    const headline = stripOutletSuffix(row.headline, row.outlet);
+    const before = withoutContextVerdict(row, headline, rules);
+    const after = newVerdict(row, headline, rules);
+    if (before && !after) back.set(row.slug, [...(back.get(row.slug) ?? []), row]);
+    if (!after && /david ellison|paramount|skydance|ellison (empire|merger|tv)|page auto|dell.s (ai|stock|reinvention)|doordash/i.test(headline) && ["larry-ellison", "michael-dell", "larry-page"].includes(row.slug)) suspect.push(`${row.slug}: ${headline}`);
+    const r = retained.get(row.slug) ?? { kept: 0, all: 0, keptItems: 0, items: 0 };
+    retained.set(row.slug, r);
+    r.all += Math.abs(row.impact ?? 0);
+    r.items += 1;
+    if (!after) { r.kept += Math.abs(row.impact ?? 0); r.keptItems += 1; }
+  }
+  for (const [slug, list] of [...back].sort()) {
+    console.log(`  ${slug}: ${list.length} come back, |${list.reduce((sum, row) => sum + Math.abs(row.impact ?? 0), 0).toFixed(2)}|`);
+    for (const row of list) console.log(`      - ${stripOutletSuffix(row.headline, row.outlet).slice(0, 110)} [${row.outlet ?? row.domain} t${row.tier} ${(row.impact ?? 0).toFixed(2)}]`);
+  }
+  console.log(`  admitted items matching the David Ellison / Dell company / Page Auto patterns: ${suspect.length}`);
+  for (const line of suspect) console.log(`      ! ${line}`);
+  for (const slug of ["larry-ellison", "jensen-huang", "michael-dell", "larry-page"]) {
+    const r = retained.get(slug);
+    if (r) console.log(`  ${slug} retains ${r.keptItems} of ${r.items} items, ${r.kept.toFixed(2)} of ${r.all.toFixed(2)} points (${r.all > 0 ? Math.round((100 * r.kept) / r.all) : 100} %)`);
   }
 
   const sign = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}`;
