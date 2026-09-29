@@ -192,7 +192,10 @@ export const MAX_SAMPLE_INTERVAL_MINUTES = 5;
  *   Two readings are the minimum (decided 2026-09-28): the step read at the
  *   previous sample and this sample's own reading holding it, eight minutes
  *   apart at the four-minute cadence. A rise that holds two readings and then
- *   reverts is a confirmed step under this rule, by acceptance.
+ *   reverts is a confirmed step under this rule, by acceptance. The
+ *   confidence is read from the STRONGER of those two readings (2026-09-29),
+ *   so the sampling phase decides less of it; the threshold, the confirmation,
+ *   the caps and the warm-up are unchanged.
  *
  *   A clip burst needs burstMinSessionMinutes of session and
  *   burstMinPriorClips clips before the window, at least burstMinClips in the
@@ -714,7 +717,14 @@ export function qualitySurgeMoment(
   if (context.shape && step.after < context.shape.median * (1 + quality.shapeFraction)) return null;
 
   const later = context.surgesSoFar >= 1;
-  const confidence = round3(confidenceAboveThreshold(step.fraction, quality.stepFraction, quality.fullConfidenceStepFraction) * (later ? quality.laterSurgeConfidenceFactor : 1));
+  // Confidence from the STRONGER of the two qualifying readings, the step read
+  // and the confirming read, each against the level before the step
+  // (2026-09-29): which of the two catches the rise's full height depends on
+  // the sampling phase, and on 09-26 the two halves read the one step at
+  // +12.7% and +15.0%, applying 0.126 and 0.555. Both readings had to clear
+  // the threshold to get here, so nothing fires that did not before.
+  const strength = Math.max(step.fraction, held);
+  const confidence = round3(confidenceAboveThreshold(strength, quality.stepFraction, quality.fullConfidenceStepFraction) * (later ? quality.laterSurgeConfidenceFactor : 1));
   const shapeNote = context.shape ? `; usual at ${context.shape.bucketFromMinutes}–${context.shape.bucketToMinutes} min ${fmtCount(context.shape.median)} over ${context.shape.sessions} sessions` : "; no session shape yet";
   return {
     moment: "audience_surge",

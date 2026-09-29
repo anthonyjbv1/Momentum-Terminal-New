@@ -185,7 +185,8 @@ describe("an audience surge under the quality rules", () => {
     const fired = surges(series(240, big));
     expect(fired.map((f) => f.minute)).toEqual([108]);
     expect(fired[0].moment.magnitude).toBeCloseTo(0.167, 2);
-    expect(fired[0].moment.confidence).toBeCloseTo(confidenceAboveThreshold(fired[0].moment.magnitude, Q.stepFraction, Q.fullConfidenceStepFraction), 2);
+    // The confirming read (60,000, +50%) is the stronger of the two, so the confidence is full (2026-09-29).
+    expect(fired[0].moment.confidence).toBe(1);
   });
 
   it("two readings are the minimum: the step at the previous sample and this sample holding it, eight minutes apart; a hold that reverts after is still a confirmed step", () => {
@@ -320,5 +321,33 @@ describe("the moment's signal", () => {
     const phase16 = liveMomentSignal(kai, session(), { ...moment, rule: undefined, windowMinutes: 10 }, at(112), "twitch");
     expect(phase16.rawPayload).not.toHaveProperty("rule");
     expect(phase16.headline).toContain("in the last 10 minutes");
+  });
+});
+
+describe("confidence from the stronger of the two qualifying readings (2026-09-29)", () => {
+  it("sizes a held step by whichever of the step read and the confirming read is higher against the pre-step level", () => {
+    // The step read at 108 is the window mean, +13.3% (one reading of 56,000 among three); the confirming read at 112 is +40% on its own.
+    const step = (m: number) => (m < 108 ? 40_000 : 56_000);
+    const fired = surges(series(240, step));
+    expect(fired.map((f) => f.minute)).toEqual([112]);
+    const { moment } = fired[0];
+    expect(moment.magnitude).toBeCloseTo(0.133, 2);
+    // Sized by the step read alone it would be 0.17; by the stronger reading it is full confidence.
+    expect(confidenceAboveThreshold(moment.magnitude, Q.stepFraction, Q.fullConfidenceStepFraction)).toBeLessThan(0.2);
+    expect(moment.confidence).toBe(1);
+    expect(moment.rationale).toContain("held at the next sample (56,000, +40%)");
+  });
+
+  it("still never fires on a spike that falls back before confirmation, however large", () => {
+    const spike = (m: number) => (m === 104 ? 90_000 : 40_000);
+    expect(surges(series(240, spike))).toEqual([]);
+    const twoThenBack = (m: number) => (m === 104 || m === 108 ? 90_000 : 40_000);
+    // 108's AFTER carries the spike, but by 112 the confirming read is back at the base: nothing.
+    expect(surges(series(240, twoThenBack).filter((s) => (s.sampledAt.getTime() - T0.getTime()) / 60_000 !== 108))).toEqual([]);
+  });
+
+  it("still never fires on a slow climb: 7% every ten minutes for five hours", () => {
+    const climb = (m: number) => 30_000 * Math.pow(1.07, m / 10);
+    expect(surges(series(300, climb))).toEqual([]);
   });
 });
