@@ -143,7 +143,7 @@ import { exclusionSubject, namesSubject, obituaryReason, subjectNames, subjectSu
 
 describe("the name-conditional rules (Phase 31)", () => {
   const ellison = readDisambiguation({
-    disambiguation: { exclude_unless_named: ["David Ellison", "Skydance", "Paramount"], namesake_guard: true, aliases: ["Larry", "Oracle founder", "Oracle co-founder"] },
+    disambiguation: { exclude_unless_named: ["David Ellison", "Skydance", "Paramount"], namesake_guard: true, aliases: ["Larry", "Oracle founder", "Oracle co-founder"], surname_alone: true },
   });
   const larry = subjectNames({ display_name: "Larry Ellison", full_name: "Lawrence Joseph Ellison" }, ellison);
   // The subject is the same whatever the publisher's tier (decided 2026-09-29): both names stand for the two halves of the old test.
@@ -158,6 +158,9 @@ describe("the name-conditional rules (Phase 31)", () => {
     expect(readDisambiguation({ disambiguation: { namesake_guard: "yes", aliases: "Larry", exclude_unless_named: null } })).toEqual(EMPTY_DISAMBIGUATION);
     expect(hasRules(readDisambiguation({ disambiguation: { namesake_guard: true } }))).toBe(false);
     expect(known).toEqual({ names: larry, surname: "Ellison" });
+    // Off unless the row says so: the surname then names nobody.
+    expect(exclusionSubject({ display_name: "Larry Ellison", full_name: "Lawrence Joseph Ellison" }, { ...ellison, surname_alone: false }).surname).toBeNull();
+    expect(readDisambiguation({ disambiguation: { surname_alone: "yes" } }).surname_alone).toBe(false);
     expect(subjectSurname({ display_name: "Drake" })).toBeNull();
     expect(subjectSurname({ display_name: "Kai Carlo Cenat III" })).toBe("III");
     // Aliases come out of the config lower-cased like every other term; naming is judged case-insensitively anyway.
@@ -188,6 +191,11 @@ describe("the name-conditional rules (Phase 31)", () => {
     // The retired flag changes nothing either way.
     const withoutGuard = { ...ellison, namesake_guard: false };
     expect(excludeReason("Oracle leaders receive subpoenas", withoutGuard, unknown)).toEqual({ reason: "namesake_unnamed", term: null });
+    // A surname the row does not call distinctive names nobody: Dell is a company, Page a word, until the full name or an alias appears.
+    const dell = exclusionSubject({ display_name: "Michael Dell", full_name: "Michael Saul Dell" }, readDisambiguation({ disambiguation: { aliases: ["Dell founder"] } }));
+    expect(excludeReason("Dell's AI backlog surge positions stock for $600", EMPTY_DISAMBIGUATION, dell)).toEqual({ reason: "namesake_unnamed", term: null });
+    expect(excludeReason("Tampa company to sell in $7.7B take-private deal backed by Dell founder", EMPTY_DISAMBIGUATION, dell)).toBeNull();
+    expect(excludeReason("Michael Dell overtakes Jeff Bezos", EMPTY_DISAMBIGUATION, dell)).toBeNull();
     // A one-word name has no separate surname: the name itself is the requirement.
     const drake = exclusionSubject({ display_name: "Drake", full_name: "Aubrey Drake Graham" }, EMPTY_DISAMBIGUATION);
     expect(excludeReason("Drake drops a surprise album", EMPTY_DISAMBIGUATION, drake)).toBeNull();
@@ -210,10 +218,11 @@ describe("the name-conditional rules (Phase 31)", () => {
     expect(namesSubject("Michael Dell Overtakes Jeff Bezos", ["Michael Dell"])).toBe(true);
     expect(namesSubject("Michael Henry Dell's Obituary", ["Michael Dell"])).toBe(false);
     expect(namesSubject("Élon Musk", ["Elon Musk"])).toBe(true);
+    expect(namesSubject("Nvidia’s Huang weighs in", ["Nvidia's Huang"])).toBe(true);
   });
 
   it("Page Auto Group is not Larry Page, and needs no publisher to be refused", () => {
-    const page = readDisambiguation({ disambiguation: { exclude_unless_named: ["Page Auto"] } });
+    const page = readDisambiguation({ disambiguation: { exclude_unless_named: ["Page Auto"], surname_alone: false } });
     const subject = exclusionSubject({ display_name: "Larry Page", full_name: "Lawrence Edward Page" }, page);
     expect(excludeReason("Page Auto Group owner planning mixed-use project with Sheetz and townhomes in Mechanicsville", page, subject)).toEqual({ reason: "excluded_unless_named", term: "page auto" });
     expect(excludeReason("Google Co-Founder Larry Page Is Reportedly Exiting California In Style", page, subject)).toBeNull();

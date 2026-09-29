@@ -350,7 +350,7 @@ describe("the signal-quality rules (Phase 31)", () => {
     { domain: "barrons.com", status: "allowed", tier: 1 },
     { domain: "forbes.com", status: "allowed", tier: 1 },
   ]);
-  const rules = { disambiguation: { exclude_unless_named: ["David Ellison", "Skydance", "Paramount"], namesake_guard: true, aliases: ["Larry"] } };
+  const rules = { disambiguation: { exclude_unless_named: ["David Ellison", "Skydance", "Paramount"], aliases: ["Larry"], surname_alone: true } };
 
   const ctx = (fetch: typeof globalThis.fetch, on: boolean, excluded: unknown[] = [], notes: string[] = []) => ({
     source: makeSource({ name: "rss" }),

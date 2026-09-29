@@ -56,6 +56,11 @@ import type { Json } from "@/types/database";
  *   aliases                the names that count as naming the subject, beyond
  *                          their display and full name ("Larry" inside Larry
  *                          Ellison's own feed, "Nvidia CEO" for Jensen Huang)
+ *   surname_alone          whether the bare surname names the subject
+ *                          (decided 2026-09-29: only when it is distinctive;
+ *                          off by default, so "Dell" is a company, "Page" a
+ *                          word and "Ross", "Lamar", "Huang" other people
+ *                          until the full name or an alias appears)
  *
  * and one rule that needs no configuration at all: an OBITUARY (a funeral
  * home's notice for a namesake) is never about a public figure who is alive,
@@ -81,9 +86,11 @@ export interface Disambiguation {
   namesake_guard: boolean;
   /** Phase 31. What else counts as naming the subject, beyond their display and full name. Word-boundary matched. */
   aliases: string[];
+  /** Whether the bare surname names the subject for the name requirement (2026-09-29). Off unless the row says `true`. */
+  surname_alone: boolean;
 }
 
-export const EMPTY_DISAMBIGUATION: Disambiguation = { exclude_terms: [], require_any: [], exclude_unless_named: [], namesake_guard: false, aliases: [] };
+export const EMPTY_DISAMBIGUATION: Disambiguation = { exclude_terms: [], require_any: [], exclude_unless_named: [], namesake_guard: false, aliases: [], surname_alone: false };
 
 function termList(value: Json | undefined): string[] {
   if (!Array.isArray(value)) return [];
@@ -107,6 +114,7 @@ export function readDisambiguation(config: Record<string, Json | undefined> | nu
     require_any: termList(record.require_any),
     exclude_unless_named: termList(record.exclude_unless_named),
     namesake_guard: record.namesake_guard === true,
+    surname_alone: record.surname_alone === true,
     aliases: termList(record.aliases),
   };
 }
@@ -129,11 +137,13 @@ export interface ExclusionSubject {
   /** The names that count as naming the subject: display name, full name, configured aliases. */
   names: string[];
   /**
-   * The subject's surname, which names them for the NAME REQUIREMENT but not
-   * for the name-conditional exclusions: "Ellison pledges shares" is Larry,
-   * "David Ellison attends" is not, and the exclusion term decides the second
-   * before the surname is consulted. Null for a one-word name (Drake, MrBeast),
-   * whose names list already is the surname.
+   * The subject's surname, when their row says it is distinctive enough to
+   * name them on its own (`surname_alone`). It names them for the NAME
+   * REQUIREMENT but not for the name-conditional exclusions: "Ellison pledges
+   * shares" is Larry, "David Ellison attends" is not, and the exclusion term
+   * decides the second before the surname is consulted. Null when the row
+   * says nothing, and for a one-word name (Drake, MrBeast), whose names list
+   * already is the surname.
    */
   surname: string | null;
 }
@@ -143,6 +153,8 @@ function fold(value: string): string {
   return value
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
+    // A typographic apostrophe is an apostrophe: "Nvidia’s Huang" names Nvidia's Huang.
+    .replace(/[\u2018\u2019\u02bc]/g, "'")
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
@@ -174,7 +186,7 @@ export function subjectSurname(person: { display_name: string }): string | null 
 
 /** The subject as the rules judge an item against them: their names and aliases, and their surname. */
 export function exclusionSubject(person: { display_name: string; full_name: string | null }, rules: Disambiguation): ExclusionSubject {
-  return { names: subjectNames(person, rules), surname: subjectSurname(person) };
+  return { names: subjectNames(person, rules), surname: rules.surname_alone ? subjectSurname(person) : null };
 }
 
 /** The names an item must carry to count as naming the subject: their display and full name, plus the configured aliases. */

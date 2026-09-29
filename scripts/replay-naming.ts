@@ -41,21 +41,21 @@ interface Row {
 
 /** The people, as production names them, with the Phase 31 rules the shipping plan sets for them. */
 const PEOPLE: Record<string, { display_name: string; full_name: string | null; rules?: Record<string, unknown> }> = {
-  "adin-ross": { display_name: "Adin Ross", full_name: "Adin David Ross" },
+  "adin-ross": { display_name: "Adin Ross", full_name: "Adin David Ross", rules: { surname_alone: false } },
   drake: { display_name: "Drake", full_name: "Aubrey Drake Graham" },
-  "elon-musk": { display_name: "Elon Musk", full_name: "Elon Reeve Musk" },
-  "jeff-bezos": { display_name: "Jeff Bezos", full_name: "Jeffrey Preston Bezos" },
-  "jensen-huang": { display_name: "Jensen Huang", full_name: "Jen-Hsun Huang", rules: { aliases: ["Nvidia CEO", "Nvidia's CEO"] } },
-  "kai-cenat": { display_name: "Kai Cenat", full_name: "Kai Carlo Cenat III" },
-  "kendrick-lamar": { display_name: "Kendrick Lamar", full_name: "Kendrick Lamar Duckworth" },
-  "larry-ellison": { display_name: "Larry Ellison", full_name: "Lawrence Joseph Ellison", rules: { exclude_unless_named: ["David Ellison", "Skydance", "Paramount"], aliases: ["Larry", "Oracle founder", "Oracle co-founder"] } },
-  "larry-page": { display_name: "Larry Page", full_name: "Lawrence Edward Page", rules: { exclude_unless_named: ["Page Auto"] } },
-  "mark-zuckerberg": { display_name: "Mark Zuckerberg", full_name: "Mark Elliot Zuckerberg" },
-  "michael-dell": { display_name: "Michael Dell", full_name: "Michael Saul Dell" },
+  "elon-musk": { display_name: "Elon Musk", full_name: "Elon Reeve Musk", rules: { surname_alone: true } },
+  "jeff-bezos": { display_name: "Jeff Bezos", full_name: "Jeffrey Preston Bezos", rules: { surname_alone: true, exclude_unless_named: ["Mark Bezos", "HighPost"] } },
+  "jensen-huang": { display_name: "Jensen Huang", full_name: "Jen-Hsun Huang", rules: { surname_alone: false, aliases: ["Nvidia CEO", "Nvidia's CEO", "Nvidia's Huang", "CEO Huang"] } },
+  "kai-cenat": { display_name: "Kai Cenat", full_name: "Kai Carlo Cenat III", rules: { surname_alone: true } },
+  "kendrick-lamar": { display_name: "Kendrick Lamar", full_name: "Kendrick Lamar Duckworth", rules: { surname_alone: false } },
+  "larry-ellison": { display_name: "Larry Ellison", full_name: "Lawrence Joseph Ellison", rules: { surname_alone: false, exclude_unless_named: ["David Ellison", "Skydance", "Paramount"], aliases: ["Larry", "Oracle founder", "Oracle co-founder", "Oracle's Ellison", "Oracle chairman"] } },
+  "larry-page": { display_name: "Larry Page", full_name: "Lawrence Edward Page", rules: { surname_alone: false, exclude_unless_named: ["Page Auto"], aliases: ["Google co-founder Page"] } },
+  "mark-zuckerberg": { display_name: "Mark Zuckerberg", full_name: "Mark Elliot Zuckerberg", rules: { surname_alone: true } },
+  "michael-dell": { display_name: "Michael Dell", full_name: "Michael Saul Dell", rules: { surname_alone: false, aliases: ["Dell founder", "Dell's founder", "Dell CEO", "Dell Family Office"] } },
   mrbeast: { display_name: "MrBeast", full_name: "James Stephen Donaldson" },
-  "patrick-mahomes": { display_name: "Patrick Mahomes", full_name: "Patrick Lavon Mahomes II" },
-  "sergey-brin": { display_name: "Sergey Brin", full_name: "Sergey Mikhailovich Brin" },
-  "warren-buffett": { display_name: "Warren Buffett", full_name: "Warren Edward Buffett" },
+  "patrick-mahomes": { display_name: "Patrick Mahomes", full_name: "Patrick Lavon Mahomes II", rules: { surname_alone: true, exclude_unless_named: ["Brittany Mahomes"] } },
+  "sergey-brin": { display_name: "Sergey Brin", full_name: "Sergey Mikhailovich Brin", rules: { surname_alone: true } },
+  "warren-buffett": { display_name: "Warren Buffett", full_name: "Warren Edward Buffett", rules: { surname_alone: true } },
 };
 
 function rulesFor(slug: string): Disambiguation {
@@ -86,6 +86,13 @@ function oldVerdict(row: Row, headline: string, rules: Disambiguation): string |
   for (const term of rules.exclude_unless_named) if (headline.toLowerCase().includes(term)) return "excluded_unless_named";
   const listed = row.status === "known" || proposedTierOf(row) !== null;
   return listed ? null : "namesake_unnamed";
+}
+
+/** The rule of 549ba2c: the surname names everyone, and the settings' aliases and exclusions are not yet there. */
+function surnameForAllVerdict(row: Row, headline: string): string | null {
+  const person = PEOPLE[row.slug];
+  const base = readDisambiguation({ disambiguation: { exclude_unless_named: (person.rules?.exclude_unless_named as string[] | undefined)?.filter((t) => ["David Ellison", "Skydance", "Paramount", "Page Auto"].includes(t)) ?? [], aliases: person.rules?.aliases && row.slug === "jensen-huang" ? ["Nvidia CEO"] : [], surname_alone: true } } as unknown as Parameters<typeof readDisambiguation>[0]);
+  return excludeReason(headline, base, exclusionSubject(person, base))?.reason ?? null;
 }
 
 function newVerdict(row: Row, headline: string, rules: Disambiguation): string | null {
@@ -150,6 +157,28 @@ function main() {
         add(totals.droppedProposed, row);
       }
       if (p.samples.length < 5 || (isProposed && p.samples.length < 8)) p.samples.push(`${headline.slice(0, 90)} [${row.outlet ?? row.domain} t${row.tier}${isProposed ? `→${proposedTierOf(row)}` : ""} ${(row.impact ?? 0).toFixed(2)}${isProposed ? ` → ${relistedImpact(row).toFixed(2)}` : ""}]`);
+    }
+  }
+
+  console.log("\nTHE SURNAME SETTINGS (2026-09-29) against the surname-for-everyone rule: what additionally drops out, and what the settings admit that it refused");
+  const extraOut = new Map<string, Row[]>();
+  const extraIn = new Map<string, Row[]>();
+  for (const row of rows) {
+    const rules = rulesFor(row.slug);
+    const headline = stripOutletSuffix(row.headline, row.outlet);
+    const before = surnameForAllVerdict(row, headline);
+    const after = newVerdict(row, headline, rules);
+    if (!before && after) extraOut.set(row.slug, [...(extraOut.get(row.slug) ?? []), row]);
+    if (before && !after) extraIn.set(row.slug, [...(extraIn.get(row.slug) ?? []), row]);
+  }
+  for (const [label, map] of [["additionally refused", extraOut], ["newly admitted", extraIn]] as const) {
+    let n = 0;
+    let abs = 0;
+    for (const list of map.values()) for (const row of list) { n += 1; abs += Math.abs(row.impact ?? 0); }
+    console.log(`${label}: ${n} items, |${abs.toFixed(2)}|`);
+    for (const [slug, list] of [...map].sort()) {
+      console.log(`  ${slug}: ${list.length} items, |${list.reduce((sum, row) => sum + Math.abs(row.impact ?? 0), 0).toFixed(2)}|`);
+      for (const row of list) console.log(`      - ${stripOutletSuffix(row.headline, row.outlet).slice(0, 110)} [${row.outlet ?? row.domain} t${row.tier} ${(row.impact ?? 0).toFixed(2)}]`);
     }
   }
 
