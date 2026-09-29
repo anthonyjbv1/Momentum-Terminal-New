@@ -6,6 +6,7 @@ import type { Json } from "@/types/database";
 import { admitEvents, recentSince } from "./events";
 import { deriveMetric, metricSignal, observeMetric, readMetricConfigs, type MetricConfigs, type MetricObservation, type PreviousObservation, type SnapshotPoint } from "./metrics";
 import { buildPublisherPolicy } from "./publishers";
+import { withProposedTiers } from "./publishers-proposed";
 import type { FeedHealthRow, IngestStore, IngestTrigger, ObservationRow, PollRow, PollStatus, SignalRow, SnapshotRow } from "./store";
 import { STORY_DEDUP_LOOKBACK_HOURS } from "./stories";
 
@@ -288,7 +289,10 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
   const runId = await store.beginRun({ startedAt: now, trigger, forced: force, requestedSources: requested });
 
   // The publisher allowlist, read once per run: configuration, never code.
-  const publishers = buildPublisherPolicy(await store.listPublisherDomains());
+  // Under the Phase 31 switch the proposed tiers of the 2026-09-29 review lie
+  // beneath the table's rows (lib/ingest/publishers-proposed.ts); a row in
+  // the table always wins.
+  const publishers = buildPublisherPolicy(withProposedTiers(await store.listPublisherDomains(), Boolean(quality)));
 
   const sourcesRun: SourceRunSummary[] = [];
   const sourcesSkipped: IngestSummary["sourcesSkipped"] = [];
