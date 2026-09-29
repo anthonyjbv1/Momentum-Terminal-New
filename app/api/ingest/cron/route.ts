@@ -4,6 +4,7 @@ import { getCronSecretOrNull, getIngestSecretOrNull, isIngestCronEnabled } from 
 import { INGEST_CRON_DEFAULTS, authorizeIngestCronRequest, runScheduledIngestion } from "@/lib/ingest/cron";
 import { runIngestion } from "@/lib/ingest/runner";
 import { createSupabaseIngestStore } from "@/lib/ingest/store";
+import { refreshPersonAvatars } from "@/lib/people/avatars";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 /**
@@ -57,7 +58,19 @@ export async function GET(request: NextRequest) {
           sharedFetchGraceMs: INGEST_CRON_DEFAULTS.sharedFetchGraceMs,
         }),
     });
-    return NextResponse.json(result, { status: result.error ? 500 : 200 });
+    // The profile images (2026-09-29): a few platform reads at the end of a
+    // run, for the creators and musicians whose channel avatar is due a
+    // refresh. Never fails the run.
+    let avatars: Awaited<ReturnType<typeof refreshPersonAvatars>> | { error: string } = { error: "skipped" };
+    if (result.status === "ran") {
+      try {
+        avatars = await refreshPersonAvatars({ client: createSupabaseAdminClient() });
+      } catch (error) {
+        avatars = { error: error instanceof Error ? error.message : String(error) };
+        console.warn("[ingest/cron] avatar refresh failed:", avatars.error);
+      }
+    }
+    return NextResponse.json({ ...result, avatars }, { status: result.error ? 500 : 200 });
   } catch (error) {
     console.error("[ingest/cron] failed:", error);
     return NextResponse.json({ error: "Scheduled ingestion failed", detail: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });

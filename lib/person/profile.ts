@@ -3,6 +3,7 @@ import "server-only";
 import { cache } from "react";
 
 import { loadCompaniesByPerson } from "@/lib/feed/enrich";
+import { avatarCredit, readAvatarRecord } from "@/lib/people/avatar-model";
 import { isVoided } from "@/lib/signals/voided";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
@@ -74,7 +75,8 @@ export const getPersonBySlug = cache(async (slug: string): Promise<ProfilePerson
   if (error) throw new Error(`Could not load person: ${error.message}`);
   if (!data) return null;
 
-  const row = data as unknown as ProfilePersonRow & { id: string };
+  const base = data as unknown as ProfilePersonRow & { id: string };
+  const row = { ...base, avatar_credit: await loadAvatarCredit(supabase, base.id, base.avatar_url) };
   const quote = await supabase.rpc("trade_quote", { p_person_id: row.id });
   if (quote.error) {
     // The parameters are an enhancement to the preview; the server enforces them regardless.
@@ -88,6 +90,25 @@ export const getPersonBySlug = cache(async (slug: string): Promise<ProfilePerson
     premium_cap_cents: (params.premium_cap_cents as number | string | null | undefined) ?? null,
   });
 });
+
+/**
+ * The credit for a platform avatar (2026-09-29): the record on the person's
+ * YouTube or Twitch mapping, when it is the picture the person row shows.
+ * Null for initials, and when the record and the row disagree.
+ */
+async function loadAvatarCredit(supabase: ReturnType<typeof createSupabaseAdminClient>, personId: string, avatarUrl: string | null) {
+  if (!avatarUrl) return null;
+  const { data, error } = await supabase.from("person_data_sources").select("config").eq("person_id", personId).eq("is_active", true).not("config->avatar", "is", null);
+  if (error) {
+    console.warn("[person] avatar credit read failed:", error.message);
+    return null;
+  }
+  for (const row of data ?? []) {
+    const record = readAvatarRecord((row.config ?? null) as Parameters<typeof readAvatarRecord>[0]);
+    if (record && record.url === avatarUrl) return avatarCredit(record);
+  }
+  return null;
+}
 
 /** Score and market-price history for every chart range, each downsampled by the database. */
 async function getScoreSeries(personId: string): Promise<SeriesByRange> {
