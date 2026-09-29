@@ -377,3 +377,18 @@ describe("the server's projection of a payload", () => {
     expect(engineLead([evidence({ sourceName: "Finnhub", payload: metric("company_news_volume_24h", 2.2) })])).toBe("The Engine, from company news");
   });
 });
+
+describe("HTML entities in stored headlines (2026-09-29)", () => {
+  it("decodes a stored article title, a digest's video title and an Engine sentence at display, double-encoded too", () => {
+    const article = signal(cenat, { headline: "Kai Cenat&#8217;s stream breaks a record", detail: { kind: "article", outlet: "Dexerto", domain: "dexerto.com", link: "https://www.dexerto.com/a", digest: null } });
+    expect(article.headline).toBe("Kai Cenat’s stream breaks a record");
+    const doubled = signal(cenat, { headline: "Kai Cenat&amp;#8217;s stream breaks a record", detail: { kind: "article", outlet: "Dexerto", domain: "dexerto.com", link: "https://www.dexerto.com/a", digest: null } });
+    expect(doubled.headline).toBe("Kai Cenat’s stream breaks a record");
+    const digest = signal(mrbeast, { sourceName: "YouTube comments", headline: "x", detail: { kind: "comment_digest", outlet: null, domain: null, link: null, digest: { lean: "mixed", videoTitle: "What&#8217;s Inside My Briefcase?", sampled: 10 } } });
+    expect(digest.headline).toBe("Comments under “What’s Inside My Briefcase?” are mixed.");
+    const narrative = narrativeCard({ subject: cenat, text: "Kai Cenat&#8217;s momentum climbed on \"a record &quot;subathon&quot;\".", impact: 0.8, evidence: [] });
+    expect(narrative.headline).toBe("a record \"subathon\"");
+    const sentence = narrativeCard({ subject: cenat, text: "Kai Cenat&#8217;s stream drew a record crowd &amp; a week of coverage.", impact: 0.8, evidence: [] });
+    expect(sentence.headline).toBe("Kai Cenat’s stream drew a record crowd & a week of coverage.");
+  });
+});

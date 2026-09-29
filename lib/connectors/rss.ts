@@ -5,6 +5,7 @@ import { publisherDomainOf, type PublisherPolicy } from "@/lib/ingest/publishers
 import { collapseStories, personNames, storyTokens, stripOutletSuffix } from "@/lib/ingest/stories";
 import type { Json } from "@/types/database";
 
+import { decodeEntities } from "@/lib/text/entities";
 import { ConnectorError, type ConnectorContext, type DataConnector, type MetricReading, type RawSignal } from "./types";
 
 /**
@@ -90,7 +91,8 @@ const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_
 
 function text(value: unknown): string | null {
   if (value === null || value === undefined) return null;
-  if (typeof value === "string") return value.trim() || null;
+  // A feed's text is decoded here (2026-09-29): "Kai Cenat&#8217;s" is stored as "Kai Cenat’s".
+  if (typeof value === "string") return decodeEntities(value).trim() || null;
   if (typeof value === "number") return String(value);
   if (typeof value === "object") {
     const record = value as Record<string, unknown>;

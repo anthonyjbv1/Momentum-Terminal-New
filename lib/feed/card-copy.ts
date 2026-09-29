@@ -1,5 +1,6 @@
 import { detailForPayload, readMetricPayload, sentenceForPayload, type MetricDetailLine } from "@/lib/signals/metric-language";
 import { isVoidedPayload } from "@/lib/signals/voided";
+import { decodeEntities } from "@/lib/text/entities";
 
 /**
  * ONE VOICE FOR EVERY CARD (Phase 30).
@@ -400,8 +401,9 @@ function digestHeadline(input: { headline: string; detail: SignalDetail | null }
 export function signalHeadline(input: Pick<SignalCardInput, "subject" | "headline" | "payload" | "detail" | "occurredAt" | "sourceName">): { headline: string; quoted: boolean } {
   const metric = sentenceForPayload(input.payload, input.subject.name, input.occurredAt, { category: input.subject.category, company: input.subject.company });
   if (metric) return { headline: metric, quoted: false };
-  if (input.detail?.kind === "comment_digest") return { headline: digestHeadline(input), quoted: false };
-  return { headline: input.headline, quoted: isArticle(input) };
+  // A stored headline is decoded at display (2026-09-29): rows stored before ingestion decoded them still read as text.
+  if (input.detail?.kind === "comment_digest") return { headline: decodeEntities(digestHeadline(input)), quoted: false };
+  return { headline: decodeEntities(input.headline), quoted: isArticle(input) };
 }
 
 /** How the Engine read an article, from the sentiment it stored: "Read as positive for Zuckerberg". */
@@ -436,7 +438,7 @@ export function signalCard(input: SignalCardInput): CardCopy {
 // ---------------------------------------------------------------------------
 
 /** The stored shape of an Engine template narrative that quotes a signal: 'X's momentum climbed on "…".' */
-const TEMPLATE_QUOTED = /^(.+?)'s? momentum (climbed|slipped) on "([\s\S]+)"\.?$/;
+const TEMPLATE_QUOTED = /^(.+?)['\u2019]s? momentum (climbed|slipped) on "([\s\S]+)"\.?$/;
 
 export interface TemplateNarrative {
   name: string;
@@ -506,12 +508,14 @@ export function engineAttribution(evidence: CardEvidenceInput[]): string {
 
 export function narrativeCard(input: NarrativeCardInput): CardCopy {
   const { subject, evidence } = input;
-  const template = parseTemplateNarrative(input.text);
+  // Decoded before it is read apart (2026-09-29): a stored "Kai Cenat&#8217;s momentum climbed" is still a template.
+  const text = decodeEntities(input.text);
+  const template = parseTemplateNarrative(text);
 
   if (template) {
     // Rule 2: the quoted signal, un-nested. It is the linked evidence whose
     // stored headline the template quoted; failing that, the strongest one.
-    const quotedItem = evidence.find((item) => item.relation === "direct" && item.headline === template.quoted) ?? evidence.find((item) => item.relation === "direct");
+    const quotedItem = evidence.find((item) => item.relation === "direct" && decodeEntities(item.headline) === template.quoted) ?? evidence.find((item) => item.relation === "direct");
     if (quotedItem) {
       const rendered = evidenceSentence(quotedItem, subject);
       const noun = sourceNoun(quotedItem.sourceName, readMetricPayload(quotedItem.payload) ? "metric" : quotedItem.detail?.kind);
@@ -541,7 +545,7 @@ export function narrativeCard(input: NarrativeCardInput): CardCopy {
   }
 
   // The Engine's own sentence, as written.
-  const headline = input.text.trim();
+  const headline = text.trim();
   return {
     label: null,
     headline,

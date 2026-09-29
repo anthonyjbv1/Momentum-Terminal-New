@@ -347,3 +347,14 @@ describe("the obituary guard on the feed (hotfix 2026-09-28)", () => {
     expect(reading).toEqual({ metricKey: "news_volume_24h", value: 1 });
   });
 });
+
+describe("HTML entities in feed titles (2026-09-29)", () => {
+  it("decodes a title's entities at ingestion, a double-encoded one too, and stores the decoded headline", () => {
+    const feed = parseFeed(`<?xml version="1.0"?><rss version="2.0"><channel><title>Outlet</title>
+      <item><title>Kai Cenat&#8217;s stream breaks a record</title><link>https://outlet.example/a</link><guid>a</guid><pubDate>Fri, 12 Sep 2026 10:30:00 GMT</pubDate></item>
+      <item><title><![CDATA[Kai Cenat&amp;#8217;s &quot;subathon&quot; &amp; more]]></title><link>https://outlet.example/b</link><guid>b</guid><pubDate>Fri, 12 Sep 2026 10:31:00 GMT</pubDate></item>
+    </channel></rss>`);
+    expect(feed.items.map((item) => item.title)).toEqual(["Kai Cenat’s stream breaks a record", 'Kai Cenat’s "subathon" & more']);
+    expect(articleSignal(feed.items[0], new Date("2026-09-12T12:00:00Z"))?.headline).toBe("Kai Cenat’s stream breaks a record");
+  });
+});
