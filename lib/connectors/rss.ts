@@ -1,11 +1,12 @@
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
-import { EMPTY_DISAMBIGUATION, applyQueryExclusions, exclusionSubject, excludeReason, hasRules, obituaryReason, readDisambiguation, type ExclusionVerdict } from "@/lib/ingest/disambiguation";
+import { EMPTY_DISAMBIGUATION, applyQueryExclusions, exclusionSubject, excludeReason, obituaryReason, readDisambiguation, type ExclusionVerdict } from "@/lib/ingest/disambiguation";
 import { publisherDomainOf, type PublisherPolicy } from "@/lib/ingest/publishers";
 import { collapseStories, personNames, storyTokens, stripOutletSuffix } from "@/lib/ingest/stories";
 import type { Person } from "@/types";
 import type { Json } from "@/types/database";
 
+import { decodeEntities } from "@/lib/text/entities";
 import { ConnectorError, type ConnectorContext, type ConnectorQuality, type DataConnector, type MetricReading, type RawSignal } from "./types";
 
 /**
@@ -117,7 +118,8 @@ const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_
 
 function text(value: unknown): string | null {
   if (value === null || value === undefined) return null;
-  if (typeof value === "string") return value.trim() || null;
+  // A feed's text is decoded here (2026-09-29): "Kai Cenat&#8217;s" is stored as "Kai Cenat’s".
+  if (typeof value === "string") return decodeEntities(value).trim() || null;
   if (typeof value === "number") return String(value);
   if (typeof value === "object") {
     const record = value as Record<string, unknown>;
@@ -357,40 +359,35 @@ async function loadFeed(person: Person, identifier: string, context: ConnectorCo
 
   // Post-fetch, over the title as the feed wrote it — which on Google News
   // still carries the outlet suffix, so an outlet's own name ("Drake
-  // Athletics") counts as evidence too.
+  // Athletics") counts as evidence too. Then the obituary guard, on every
+  // feed whether or not it has rules (hotfix 2026-09-28): the headline
+  // without its outlet suffix, the outlet, and the publisher's domain.
   //
   // With the quality rules on (Phase 31) every item is judged against the
-  // SUBJECT as well: the name-conditional exclusions, the name requirement
+  // SUBJECT as well: the name-conditional exclusions and the name requirement
   // (every publisher, every tier: the item must name the subject in its
-  // headline or first paragraph), and the obituary guard, which needs no
-  // rules at all. The headline is judged without the outlet suffix: an
-  // outlet's name is evidence for an exclusion, never evidence of naming. A
-  // Google News description is a list of related coverage, not the article's
-  // first paragraph, so it is not consulted.
+  // headline or first paragraph). The headline is judged without the outlet
+  // suffix: an outlet's name is evidence for an exclusion, never evidence of
+  // naming. A Google News description is a list of related coverage, not the
+  // article's first paragraph, so it is not consulted.
   const quality = context.quality;
   const subject = quality ? exclusionSubject(person, rules) : null;
   const googleNews = /(^|\.)news\.google\.com$/i.test(new URL(url).hostname);
   const items: FeedItem[] = [];
   const refused: Array<{ item: FeedItem; verdict: ExclusionVerdict }> = [];
-  if (hasRules(rules) || quality) {
-    for (const item of parsed.items) {
-      // The Phase 10 rules, exactly as before: substring, title and outlet.
-      let verdict = excludeReason(`${item.title} ${item.outlet ?? ""}`, rules);
-      if (!verdict && subject) {
-        const headline = stripOutletSuffix(item.title, item.outlet);
-        const publisher = publisherDomainOf(item);
-        const judged = googleNews || !item.lead ? headline : `${headline}\n${item.lead}`;
-        // The obituary guard first: a funeral notice is refused as one, whether
-        // or not it happens to name the subject, so the log says what it was.
-        verdict =
-          obituaryReason({ headline, outlet: item.outlet, domain: publisher.domain }) ??
-          excludeReason(judged, { ...EMPTY_DISAMBIGUATION, exclude_unless_named: rules.exclude_unless_named, aliases: rules.aliases, surname_alone: rules.surname_alone, surname_context: rules.surname_context }, subject);
-      }
-      if (verdict) refused.push({ item, verdict });
-      else items.push(item);
+  for (const item of parsed.items) {
+    const headline = stripOutletSuffix(item.title, item.outlet);
+    const publisher = publisherDomainOf(item);
+    // The Phase 10 rules, exactly as before: substring, title and outlet. Then
+    // the obituary guard: a funeral notice is refused as one, on every feed,
+    // whether or not it happens to name the subject, so the log says what it was.
+    let verdict = excludeReason(`${item.title} ${item.outlet ?? ""}`, rules) ?? obituaryReason({ headline, outlet: item.outlet, domain: publisher.domain });
+    if (!verdict && subject) {
+      const judged = googleNews || !item.lead ? headline : `${headline}\n${item.lead}`;
+      verdict = excludeReason(judged, { ...EMPTY_DISAMBIGUATION, exclude_unless_named: rules.exclude_unless_named, aliases: rules.aliases, surname_alone: rules.surname_alone, surname_context: rules.surname_context }, subject);
     }
-  } else {
-    items.push(...parsed.items);
+    if (verdict) refused.push({ item, verdict });
+    else items.push(item);
   }
   const feed = { title: parsed.title, items };
 

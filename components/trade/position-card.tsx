@@ -81,7 +81,7 @@ export function PositionCard({ position, buyCents, sellCents, premiumCents = 0, 
         </Stat>
         <Stat label="Unrealized">
           <Money cents={unrealized} signed className="text-2xl font-semibold tracking-tight" />
-          <span className={cn("num text-sm", unrealized > 0 ? "text-positive" : unrealized < 0 ? "text-negative" : "text-fg-muted")}>
+          <span className={cn("text-sm tabular-nums", unrealized > 0 ? "text-positive" : unrealized < 0 ? "text-negative" : "text-fg-muted")}>
             {unrealized > 0 ? "+" : unrealized < 0 ? "−" : ""}
             {Math.abs(unrealizedPct).toFixed(1)}%
           </span>

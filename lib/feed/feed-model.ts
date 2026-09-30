@@ -15,6 +15,7 @@ import {
   type CardSubject,
   type SignalDetail,
 } from "./card-copy";
+import { sparkAcross, type SparkPoint } from "./story-card";
 
 /**
  * The Feed's shape and the pure logic behind it: the entry, the high-impact
@@ -137,6 +138,8 @@ export interface FeedEntry {
   evidence: FeedEvidence[];
   /** A signal card's detail lines: the source, then a metric's arithmetic. Empty for a narrative. */
   detailLines: MetricDetailLine[];
+  /** The person's score across the move (Phase 34), oldest first, for the card's sparkline. Null when the server had too little to draw. */
+  spark: number[] | null;
 }
 
 /** A row of feed_entries() as the database returns it. */
@@ -162,6 +165,8 @@ export interface FeedRow {
 export interface FeedRowContext {
   details: ReadonlyMap<string, SignalDetail>;
   companies: ReadonlyMap<string, string>;
+  /** Each person's score series over the page's span (Phase 34), by person id, for the sparklines. Absent means no sparkline. */
+  series?: ReadonlyMap<string, readonly SparkPoint[]>;
 }
 
 export const EMPTY_CONTEXT: FeedRowContext = { details: new Map(), companies: new Map() };
@@ -186,6 +191,8 @@ function toEvidence(value: unknown, details: ReadonlyMap<string, SignalDetail>):
     if (typeof item !== "object" || item === null) continue;
     const record = item as Record<string, unknown>;
     if (typeof record.id !== "string" || typeof record.headline !== "string") continue;
+    // A voided signal is not evidence of anything.
+    if (details.get(record.id)?.voided) continue;
     const relation: FeedEvidenceRelation = record.relation === "inverse_pair" ? "inverse_pair" : "direct";
     const personName = typeof record.person_name === "string" ? record.person_name : null;
     const personSlug = typeof record.person_slug === "string" ? record.person_slug : "";
@@ -243,6 +250,8 @@ export function evidenceDetailLines(item: FeedEvidence, subject: CardSubject): M
 export function toFeedEntry(row: FeedRow, context: FeedRowContext = EMPTY_CONTEXT): FeedEntry | null {
   const kind: FeedEntryKind | null = row.kind === "narrative" ? "narrative" : row.kind === "signal" ? "signal" : null;
   if (!kind || !row.id || !row.person_id || !row.occurred_at) return null;
+  // A signal the operator voided as a false input is no card at all.
+  if (kind === "signal" && context.details.get(row.id)?.voided) return null;
 
   const evidence = toEvidence(row.evidence, context.details);
   const sources = [...new Set((row.sources ?? []).filter((name): name is string => typeof name === "string" && name.length > 0))];
@@ -256,6 +265,7 @@ export function toFeedEntry(row: FeedRow, context: FeedRowContext = EMPTY_CONTEX
     company: context.companies.get(row.person_id) ?? null,
   };
   const subject = subjectOf(person);
+  const spark = sparkAcross(context.series?.get(row.person_id) ?? [], row.occurred_at);
 
   if (kind === "signal") {
     const own = evidence[0];
@@ -285,6 +295,7 @@ export function toFeedEntry(row: FeedRow, context: FeedRowContext = EMPTY_CONTEX
       sources,
       evidence,
       detailLines: signalDetailLines(input),
+      spark,
     };
   }
 
@@ -303,6 +314,7 @@ export function toFeedEntry(row: FeedRow, context: FeedRowContext = EMPTY_CONTEX
     sources,
     evidence,
     detailLines: [],
+    spark,
   };
 }
 

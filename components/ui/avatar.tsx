@@ -1,10 +1,11 @@
-import Image from "next/image";
-
 import { cn } from "@/lib/cn";
+
+import { AvatarImage } from "./avatar-image";
 
 /**
  * Person / user avatar with a consistent fallback: initials on a raised
- * surface inside a hairline ring. Images fill the circle.
+ * surface inside a hairline ring. Images fill the circle, and an image that
+ * fails to load gives way to the initials (AvatarImage).
  */
 export type AvatarSize = "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
 
@@ -64,7 +65,7 @@ export function Avatar({ name, src, size = "md", className, ring = "default", in
     >
       {src && initialsUnderImage ? <span aria-hidden>{initialsFor(name)}</span> : null}
       {src ? (
-        <Image src={src} alt="" fill sizes={`${dims.px}px`} unoptimized className="object-cover" />
+        <AvatarImage src={src} sizes={`${dims.px}px`} initials={initialsFor(name)} />
       ) : (
         <span aria-hidden>{initialsFor(name)}</span>
       )}

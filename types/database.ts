@@ -2440,6 +2440,7 @@ export type Database = {
         Row: {
           avatar_path: string | null
           avatar_url: string | null
+          bio: string | null
           buying_power_cents: number
           created_at: string
           deleted_at: string | null
@@ -2462,6 +2463,7 @@ export type Database = {
         Insert: {
           avatar_path?: string | null
           avatar_url?: string | null
+          bio?: string | null
           buying_power_cents?: number
           created_at?: string
           deleted_at?: string | null
@@ -2484,6 +2486,7 @@ export type Database = {
         Update: {
           avatar_path?: string | null
           avatar_url?: string | null
+          bio?: string | null
           buying_power_cents?: number
           created_at?: string
           deleted_at?: string | null

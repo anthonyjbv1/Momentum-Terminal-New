@@ -224,3 +224,22 @@ describe("person_signal_volume()", () => {
     expect(row.daily).toBe(`{0,${COUNTED.length + 1},0}`);
   });
 });
+
+describe("a voided signal (2026-09-28)", () => {
+  it("is not a unit of volume, in the trailing day or in any complete day", async () => {
+    const [{ id: personId }] = await database.rows<{ id: string }>("select id from public.people where slug = 'larry-page'");
+    const [{ id: sourceId }] = await database.rows<{ id: string }>("select id from public.data_sources where name = 'rss'");
+    await database.rows("update public.person_data_sources set created_at = (now() at time zone 'utc')::date - 4 + interval '12 hours' where person_id = $1", [personId]);
+    const insert = (daysAgo: number, index: number, voided: boolean) =>
+      database.rows(
+        "insert into public.signals (person_id, data_source_id, headline, raw_payload, dedupe_key, occurred_at, voided_at, void_reason) values ($1, $2, $3, '{\"kind\": \"article\"}'::jsonb, $4, ((now() at time zone 'utc')::date - $5::int + interval '6 hours') at time zone 'utc', case when $6 then now() end, case when $6 then 'obvious error' end)",
+        [personId, sourceId, `void-${daysAgo}-${index}`, `void-${daysAgo}-${index}`, daysAgo, voided],
+      );
+    await insert(2, 0, false);
+    await insert(2, 1, true);
+    await insert(0, 0, true);
+    const [row] = await database.rows<{ current_24h: string; daily: string }>("select current_24h, daily::text as daily from public.person_signal_volume(4) where person_id = $1", [personId]);
+    expect(row.daily).toBe("{0,1,0}");
+    expect(Number(row.current_24h)).toBe(0);
+  });
+});

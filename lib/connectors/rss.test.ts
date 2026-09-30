@@ -365,13 +365,13 @@ describe("the signal-quality rules (Phase 31)", () => {
     ...(on ? { quality: { maxAgeHours: 168 } } : {}),
   });
 
-  it("off: the new configuration keys are inert, every item is stored, the July item too", async () => {
-    const excluded: unknown[] = [];
+  it("off: the new configuration keys are inert and every item is stored, the July item too; only the obituary guard (on every feed since the 2026-09-28 hotfix) refuses the funeral notice", async () => {
+    const excluded: Array<{ reason: string }> = [];
     const notes: string[] = [];
     const fetch = fakeFetchRoutes([{ match: "news.google.com/rss/search", body: ELLISON }]);
     const signals = await rssConnector.fetchForPerson(larry, feedUrlFor('"Larry Ellison"'), ctx(fetch, false, excluded, notes));
-    expect(signals).toHaveLength(7);
-    expect(excluded).toEqual([]);
+    expect(signals).toHaveLength(6);
+    expect(excluded.map((e) => e.reason)).toEqual(["obituary"]);
     expect(notes).toEqual([]);
   });
 
@@ -454,5 +454,70 @@ describe("the first paragraph, for the name requirement (2026-09-29)", () => {
     const signals = await rssConnector.fetchForPerson(larry, "https://www.bloomberg.com/feed", context as unknown as Parameters<typeof rssConnector.fetchForPerson>[2]);
     expect(signals.map((s) => s.headline)).toEqual(["Oracle leaders receive subpoenas to appear before House VA Committee"]);
     expect(excluded).toEqual([{ headline: "Oracle shares slide after earnings", reason: "namesake_unnamed", term: null }]);
+  });
+});
+
+describe("the obituary guard on the feed (hotfix 2026-09-28)", () => {
+  beforeEach(() => resetFeedCache());
+
+  /** Larry Page's feed as it stood on 2026-09-28: the Legacy.com notice of the 26th and the wgrv.com item of the 28th, beside a real story. */
+  const PAGE = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>"Larry Page" - Google News</title>
+    <item>
+      <title><![CDATA[Larry Page - wgrv.com]]></title>
+      <link>https://news.google.com/rss/articles/wgrv</link><guid isPermaLink="false">wgrv</guid>
+      <pubDate>Mon, 28 Sep 2026 17:35:03 GMT</pubDate><source url="https://wgrv.com">wgrv.com</source>
+    </item>
+    <item>
+      <title><![CDATA[Larry Page Obituary (2026) - Greeneville, TN - Legacy obituary]]></title>
+      <link>https://news.google.com/rss/articles/legacy</link><guid isPermaLink="false">legacy</guid>
+      <pubDate>Sat, 26 Sep 2026 07:00:00 GMT</pubDate><source url="https://www.legacy.com">Legacy obituary</source>
+    </item>
+    <item>
+      <title><![CDATA[Alphabet co-founder Larry Page backs a new flying-car venture - Bloomberg.com]]></title>
+      <link>https://news.google.com/rss/articles/bloomberg</link><guid isPermaLink="false">bloomberg</guid>
+      <pubDate>Sun, 27 Sep 2026 12:00:00 GMT</pubDate><source url="https://www.bloomberg.com">Bloomberg.com</source>
+    </item>
+  </channel>
+</rss>`;
+  const POLL = new Date("2026-09-28T17:45:00.000Z");
+  const page = makePerson({ id: "p-page", slug: "larry-page", display_name: "Larry Page", full_name: "Lawrence Edward Page", category: "executive" });
+
+  const ctx = (fetch: typeof globalThis.fetch, excluded: unknown[]) => ({
+    source: makeSource({ name: "rss" }),
+    config: {} as Record<string, never>,
+    snapshots: { latest: async () => null, record: () => undefined },
+    now: POLL,
+    fetch,
+    exclude: (item: unknown) => excluded.push(item),
+  });
+
+  it("refuses the Legacy.com notice with no rules configured and no switch, keeps the wgrv.com item (not an obituary) and the real story", async () => {
+    const excluded: unknown[] = [];
+    const fetch = fakeFetchRoutes([{ match: "news.google.com/rss/search", body: PAGE }]);
+    const signals = await rssConnector.fetchForPerson(page, feedUrlFor('"Larry Page"'), ctx(fetch, excluded));
+    expect(signals.map((s) => s.headline)).toEqual(["Larry Page", "Alphabet co-founder Larry Page backs a new flying-car venture"]);
+    expect(excluded).toEqual([{ headline: "Larry Page Obituary (2026) - Greeneville, TN - Legacy obituary", reason: "obituary", term: "obituary" }]);
+  });
+
+  it("keeps the notice out of news_volume_24h too", async () => {
+    const fetch = fakeFetchRoutes([{ match: "news.google.com/rss/search", body: PAGE }]);
+    const c = ctx(fetch, []);
+    const [reading] = await rssConnector.fetchMetrics!(page, feedUrlFor('"Larry Page"'), c);
+    // Inside the trailing 24 h of the poll: only the wgrv.com item.
+    expect(reading).toEqual({ metricKey: "news_volume_24h", value: 1 });
+  });
+});
+
+describe("HTML entities in feed titles (2026-09-29)", () => {
+  it("decodes a title's entities at ingestion, a double-encoded one too, and stores the decoded headline", () => {
+    const feed = parseFeed(`<?xml version="1.0"?><rss version="2.0"><channel><title>Outlet</title>
+      <item><title>Kai Cenat&#8217;s stream breaks a record</title><link>https://outlet.example/a</link><guid>a</guid><pubDate>Fri, 12 Sep 2026 10:30:00 GMT</pubDate></item>
+      <item><title><![CDATA[Kai Cenat&amp;#8217;s &quot;subathon&quot; &amp; more]]></title><link>https://outlet.example/b</link><guid>b</guid><pubDate>Fri, 12 Sep 2026 10:31:00 GMT</pubDate></item>
+    </channel></rss>`);
+    expect(feed.items.map((item) => item.title)).toEqual(["Kai Cenat’s stream breaks a record", 'Kai Cenat’s "subathon" & more']);
+    expect(articleSignal(feed.items[0], new Date("2026-09-12T12:00:00Z"))?.headline).toBe("Kai Cenat’s stream breaks a record");
   });
 });

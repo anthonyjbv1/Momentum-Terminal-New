@@ -6,26 +6,39 @@ import { useState } from "react";
 
 import { cn } from "@/lib/cn";
 import { outletName, sourceNoun, type CardSubject } from "@/lib/feed/card-copy";
-import { categoryLabel, evidenceDetailLines, evidenceHeadline, subjectOf, type FeedEntry as FeedEntryModel, type FeedEvidence } from "@/lib/feed/feed-model";
+import { FEED_IMPACT_DECIMALS, categoryLabel, evidenceDetailLines, evidenceHeadline, subjectOf, type FeedEntry as FeedEntryModel, type FeedEvidence } from "@/lib/feed/feed-model";
+import { storyGame, storyLabel, storyMedia, storySources, type StoryKind, storyKind } from "@/lib/feed/story-card";
 import { relativeTime } from "@/lib/home/relative-time";
 import { FORCE_IMPACT_DECIMALS, formatSigned } from "@/lib/person/profile-model";
 import { readMetricPayload } from "@/lib/signals/metric-language";
+import { Sparkline } from "@/components/home/sparkline";
 import { Avatar } from "@/components/ui/avatar";
-import { DirectionIndicator, directionAtPrecision } from "@/components/ui/direction-indicator";
+import { DirectionArrow, directionAtPrecision, directionTone, formatChange } from "@/components/ui/direction-indicator";
+
+import { SourceStrip } from "./source-strip";
+import { StoryMedia } from "./story-media";
 
 /**
- * One entry in the Feed (Phase 30 anatomy). The person is identified and
- * tappable; the outlet sits small above an article's title; the headline is
- * the hero — the Engine's sentence, or the publisher's title linked to the
- * piece; one plain line says what it was and how far it moved the score; the
- * attribution is small, grey and last. The recorded score impact is the only
- * colour. A `prominent` entry (the pinned treatment) is the same composition
- * set larger and given more air: it is structural prominence, not an alarm.
+ * THE STORY CARD (Phase 34). One story in the Feed: the person, tappable;
+ * a small word for what kind of story it is (the outlet, "Live on Twitch",
+ * "Game result · Week 3", "The Engine"); the HEADLINE as the hero (our
+ * sentence, or the publisher's title linked to the piece); one plain LINE
+ * under it; the MEDIA where the platform publishes it for embedding (a
+ * YouTube thumbnail that plays on tap, a Twitch clip or stream), or a game's
+ * scoreboard; the MOVE, large, with the score's path across it beside; and
+ * the SOURCE STRIP last, small and grey, each outlet linked. The arrow is
+ * the only colour: the figure, decimals included, is white.
  *
- * Detail opens beneath: for a narrative, exactly the signals the Engine
- * linked when it wrote the sentence (an inverse-pair signal is shown as the
- * paired person's), each labelled by its outlet and linked; for a signal,
- * where it came from and how the Engine has treated it so far.
+ * The card is built for one story now and a group later: when Phase 31's
+ * clustering gives the Feed a story record, the strip carries every source
+ * with its count and the move block reads "+0.6 today · +1.4 over 3 days"
+ * without the composition changing.
+ *
+ * A `prominent` card (the pinned treatment) is the same composition set
+ * larger and given more air: structural prominence, not an alarm. Detail
+ * opens beneath, unchanged from Phase 30: for a narrative, exactly the
+ * signals the Engine linked when it wrote the sentence ("What the Engine
+ * saw"); for a signal, where it came from and how the Engine has treated it.
  */
 export interface FeedEntryProps {
   entry: FeedEntryModel;
@@ -52,6 +65,11 @@ export function FeedEntry({ entry, position, prominent = false, now, onOpen, onE
   const [open, setOpen] = useState(false);
   const href = `/person/${entry.person.slug}`;
   const { copy } = entry;
+  const kind = storyKind(entry);
+  const label = storyLabel(entry);
+  const media = storyMedia(entry);
+  const game = storyGame(entry);
+  const sources = storySources(entry);
   const hasDetail = entry.kind === "narrative" ? entry.evidence.length > 0 || entry.scoreBefore !== null : true;
 
   const toggle = () => {
@@ -61,7 +79,7 @@ export function FeedEntry({ entry, position, prominent = false, now, onOpen, onE
   };
 
   const headline = (
-    <p className={cn("text-fg", prominent ? "text-2xl font-semibold leading-snug tracking-tight sm:text-3xl" : "text-lg leading-relaxed")}>{copy.headline}</p>
+    <h3 className={cn("font-semibold leading-snug tracking-tight text-fg", prominent ? "text-2xl sm:text-3xl" : "text-xl")}>{copy.headline}</h3>
   );
 
   return (
@@ -69,9 +87,10 @@ export function FeedEntry({ entry, position, prominent = false, now, onOpen, onE
       data-entry-id={entry.id}
       data-person-id={entry.person.id}
       data-entry-kind={entry.kind}
+      data-story-kind={kind}
       data-entry-position={position}
       data-entry-pinned={prominent ? "true" : "false"}
-      className={cn("flex flex-col", prominent ? "gap-5 px-6 py-8 sm:px-8 sm:py-9" : "gap-4 px-5 py-6 sm:px-6 sm:py-7")}
+      className={cn("flex flex-col", prominent ? "gap-5 px-6 py-7 sm:px-8 sm:py-8" : "gap-4 px-5 py-5 sm:px-6 sm:py-6")}
     >
       <header className="flex items-center gap-3">
         <Link
@@ -87,24 +106,16 @@ export function FeedEntry({ entry, position, prominent = false, now, onOpen, onE
             <span className="truncate text-xs text-fg-muted">{categoryLabel(entry.person.category)}</span>
           </span>
         </Link>
-
-        <div className="ml-auto flex shrink-0 items-center gap-3">
-          {entry.impact !== null ? <DirectionIndicator change={entry.impact} size={prominent ? "lg" : "sm"} precision={1} /> : null}
-          <time dateTime={entry.occurredAt} className="num text-xs text-fg-faint">
-            {relativeTime(entry.occurredAt, now)}
-          </time>
-        </div>
+        <time dateTime={entry.occurredAt} className="num ml-auto shrink-0 text-xs text-fg-faint">
+          {relativeTime(entry.occurredAt, now)}
+        </time>
       </header>
 
       <div className="flex flex-col gap-2">
-        {copy.label ? <p className="text-label text-fg-muted">{copy.label}</p> : null}
+        {label ? <p className="text-label text-fg-muted">{label}</p> : null}
         {copy.link ? (
           <a href={copy.link} target="_blank" rel="noopener noreferrer" className={cn("group/link block", focusRing)}>
             {headline}
-            <span className="mt-1 inline-flex items-center gap-1 text-xs text-fg-faint transition-colors group-hover/link:text-fg-muted">
-              Read at {copy.label ?? "the source"}
-              <ArrowUpRight className="size-3" aria-hidden />
-            </span>
           </a>
         ) : (
           <Link href={href} onClick={() => onOpen(entry)} className={cn("block", focusRing)}>
@@ -114,14 +125,19 @@ export function FeedEntry({ entry, position, prominent = false, now, onOpen, onE
         <p className={cn("leading-relaxed text-fg-secondary", prominent ? "text-base" : "text-sm")}>{copy.line}</p>
       </div>
 
-      <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-faint">
-        <span>{copy.attribution}</span>
+      {media ? <StoryMedia media={media} title={media.title ?? copy.headline} /> : null}
+      {game ? <Scoreboard game={game} /> : null}
+
+      <Move entry={entry} prominent={prominent} />
+
+      <footer className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <SourceStrip sources={sources} className="min-w-0 flex-1" />
         {hasDetail ? (
           <button
             type="button"
             onClick={toggle}
             aria-expanded={open}
-            className="ml-auto inline-flex items-center gap-1 rounded-full text-xs font-medium text-fg-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full text-xs font-medium text-fg-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
           >
             {entry.kind === "narrative" ? "What the Engine saw" : "Detail"}
             <ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} aria-hidden />
@@ -131,6 +147,54 @@ export function FeedEntry({ entry, position, prominent = false, now, onOpen, onE
 
       {open ? <Detail entry={entry} /> : null}
     </article>
+  );
+}
+
+/**
+ * The move: the arrow in the direction's colour, the figure in white with
+ * its decimals, in Inter with tabular figures; the score's path across the
+ * move beside it when the server could draw one; and, for a narrative, the
+ * score it went from and to.
+ */
+function Move({ entry, prominent }: { entry: FeedEntryModel; prominent: boolean }) {
+  if (entry.impact === null) return null;
+  const direction = entry.direction;
+  const value = formatChange(entry.impact, FEED_IMPACT_DECIMALS);
+  return (
+    <div className="flex items-center gap-4">
+      <span
+        className={cn("inline-flex items-center gap-1 font-semibold tabular-nums leading-none text-fg", prominent ? "text-3xl sm:text-4xl" : "text-2xl")}
+        aria-label={`Score move ${value}`}
+      >
+        <DirectionArrow direction={direction} className={directionTone[direction]} />
+        <span>{value}</span>
+      </span>
+      {entry.spark ? <Sparkline points={entry.spark} className={cn("h-7 w-28 shrink-0 text-fg-secondary sm:w-36", prominent && "h-9 w-36 sm:w-48")} /> : null}
+      {entry.scoreBefore !== null && entry.scoreAfter !== null ? (
+        <span className="ml-auto hidden shrink-0 text-xs text-fg-muted sm:inline">
+          <span className="num text-fg-secondary">{entry.scoreBefore.toFixed(1)}</span> <span className="text-fg-faint">→</span>{" "}
+          <span className="num text-fg-secondary">{entry.scoreAfter.toFixed(1)}</span>
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/** A game result's scoreboard: the two teams and their scores, the winner in white. */
+function Scoreboard({ game }: { game: NonNullable<ReturnType<typeof storyGame>> }) {
+  const decided = game.homeScore !== null && game.awayScore !== null && game.homeScore !== game.awayScore;
+  const homeWon = decided && (game.homeScore ?? 0) > (game.awayScore ?? 0);
+  const row = (team: string, score: number | null, won: boolean) => (
+    <div className="flex items-center justify-between gap-4">
+      <span className={cn("truncate text-sm", won || !decided ? "font-medium text-fg" : "text-fg-secondary")}>{team}</span>
+      <span className={cn("num text-base font-semibold", won || !decided ? "text-fg" : "text-fg-muted")}>{score ?? "—"}</span>
+    </div>
+  );
+  return (
+    <div className="flex flex-col gap-1.5 rounded-xl bg-surface-raised/60 px-4 py-3">
+      {row(game.away, game.awayScore, decided && !homeWon)}
+      {row(game.home, game.homeScore, homeWon)}
+    </div>
   );
 }
 
@@ -249,7 +313,7 @@ function EvidenceRow({ item, subject }: { item: FeedEvidence; subject: CardSubje
         ) : null}
       </div>
       {item.impact !== null ? (
-        <span className={cn("num shrink-0 text-xs font-medium", impactTones[directionAtPrecision(item.impact, FORCE_IMPACT_DECIMALS, 0)])}>
+        <span className={cn("shrink-0 text-xs font-medium tabular-nums", impactTones[directionAtPrecision(item.impact, FORCE_IMPACT_DECIMALS, 0)])}>
           {formatSigned(item.impact, FORCE_IMPACT_DECIMALS)}
         </span>
       ) : null}
@@ -265,3 +329,5 @@ function DetailItem({ label, value, children }: { label: string; value?: string;
     </div>
   );
 }
+
+export type { StoryKind };

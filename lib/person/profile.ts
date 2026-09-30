@@ -3,6 +3,8 @@ import "server-only";
 import { cache } from "react";
 
 import { loadCompaniesByPerson } from "@/lib/feed/enrich";
+import { avatarCredit, readAvatarRecord } from "@/lib/people/avatar-model";
+import { isVoided } from "@/lib/signals/voided";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 import {
@@ -80,7 +82,8 @@ export const getPersonBySlug = cache(async (slug: string): Promise<ProfilePerson
   if (error) throw new Error(`Could not load person: ${error.message}`);
   if (!data) return null;
 
-  const row = data as unknown as ProfilePersonRow & { id: string };
+  const base = data as unknown as ProfilePersonRow & { id: string };
+  const row = { ...base, avatar_credit: await loadAvatarCredit(supabase, base.id, base.avatar_url) };
   const quote = await supabase.rpc("trade_quote", { p_person_id: row.id });
   if (quote.error) {
     // The parameters are an enhancement to the preview; the server enforces them regardless.
@@ -94,6 +97,25 @@ export const getPersonBySlug = cache(async (slug: string): Promise<ProfilePerson
     premium_cap_cents: (params.premium_cap_cents as number | string | null | undefined) ?? null,
   });
 });
+
+/**
+ * The credit for a platform avatar (2026-09-29): the record on the person's
+ * YouTube or Twitch mapping, when it is the picture the person row shows.
+ * Null for initials, and when the record and the row disagree.
+ */
+async function loadAvatarCredit(supabase: ReturnType<typeof createSupabaseAdminClient>, personId: string, avatarUrl: string | null) {
+  if (!avatarUrl) return null;
+  const { data, error } = await supabase.from("person_data_sources").select("config").eq("person_id", personId).eq("is_active", true).not("config->avatar", "is", null);
+  if (error) {
+    console.warn("[person] avatar credit read failed:", error.message);
+    return null;
+  }
+  for (const row of data ?? []) {
+    const record = readAvatarRecord((row.config ?? null) as Parameters<typeof readAvatarRecord>[0]);
+    if (record && record.url === avatarUrl) return avatarCredit(record);
+  }
+  return null;
+}
 
 /** Score and market-price history for every chart range, each downsampled by the database. */
 async function getScoreSeries(personId: string): Promise<SeriesByRange> {
@@ -224,15 +246,17 @@ export const getPersonSignals = cache(async (person: SignalsSubject): Promise<Pr
     // evidence is not an item of its own (rule 8) and falls out in the merge.
     supabase
       .from("signals")
-      .select("id, headline, occurred_at, impact_score, sentiment_label, sentiment_confidence, processed, raw_payload, data_sources(display_name), narrative_signals(relation)")
+      .select("id, headline, occurred_at, impact_score, sentiment_label, sentiment_confidence, processed, raw_payload, voided_at, data_sources(display_name), narrative_signals(relation)")
       .eq("person_id", person.id)
+      .is("voided_at", null)
       .order("occurred_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(SIGNAL_LIMIT * SIGNAL_READ_DEPTH),
     supabase
       .from("narratives")
-      .select("id, text, created_at, score_before, score_after, narrative_signals(relation, signals(id, headline, occurred_at, impact_score, raw_payload, data_sources(display_name), people(display_name)))")
+      .select("id, text, created_at, score_before, score_after, narrative_signals(relation, signals(id, headline, occurred_at, impact_score, raw_payload, voided_at, data_sources(display_name), people(display_name)))")
       .eq("person_id", person.id)
+      .is("voided_at", null)
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(SIGNAL_LIMIT),
@@ -242,9 +266,16 @@ export const getPersonSignals = cache(async (person: SignalsSubject): Promise<Pr
   if (signals.error) console.warn("[person] signals read failed:", signals.error.message);
   if (narratives.error) console.warn("[person] narratives read failed:", narratives.error.message);
 
+  // A voided signal (a false input the operator struck) is neither a card nor evidence.
+  const liveSignals = ((signals.data ?? []) as unknown as SignalRow[]).filter((row) => !isVoided(row));
+  const liveNarratives = ((narratives.data ?? []) as unknown as NarrativeRow[]).map((row) => ({
+    ...row,
+    narrative_signals: (row.narrative_signals ?? []).filter((link) => !isVoided(link.signals)),
+  }));
+
   return mergeSignals(
-    (signals.data ?? []) as unknown as SignalRow[],
-    (narratives.data ?? []) as unknown as NarrativeRow[],
+    liveSignals,
+    liveNarratives,
     SIGNAL_LIMIT,
     { name: person.displayName, category: person.category, company: companies.get(person.id) ?? null },
   );

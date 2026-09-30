@@ -7,10 +7,18 @@
     color-scheme: dark;
   }
 
+  /* The document is the app's scroll container (the banner and the tab bar
+     are fixed over it). Its scroll indicator is hidden (2026-09-30): touch,
+     wheel and keyboard scrolling are untouched, only the bar is gone. Inner
+     scrollers (the right rail) keep the styled bar below. */
   html {
     background-color: var(--color-canvas);
     -webkit-text-size-adjust: 100%;
     scrollbar-color: var(--color-line-strong) transparent;
+    scrollbar-width: none;
+  }
+  html::-webkit-scrollbar {
+    display: none;
   }
 
   body {
@@ -90,6 +98,13 @@
   letter-spacing: -0.01em;
 }
 
+/* The direction arrow beside a change (Phase 33): the glyph takes the size
+   of the text it sits with, so one component fits every figure. */
+@utility arrow-em {
+  width: 1em;
+  height: 1em;
+}
+
 /* Section label: small, uppercase, quietly tracked, in the interface face. */
 @utility text-label {
   font-size: var(--text-xs);
@@ -114,7 +129,8 @@
 
 /* Bottom padding that clears the mobile tab bar plus the device's home indicator. */
 @utility pb-tabbar-safe {
-  padding-bottom: calc(var(--spacing-tabbar) + env(safe-area-inset-bottom));
+  /* The tab bar, the home indicator, and room to breathe: the last card should not sit on the bar. */
+  padding-bottom: calc(var(--spacing-tabbar) + env(safe-area-inset-bottom) + 2.5rem);
 }
 
 @utility pb-safe {

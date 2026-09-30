@@ -22,6 +22,7 @@ export function BottomNav() {
                 href={item.href}
                 aria-label={item.label}
                 aria-current={active ? "page" : undefined}
+                data-tour={`nav-${item.key}`}
                 className={cn(
                   "flex size-touch items-center justify-center rounded-full transition-colors",
                   active ? "text-fg" : "text-fg-muted hover:text-fg-secondary",

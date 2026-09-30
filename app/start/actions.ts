@@ -4,15 +4,14 @@ import { redirect } from "next/navigation";
 
 import { logEventInBackground } from "@/lib/behavioral/log";
 import { isBetaSignupEnabled } from "@/lib/env";
-import { isForecastDirection, isForecastReason } from "@/lib/forecast/model";
-import { castForecastVoteAsUser } from "@/lib/forecast/server";
 import { nextStep, stepFromParam, type OnboardingStep } from "@/lib/onboarding/copy";
 import { markOnboarded, setMyFollows } from "@/lib/onboarding/server";
 
 /**
- * The onboarding screens' actions (Phase 32). Each one records what the
- * person did as an onboarding_step event and moves on. Skipping from any
- * screen marks onboarding done and goes Home; nothing asks twice.
+ * The onboarding screens' actions (Phase 32, Phase 32b). Each one records
+ * what the person did as an onboarding_step event and moves on. Skipping
+ * from any screen marks onboarding done and goes Home; nothing asks twice.
+ * The tour's own events are logged from the browser, stop by stop.
  */
 
 function text(form: FormData, key: string): string {
@@ -24,7 +23,7 @@ function guard(): void {
   if (!isBetaSignupEnabled()) redirect("/");
 }
 
-/** Next on a screen that asks nothing (the first two). */
+/** Next on the welcome: on to the tour. */
 export async function nextAction(form: FormData): Promise<void> {
   guard();
   const step = stepFromParam(text(form, "step"));
@@ -41,15 +40,11 @@ export async function skipAction(form: FormData): Promise<void> {
   redirect("/");
 }
 
-/** The last screen's quiet way out: done, with no forecast made. Recorded as a finish, not a skip. */
-export async function finishAction(): Promise<void> {
-  guard();
-  logEventInBackground({ eventType: "onboarding_step", metadata: { step: "forecast", action: "finish" } });
-  await markOnboarded();
-  redirect("/");
-}
-
-/** The follow screen: replace the set with what is ticked, one event per change. */
+/**
+ * The follow screen, last: replace the set with what is ticked, one event
+ * per change, then Home with onboarding marked done. From the profile it is
+ * only the set, and back to the profile.
+ */
 export async function followAction(form: FormData): Promise<void> {
   guard();
   const ids = form.getAll("person").filter((value): value is string => typeof value === "string");
@@ -58,32 +53,7 @@ export async function followAction(form: FormData): Promise<void> {
   for (const personId of removed) logEventInBackground({ eventType: "unfollow_person", personId, metadata: { surface: "onboarding" } });
   const back = text(form, "return");
   if (back === "profile") redirect("/profile");
-  logEventInBackground({ eventType: "onboarding_step", metadata: { step: "follow", action: "next", followed: ids.length } });
-  redirect("/start?step=forecast");
-}
-
-export type ForecastStepState = {
-  error?: string;
-  /** What was chosen, so a refusal comes back with the choices still made. */
-  values?: { person: string; direction: string; reason: string };
-  /** Bumped on every refusal so the form remounts with those choices. */
-  attempt?: number;
-};
-
-/** The last screen: a free forecast, then Home. A refusal comes back in plain words. */
-export async function forecastAction(prev: ForecastStepState, form: FormData): Promise<ForecastStepState> {
-  guard();
-  const personId = text(form, "person");
-  const direction = text(form, "direction");
-  const reason = text(form, "reason");
-  const refuse = (error: string): ForecastStepState => ({ error, values: { person: personId, direction, reason }, attempt: (prev.attempt ?? 0) + 1 });
-  if (!personId) return refuse("Pick a person to forecast.");
-  if (!isForecastDirection(direction)) return refuse("Choose Rising or Falling.");
-  if (!isForecastReason(reason)) return refuse("Choose a reason.");
-  const result = await castForecastVoteAsUser({ personId, direction, reason });
-  if (!result.ok) return refuse(result.message);
-  logEventInBackground({ eventType: "cast_forecast", personId, metadata: { direction, reason, changed: result.changed, surface: "onboarding" } });
-  logEventInBackground({ eventType: "onboarding_step", metadata: { step: "forecast", action: "finish" } });
+  logEventInBackground({ eventType: "onboarding_step", metadata: { step: "follow", action: "finish", followed: ids.length } });
   await markOnboarded();
   redirect("/");
 }

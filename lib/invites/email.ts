@@ -18,6 +18,13 @@ export interface InviteEmailInput {
   to: string;
   link: string;
   expiresAt: Date;
+  /** The address is on the waitlist (the invite carries its waitlist row), typed or taken from the list alike. */
+  fromWaitlist: boolean;
+}
+
+/** The first line follows where the invite came from: only someone on the waitlist asked to join. */
+export function inviteOpening(fromWaitlist: boolean): string {
+  return fromWaitlist ? "You joined the Momentum Terminal waitlist, and a place is ready for you." : "You've been invited to the Momentum Terminal beta.";
 }
 
 export interface InviteEmail {
@@ -40,10 +47,11 @@ function escapeHtml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-export function inviteEmail({ to, link, expiresAt }: InviteEmailInput): InviteEmail {
+export function inviteEmail({ to, link, expiresAt, fromWaitlist }: InviteEmailInput): InviteEmail {
   const date = expiryDate(expiresAt);
+  const opening = inviteOpening(fromWaitlist);
   const lines = [
-    "You asked to join the Momentum Terminal beta, and a place is ready for you.",
+    opening,
     "",
     `Accept the invitation: ${link}`,
     "",
@@ -60,7 +68,7 @@ export function inviteEmail({ to, link, expiresAt }: InviteEmailInput): InviteEm
 <html lang="en">
   <body style="margin:0;padding:32px 20px;background:#000;color:#f5f5f5;font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
     <div style="max-width:480px;margin:0 auto;">
-      <p style="font-size:16px;line-height:1.6;margin:0 0 24px;">You asked to join the Momentum Terminal beta, and a place is ready for you.</p>
+      <p style="font-size:16px;line-height:1.6;margin:0 0 24px;">${escapeHtml(opening)}</p>
       <p style="margin:0 0 24px;"><a href="${safe}" style="display:inline-block;background:#f5f5f5;color:#000;text-decoration:none;font-weight:600;font-size:15px;padding:12px 24px;border-radius:999px;">Accept the invitation</a></p>
       <p style="font-size:14px;line-height:1.6;color:#a3a3a3;margin:0 0 16px;">The link works once, for this address only, until ${escapeHtml(date)}.</p>
       <p style="font-size:14px;line-height:1.6;color:#a3a3a3;margin:0 0 16px;">Momentum Terminal is paper trading: you start with a paper balance, and no real money is involved at any point.</p>
@@ -72,7 +80,7 @@ export function inviteEmail({ to, link, expiresAt }: InviteEmailInput): InviteEm
   return { from: INVITE_FROM, reply_to: INVITE_REPLY_TO, to: [to], subject: "Your invitation to Momentum Terminal", text: lines.join("\n"), html };
 }
 
-export type SendResult = { ok: true; id: string | null } | { ok: false; error: string };
+export type SendResult = { ok: true; id: string } | { ok: false; error: string };
 
 export interface SendDeps {
   apiKey: string | null;
@@ -92,7 +100,9 @@ export async function sendInviteEmail(input: InviteEmailInput, deps: SendDeps): 
     });
     const body = (await response.json().catch(() => null)) as { id?: string; message?: string; name?: string } | null;
     if (!response.ok) return { ok: false, error: `Resend ${response.status}: ${body?.message ?? body?.name ?? "request failed"}`.slice(0, 300) };
-    return { ok: true, id: typeof body?.id === "string" ? body.id : null };
+    // Accepted means Resend gave the message an id; a 2xx without one is not proof it was queued.
+    if (typeof body?.id !== "string" || body.id === "") return { ok: false, error: `Resend ${response.status} without a message id: not counted as sent` };
+    return { ok: true, id: body.id };
   } catch (error) {
     return { ok: false, error: (error instanceof Error ? error.message : String(error)).slice(0, 300) };
   }

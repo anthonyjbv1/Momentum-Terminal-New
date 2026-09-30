@@ -251,15 +251,31 @@ export function excludeReason(text: string, rules: Disambiguation, subject?: Exc
 }
 
 // ---------------------------------------------------------------------------
-// Obituaries (Phase 31)
+// Obituaries (the Phase 31 guard, shipped alone as a hotfix on 2026-09-28)
 // ---------------------------------------------------------------------------
 
 /**
- * The vocabulary of a funeral notice, in the headline: a public figure's death
- * is reported as news ("dies at 91"), never as "Obituary, Visitation & Funeral
- * Information". Word-boundary, so "obituary" matches and "obituaries editor"
- * does too — a headline about an obituaries editor is a rare loss against two
- * namesakes scored in one month.
+ * THE OBITUARY GUARD. A funeral home's notice for a namesake is never about a
+ * public figure who is alive, and it needs no configuration to recognise:
+ * three were scored in September 2026 (Larry Dean Ellison, Michael Henry
+ * Dell, and a Larry Page of Greeneville, TN whose Legacy.com notice primed
+ * the model to read a bare-name item from a local station as a death, and to
+ * write one). It runs on every news feed, with or without rules and with or
+ * without the Phase 31 switch, and refuses on either of two grounds:
+ *
+ *   the headline carries the vocabulary of a funeral notice: a public
+ *   figure's death is reported as news ("dies at 91"), never as "Obituary,
+ *   Visitation & Funeral Information". Word-boundary, so "obituary" matches
+ *   and "obituaries editor" does too, a rare loss against three namesakes in
+ *   one month;
+ *
+ *   the outlet or its domain is a funeral home or a memorial site.
+ *
+ * What it does NOT catch, by design and on record: an item whose headline is
+ * nothing but the subject's name from an unknown outlet (the wgrv.com item of
+ * 2026-09-28 17:35 UTC). That is a namesake problem, not an obituary one; the
+ * narrative guard (lib/engine/sentiment/grave-claims.ts) is what keeps such
+ * an item from becoming a death sentence on the Feed.
  */
 const OBITUARY_HEADLINE = /\b(obituary|obituaries|funeral|visitation|memorial service|passed away|celebration of life|in loving memory|death notice|tribute wall)\b/i;
 /** A funeral home or memorial site, by the outlet's name or its domain. */

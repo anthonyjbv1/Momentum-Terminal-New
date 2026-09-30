@@ -45,9 +45,16 @@ export const BEHAVIORAL_EVENT_TYPES = [
 
 export const TRADE_SHEET_STEPS = ["compose", "confirm", "result"] as const;
 
-/** Phase 32: the onboarding screens, in order, and what a person did on one. */
-export const ONBOARDING_STEPS = ["what", "paper", "follow", "forecast"] as const;
+/**
+ * Phase 32: the onboarding screens, in order, and what a person did on one.
+ * Phase 32b replaced the four screens with three: the welcome (paper), the
+ * guided tour of one person's page, and the follow picker. A tour event
+ * names its step in `tour_step`.
+ */
+export const ONBOARDING_STEPS = ["paper", "tour", "follow"] as const;
 export const ONBOARDING_ACTIONS = ["view", "next", "skip", "finish"] as const;
+/** The tour's stops, in order (Phase 32b); each is one element of a person's page or the shell. */
+export const TOUR_STEPS = ["score", "market", "signals", "forces", "forecast", "buy", "portfolio", "feed"] as const;
 export type TradeSheetStep = (typeof TRADE_SHEET_STEPS)[number];
 
 export type BehavioralEventType = (typeof BEHAVIORAL_EVENT_TYPES)[number];
@@ -161,9 +168,9 @@ export const BEHAVIORAL_EVENT_DEFINITIONS: Record<BehavioralEventType, Behaviora
     metadata: "{ positions?: integer >= 0, orders?: integer >= 0 }  what it showed on arrival",
   },
   onboarding_step: {
-    description: "An onboarding screen was shown, or left by Next, Skip or Finish (Phase 32). Skipping is recorded, never discouraged.",
+    description: "An onboarding screen was shown, or left by Next, Skip or Finish (Phase 32); a tour stop the same, with the stop named (Phase 32b). Skipping is recorded, never discouraged.",
     requiresPerson: false,
-    metadata: "{ step: 'what' | 'paper' | 'follow' | 'forecast', action: 'view' | 'next' | 'skip' | 'finish', followed?: integer >= 0 }",
+    metadata: "{ step: 'paper' | 'tour' | 'follow', action: 'view' | 'next' | 'skip' | 'finish', followed?: integer >= 0, tour_step?: 'score' | 'market' | 'signals' | 'forces' | 'forecast' | 'buy' | 'portfolio' | 'feed', replay?: boolean }",
   },
   view_landing: {
     description: "A visitor loaded the public landing page (Phase 28). Anonymous: no user, a one-off session id.",
@@ -446,7 +453,10 @@ const TYPE_CHECKS: Partial<Record<BehavioralEventType, TypeCheck>> = {
     const action = typeof metadata?.action === "string" ? metadata.action.trim().toLowerCase() : "";
     if (!(ONBOARDING_ACTIONS as readonly string[]).includes(action)) return { ok: false, reason: `onboarding_step requires metadata.action (${ONBOARDING_ACTIONS.join(" | ")})` };
     if (metadata?.followed !== undefined && !isNonNegativeInteger(metadata.followed)) return { ok: false, reason: "metadata.followed must be an integer >= 0" };
-    return { ok: true, metadata: { ...metadata, step, action } };
+    const tourStep = metadata?.tour_step === undefined ? undefined : typeof metadata.tour_step === "string" ? metadata.tour_step.trim().toLowerCase() : "";
+    if (tourStep !== undefined && !(TOUR_STEPS as readonly string[]).includes(tourStep)) return { ok: false, reason: `metadata.tour_step must be one of ${TOUR_STEPS.join(" | ")}` };
+    if (metadata?.replay !== undefined && typeof metadata.replay !== "boolean") return { ok: false, reason: "metadata.replay must be a boolean" };
+    return { ok: true, metadata: { ...metadata, step, action, ...(tourStep !== undefined ? { tour_step: tourStep } : {}) } };
   },
   view_entry: (metadata) => {
     const entryId = typeof metadata?.entry_id === "string" ? metadata.entry_id.trim() : "";

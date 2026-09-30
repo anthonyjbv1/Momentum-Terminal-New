@@ -6,6 +6,7 @@ import { companyForTicker } from "@/lib/people/company";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 import { projectSignalDetail, type SignalDetail } from "./card-copy";
+import type { SparkPoint } from "./story-card";
 
 /**
  * WHAT THE SERVER ADDS TO A CARD (Phase 30).
@@ -39,6 +40,42 @@ export async function loadSignalDetails(ids: readonly string[]): Promise<Map<str
     return out;
   }
   for (const row of (data ?? []) as DetailRow[]) out.set(row.id, projectSignalDetail(row.raw_payload));
+  return out;
+}
+
+/** Roughly one point per this many minutes across the page's span; the RPC caps a read at 1,000 points. */
+const SERIES_MINUTES_PER_POINT = 5;
+const SERIES_MAX_POINTS = 1000;
+
+/**
+ * Each person's score series from `since` to now (Phase 34), through
+ * `person_score_series`, one bounded read per person on the page. The card
+ * takes the hours around its own move out of it. A person the read fails
+ * for simply has no sparkline; the card renders without one.
+ */
+export async function loadScoreSeries(personIds: readonly string[], since: Date): Promise<Map<string, SparkPoint[]>> {
+  const unique = [...new Set(personIds.filter((id) => typeof id === "string" && id.length > 0))];
+  const out = new Map<string, SparkPoint[]>();
+  if (unique.length === 0) return out;
+
+  const spanMinutes = Math.max(1, (Date.now() - since.getTime()) / 60_000);
+  const points = Math.min(SERIES_MAX_POINTS, Math.max(2, Math.ceil(spanMinutes / SERIES_MINUTES_PER_POINT)));
+  const supabase = createSupabaseAdminClient();
+  await Promise.all(
+    unique.map(async (personId) => {
+      const { data, error } = await supabase.rpc("person_score_series", { p_person_id: personId, p_since: since.toISOString(), p_points: points });
+      if (error) {
+        console.warn("[feed] score series read failed:", error.message);
+        return;
+      }
+      const series: SparkPoint[] = [];
+      for (const row of (data ?? []) as Array<{ bucket_at: string; score: number | string }>) {
+        const score = typeof row.score === "number" ? row.score : Number(row.score);
+        if (row.bucket_at && Number.isFinite(score)) series.push({ at: row.bucket_at, score });
+      }
+      out.set(personId, series);
+    }),
+  );
   return out;
 }
 

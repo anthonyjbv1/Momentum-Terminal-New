@@ -4,8 +4,9 @@ import { cache } from "react";
 
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
-import { loadCompaniesByPerson, loadSignalDetails } from "./enrich";
+import { loadCompaniesByPerson, loadScoreSeries, loadSignalDetails } from "./enrich";
 import { FEED_PAGE_SIZE, feedCategoryOptions, pageFromRows, signalIdsOf, type FeedCursor, type FeedPage, type FeedRow } from "./feed-model";
+import { SPARK_HOURS_BEFORE } from "./story-card";
 
 /**
  * The Feed's server-side reads.
@@ -31,8 +32,19 @@ export async function getFeedPage(cursor: FeedCursor | null = null, limit = FEED
   if (error) throw new Error(`Could not load the feed: ${error.message}`);
 
   const rows = (data ?? []) as unknown as FeedRow[];
-  const [details, companies] = await Promise.all([loadSignalDetails(signalIdsOf(rows)), loadCompaniesByPerson()]);
-  return pageFromRows(rows, limit, { details, companies });
+  const [details, companies, series] = await Promise.all([loadSignalDetails(signalIdsOf(rows)), loadCompaniesByPerson(), loadScoreSeries(peopleOf(rows), seriesSince(rows))]);
+  return pageFromRows(rows, limit, { details, companies, series });
+}
+
+/** Every person on a page, for the series read. */
+function peopleOf(rows: FeedRow[]): string[] {
+  return rows.map((row) => row.person_id);
+}
+
+/** Where the page's series start: SPARK_HOURS_BEFORE the oldest row, so every card's window is inside the read. */
+function seriesSince(rows: FeedRow[]): Date {
+  const oldest = rows.reduce<number>((min, row) => Math.min(min, Date.parse(row.occurred_at) || min), Date.now());
+  return new Date(oldest - SPARK_HOURS_BEFORE * 3_600_000);
 }
 
 /** The first page, memoised per request. */

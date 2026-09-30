@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { PRIVACY_VERSION, TERMS_VERSION } from "@/lib/legal/versions";
 import { createMemoryRateLimiter } from "@/lib/rate-limit";
 
-import { expiryDate, inviteEmail, sendInviteEmail, INVITE_FROM, INVITE_REPLY_TO } from "./email";
+import { expiryDate, inviteEmail, inviteOpening, sendInviteEmail, INVITE_FROM, INVITE_REPLY_TO } from "./email";
 import { JOIN_MESSAGES, callbackErrorDestination, joinPageState, parseJoinForm, readInviteView, submitJoin, type InviteView, type JoinDeps, type JoinSubmission } from "./join";
 import { hashInviteToken, isInviteTokenShape, newInviteToken } from "./token";
 
@@ -220,7 +220,7 @@ describe("the auth callback's errors", () => {
 
 describe("the invitation email", () => {
   const at = new Date("2026-10-10T12:00:00Z");
-  const email = inviteEmail({ to: "person@example.com", link: `https://momentumterminal.app/join/${TOKEN}`, expiresAt: at });
+  const email = inviteEmail({ to: "person@example.com", link: `https://momentumterminal.app/join/${TOKEN}`, expiresAt: at, fromWaitlist: true });
 
   it("comes from info@momentumterminal.app, replies there, and carries the link exactly once in each part", () => {
     expect(INVITE_FROM).toBe("Momentum Terminal <info@momentumterminal.app>");
@@ -240,15 +240,34 @@ describe("the invitation email", () => {
     expect(expiryDate(at)).toBe("Saturday 10 October 2026");
   });
 
+  it("opens by where the invite came from: the waitlist, or an address typed by the operator; the rest is the same", () => {
+    const joined = "You joined the Momentum Terminal waitlist, and a place is ready for you.";
+    const invited = "You've been invited to the Momentum Terminal beta.";
+    expect(inviteOpening(true)).toBe(joined);
+    expect(inviteOpening(false)).toBe(invited);
+    const typed = inviteEmail({ to: "person@example.com", link: `https://momentumterminal.app/join/${TOKEN}`, expiresAt: at, fromWaitlist: false });
+    expect(email.text.split("\n")[0]).toBe(joined);
+    expect(typed.text.split("\n")[0]).toBe(invited);
+    expect(email.html).toContain(`>${joined}</p>`);
+    // The apostrophe is escaped in neither part: it is text, and the HTML escaper leaves ' alone.
+    expect(typed.html).toContain(`>${invited}</p>`);
+    for (const part of [typed.text, typed.html]) expect(part).not.toMatch(/You asked to join|waitlist/);
+    for (const part of [email.text, email.html]) expect(part).not.toMatch(/You asked to join|You've been invited/);
+    // Only the first line differs.
+    expect(typed.text.replace(invited, "")).toBe(email.text.replace(joined, ""));
+    expect(typed.html.replace(invited, "")).toBe(email.html.replace(joined, ""));
+    expect(typed.subject).toBe(email.subject);
+  });
+
   it("escapes the link in the HTML part", () => {
-    const hostile = inviteEmail({ to: "p@example.com", link: 'https://x.example/"><script>alert(1)</script>', expiresAt: at });
+    const hostile = inviteEmail({ to: "p@example.com", link: 'https://x.example/"><script>alert(1)</script>', expiresAt: at, fromWaitlist: false });
     expect(hostile.html).not.toContain("<script>");
     expect(hostile.html).toContain("&quot;&gt;&lt;script&gt;");
   });
 
   it("sends through Resend with the key, and reports a failure instead of throwing", async () => {
     const requests: Array<{ url: string; init: RequestInit }> = [];
-    const ok = await sendInviteEmail({ to: "p@example.com", link: "https://x.example/join/t", expiresAt: at }, {
+    const ok = await sendInviteEmail({ to: "p@example.com", link: "https://x.example/join/t", expiresAt: at, fromWaitlist: false }, {
       apiKey: "re_test",
       fetch: (async (url: string, init: RequestInit) => {
         requests.push({ url, init });
@@ -258,18 +277,24 @@ describe("the invitation email", () => {
     expect(ok).toEqual({ ok: true, id: "email_1" });
     expect(requests[0].url).toBe("https://api.resend.com/emails");
     expect(new Headers(requests[0].init.headers).get("authorization")).toBe("Bearer re_test");
-    expect(await sendInviteEmail({ to: "p@example.com", link: "l", expiresAt: at }, { apiKey: null })).toEqual({ ok: false, error: "RESEND_API_KEY is not set" });
-    const refused = await sendInviteEmail({ to: "p@example.com", link: "l", expiresAt: at }, {
+    expect(await sendInviteEmail({ to: "p@example.com", link: "l", expiresAt: at, fromWaitlist: false }, { apiKey: null })).toEqual({ ok: false, error: "RESEND_API_KEY is not set" });
+    const refused = await sendInviteEmail({ to: "p@example.com", link: "l", expiresAt: at, fromWaitlist: false }, {
       apiKey: "re_test",
       fetch: (async () => new Response(JSON.stringify({ message: "domain not verified" }), { status: 403 })) as unknown as typeof fetch,
     });
     expect(refused).toEqual({ ok: false, error: "Resend 403: domain not verified" });
-    const thrown = await sendInviteEmail({ to: "p@example.com", link: "l", expiresAt: at }, {
+    const thrown = await sendInviteEmail({ to: "p@example.com", link: "l", expiresAt: at, fromWaitlist: false }, {
       apiKey: "re_test",
       fetch: (async () => {
         throw new Error("network down");
       }) as unknown as typeof fetch,
     });
     expect(thrown).toEqual({ ok: false, error: "network down" });
+    // A 2xx without a message id is not proof Resend queued anything: not sent.
+    const noId = await sendInviteEmail({ to: "p@example.com", link: "l", expiresAt: at, fromWaitlist: false }, {
+      apiKey: "re_test",
+      fetch: (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch,
+    });
+    expect(noId).toEqual({ ok: false, error: "Resend 200 without a message id: not counted as sent" });
   });
 });

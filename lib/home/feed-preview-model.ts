@@ -1,4 +1,5 @@
 import { isNarrativeEvidence, narrativeCard, projectSignalDetail, showsAsCard, signalCard, type CardEvidenceInput, type CardSubject } from "@/lib/feed/card-copy";
+import { isVoided } from "@/lib/signals/voided";
 
 /**
  * The desktop rail's preview of the Feed, as pure logic: the rows
@@ -88,7 +89,7 @@ export function buildFeedPreview(
       const impact = Math.round((Number(row.score_after) - Number(row.score_before)) * 1000) / 1000;
       const evidence: CardEvidenceInput[] = (row.narrative_signals ?? []).flatMap((link) => {
         const signal = link.signals;
-        if (!signal) return [];
+        if (!signal || isVoided(signal)) return [];
         const relation = link.relation === "inverse_pair" ? ("inverse_pair" as const) : ("direct" as const);
         return [
           {
@@ -119,7 +120,7 @@ export function buildFeedPreview(
     }),
     ...signals
       // Rule 8: a signal a narrative carries as direct evidence is that narrative's card, not its own.
-      .filter((row) => showsAsCard(numberOrNull(row.impact_score), row.processed ?? null) && !isNarrativeEvidence(row.narrative_signals))
+      .filter((row) => !isVoided(row) && showsAsCard(numberOrNull(row.impact_score), row.processed ?? null) && !isNarrativeEvidence(row.narrative_signals))
       .map((row) => {
         const copy = signalCard({
           subject: subjectOf(row.people),

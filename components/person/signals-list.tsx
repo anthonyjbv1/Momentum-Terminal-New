@@ -37,7 +37,7 @@ const impactTones = {
 
 export function SignalsList({ items, personId, personName, loggingEnabled, renderedAt, className }: SignalsListProps) {
   return (
-    <section aria-labelledby="signals-heading" className={cn("flex flex-col gap-4", className)}>
+    <section aria-labelledby="signals-heading" data-tour="signals" className={cn("flex flex-col gap-4", className)}>
       <SectionHeader
         title="Signals"
         meta={
@@ -121,7 +121,7 @@ function SignalItem({ item, personId, loggingEnabled, renderedAt }: { item: Prof
           </time>
           <span className="ml-auto flex shrink-0 items-center gap-2">
             {item.impact !== null ? (
-              <span className={cn("num text-sm font-medium", impactTones[direction])}>{formatSigned(item.impact, FORCE_IMPACT_DECIMALS)}</span>
+              <span className={cn("text-sm font-medium tabular-nums", impactTones[direction])}>{formatSigned(item.impact, FORCE_IMPACT_DECIMALS)}</span>
             ) : item.processed === false ? (
               <span className="text-label text-fg-faint">Unscored</span>
             ) : null}

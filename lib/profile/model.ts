@@ -18,6 +18,27 @@ export function validateDisplayName(raw: unknown): DisplayNameResult {
   return { ok: true, value };
 }
 
+export const BIO_MAX = 150;
+
+/** A URL, a www. host, or a bare domain with a common ending: none of them belongs in a bio. */
+const BIO_LINK = /https?:\/\/|\bwww\.|\b[\w-]+\.(?:com|net|org|io|app|co|me|ly|gg|tv|xyz|dev|ai|us|uk|ca|de|fr|es|it|nl|se|ch|link|page|site|online|store|shop|info|biz)\b/i;
+
+export type BioResult = { ok: true; value: string | null } | { ok: false; message: string };
+
+/**
+ * Plain text, whitespace collapsed, at most 150 characters, no control
+ * characters, no links; empty is fine and stores as null (the bio is
+ * optional and hidden when empty).
+ */
+export function validateBio(raw: unknown): BioResult {
+  const value = typeof raw === "string" ? raw.replace(/\s+/g, " ").trim() : "";
+  if (value.length === 0) return { ok: true, value: null };
+  if ([...value].length > BIO_MAX) return { ok: false, message: `Keep the bio to ${BIO_MAX} characters.` };
+  if (/[\u0000-\u001f\u007f]/.test(value)) return { ok: false, message: "Use letters, numbers and punctuation only." };
+  if (BIO_LINK.test(value)) return { ok: false, message: "No links in the bio." };
+  return { ok: true, value };
+}
+
 /** Matches the storage bucket's own limit (2 MB) and its allowed types. */
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 export const AVATAR_TYPES = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" } as const;

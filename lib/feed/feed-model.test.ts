@@ -61,6 +61,7 @@ function entry(overrides: Partial<FeedEntry> & { id: string }): FeedEntry {
     sources: [],
     evidence: [],
     detailLines: [],
+    spark: null,
     ...overrides,
   };
 }
@@ -157,6 +158,22 @@ describe("toFeedEntry", () => {
   it("drops rows it cannot place", () => {
     expect(toFeedEntry(row({ kind: "mystery" }))).toBeNull();
     expect(toFeedEntry(row({ occurred_at: "" }))).toBeNull();
+  });
+
+  it("draws the person's score across the move from the page's series, and nothing without one (Phase 34)", () => {
+    const at = NOW - 120_000;
+    const series = [
+      { at: iso(at - 4 * 3_600_000), score: 49 }, // outside the window
+      { at: iso(at - 2 * 3_600_000), score: 49.8 },
+      { at: iso(at - 3_600_000), score: 50 },
+      { at: iso(at), score: 51.4 },
+      { at: iso(at + 3_600_000), score: 51.2 },
+      { at: iso(at + 4 * 3_600_000), score: 52 }, // outside the window
+    ];
+    const context = { details: new Map(), companies: new Map(), series: new Map([["dda851f2-38e8-4b46-ace0-de4bbba33a0b", series]]) };
+    expect(toFeedEntry(row(), context)?.spark).toEqual([49.8, 50, 51.4, 51.2]);
+    expect(toFeedEntry(row())?.spark).toBeNull();
+    expect(toFeedEntry(row({ person_id: "someone-else" }), context)?.spark).toBeNull();
   });
 
   it("shortens source names to a handle for logs", () => {
@@ -304,5 +321,27 @@ describe("a metric signal reads as plain language, whenever it was stored (Phase
     const withoutCounts = evidenceDetailLines(evidence(historical, "x"), drake);
     expect(withoutCounts.some((line) => line.label === "Observed")).toBe(false);
     expect(withoutCounts.some((line) => line.value.includes("fortnight"))).toBe(true);
+  });
+});
+
+describe("a voided signal (hotfix 2026-09-28)", () => {
+  const voided: SignalDetail = { kind: "article", outlet: "wgrv.com", domain: "wgrv.com", link: null, digest: null, voided: true };
+
+  it("is no card at all", () => {
+    const id = "2d73f458-a4f8-4a3b-b3f5-ae810d9e1025";
+    const entry = toFeedEntry(
+      row({ kind: "signal", id, text: "Larry Page", impact: -0.9, score_before: null, score_after: null, tick_number: null, sources: ["RSS (per-person news feed)"], evidence: [{ id, headline: "Larry Page", source: "RSS (per-person news feed)", impact: -0.9, occurred_at: iso(NOW), processed: true }] }),
+      { details: new Map([[id, voided]]), companies: new Map() },
+    );
+    expect(entry).toBeNull();
+  });
+
+  it("is not evidence under a narrative", () => {
+    const id = "2d73f458-a4f8-4a3b-b3f5-ae810d9e1025";
+    const entry = toFeedEntry(
+      row({ evidence: [{ id, headline: "Larry Page", source: "RSS (per-person news feed)", impact: -0.9, occurred_at: iso(NOW), processed: true }] }),
+      { details: new Map([[id, voided]]), companies: new Map() },
+    );
+    expect(entry?.evidence).toEqual([]);
   });
 });

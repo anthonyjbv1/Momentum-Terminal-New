@@ -136,7 +136,7 @@ export function ForcesPanel({ forces, market, latestTick, curved, className }: F
   const span = forcesWindowLabel(FORCES_WINDOW_MINUTES);
 
   return (
-    <section aria-labelledby="forces-heading" className={cn("flex flex-col gap-4", className)}>
+    <section aria-labelledby="forces-heading" data-tour="forces" className={cn("flex flex-col gap-4", className)}>
       <SectionHeader
         title="The five forces"
         meta={
@@ -208,7 +208,7 @@ function ForceRow({ force, scale }: { force: ForceReading; scale: number }) {
         {idle ? (
           <span className="text-label text-fg-faint">Idle</span>
         ) : (
-          <span className={cn("num text-sm font-medium", figureTones[force.direction])}>{formatSigned(force.impact ?? 0, FORCE_IMPACT_DECIMALS)}</span>
+          <span className={cn("text-sm font-medium tabular-nums", figureTones[force.direction])}>{formatSigned(force.impact ?? 0, FORCE_IMPACT_DECIMALS)}</span>
         )}
       </div>
     </div>

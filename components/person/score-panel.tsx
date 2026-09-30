@@ -27,7 +27,7 @@ import { TradeSheet } from "@/components/trade/trade-sheet";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { LocalClock } from "@/components/ui/local-time";
-import { directionAtPrecision, directionIcon, directionLabels, directionTone, formatChange } from "@/components/ui/direction-indicator";
+import { DirectionArrow, directionAtPrecision, directionLabels, directionTone, formatChange } from "@/components/ui/direction-indicator";
 import { SectionHeader } from "@/components/ui/page-header";
 import { ScoreDisplay } from "@/components/ui/score-display";
 import { useNow } from "@/components/ui/use-now";
@@ -83,22 +83,22 @@ export interface ScorePanelProps {
 }
 
 /**
- * THE CHANGE, AS ONE STATEMENT (Phase 26): "↗ +0.3 (+0.59%) · 1H".
+ * THE CHANGE, AS ONE STATEMENT (Phase 26): "↑ +0.3 (+0.59%) · 1H".
  * Both figures are one text node: the same size, the same weight, one line
- * box, and therefore one baseline by construction. The arrow is centred on
- * that line, the period label stays neutral, and direction colour lands on
- * the figures only, at the precision they are DISPLAYED at (Phase 19+).
+ * box, and therefore one baseline by construction. The arrow is the
+ * platform's (straight, and absent when flat: Phase 33), centred on that
+ * line; the period label stays neutral, and direction colour lands on the
+ * figures only, at the precision they are DISPLAYED at (Phase 19+).
  */
 function ChangeLine({ change, rangeLabel }: { change: PeriodChange; rangeLabel: string | null }) {
   const direction = directionAtPrecision(change.change, 1);
-  const Icon = directionIcon[direction];
   const points = formatChange(change.change);
   const figures = change.percent !== null ? `${points} (${formatSignedPercent(change.percent)})` : points;
 
   return (
     <p className="flex flex-wrap items-center gap-x-2 text-base">
-      <span className={cn("inline-flex items-center gap-1.5 font-medium tabular-nums", directionTone[direction])} aria-label={`${directionLabels[direction]}, ${figures}`}>
-        <Icon className="size-5 shrink-0" strokeWidth={2.5} aria-hidden />
+      <span className={cn("inline-flex items-center gap-1 font-medium tabular-nums", directionTone[direction])} aria-label={`${directionLabels[direction]}, ${figures}`}>
+        <DirectionArrow direction={direction} className="size-5" />
         <span>{figures}</span>
       </span>
       {rangeLabel ? (
@@ -121,7 +121,7 @@ function ChangeLine({ change, rangeLabel }: { change: PeriodChange; rangeLabel: 
 function MarketLine({ marketPrice, premiumCents }: { marketPrice: number; premiumCents: number }) {
   const market = marketLine({ premiumCents });
   return (
-    <p className="flex flex-wrap items-center gap-x-2 text-sm tabular-nums text-fg-muted">
+    <p data-tour="market" className="flex flex-wrap items-center gap-x-2 text-sm tabular-nums text-fg-muted">
       <span>
         Market <span key={premiumCents} className="font-medium text-fg-secondary animate-tick-flash">{formatCents(pointsToCents(marketPrice))}</span>
       </span>
@@ -283,7 +283,10 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnable
       <Card className="flex flex-col gap-8 p-6 sm:p-8">
         <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between md:gap-10">
           <div className="flex min-w-0 flex-col gap-4">
-            <ScoreDisplay score={state.score} size="xl" flash />
+            {/* data-tour: the guided tour's first two stops (Phase 32b) light the number and the market line. */}
+            <span data-tour="score" className="self-start">
+              <ScoreDisplay score={state.score} size="xl" flash />
+            </span>
 
             {change ? <ChangeLine change={change} rangeLabel={rangeLabel} /> : <p className="text-base text-fg-muted">No change recorded yet</p>}
 

@@ -119,12 +119,21 @@ describe("validateBehavioralEvent", () => {
       expect(validateBehavioralEvent({ eventType: "view_portfolio", metadata: { orders: 1.5 } }).ok).toBe(false);
     });
 
-    it("onboarding_step needs one of the four steps and one of the four actions, and no person (Phase 32)", () => {
+    it("onboarding_step needs one of the three screens and one of the four actions, and no person (Phase 32)", () => {
       expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "follow", action: "next", followed: 3 } })).toMatchObject({ ok: true, event: { personId: null, metadata: { step: "follow", action: "next", followed: 3 } } });
       expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "FOLLOW", action: "Skip" } })).toMatchObject({ ok: true, event: { metadata: { step: "follow", action: "skip" } } });
       expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "welcome", action: "view" } })).toMatchObject({ ok: false, reason: expect.stringContaining("step") });
-      expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "what", action: "rush" } })).toMatchObject({ ok: false, reason: expect.stringContaining("action") });
-      expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "what", action: "view", followed: -1 } }).ok).toBe(false);
+      // The screens the tour replaced (Phase 32b) are no longer steps.
+      expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "what", action: "view" } })).toMatchObject({ ok: false, reason: expect.stringContaining("step") });
+      expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "paper", action: "rush" } })).toMatchObject({ ok: false, reason: expect.stringContaining("action") });
+      expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "paper", action: "view", followed: -1 } }).ok).toBe(false);
+    });
+
+    it("a tour stop names one of the eight steps in tour_step, and replay is a boolean (Phase 32b)", () => {
+      expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "tour", action: "view", tour_step: " Score ", replay: false } })).toMatchObject({ ok: true, event: { metadata: { step: "tour", action: "view", tour_step: "score", replay: false } } });
+      expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "tour", action: "skip", tour_step: "buy", replay: true } })).toMatchObject({ ok: true });
+      expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "tour", action: "view", tour_step: "confetti" } })).toMatchObject({ ok: false, reason: expect.stringContaining("tour_step") });
+      expect(validateBehavioralEvent({ eventType: "onboarding_step", metadata: { step: "tour", action: "view", tour_step: "score", replay: "yes" } })).toMatchObject({ ok: false, reason: expect.stringContaining("replay") });
     });
 
     it("cast_forecast needs a person, a direction of rising | falling and one of the seven reason tags", () => {

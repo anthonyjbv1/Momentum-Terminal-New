@@ -15,6 +15,7 @@ import { directionAtPrecision, directionOf, type Direction } from "@/components/
 /** Decimals a force's contribution is shown to, everywhere it is shown. Its colour follows the same rounding. */
 export const FORCE_IMPACT_DECIMALS = 2;
 import { categoryLabel } from "@/lib/home/board-model";
+import type { AvatarCredit } from "@/lib/people/avatar-model";
 import { readOverrides, type PersonMarketOverrides } from "@/lib/person/market-overrides";
 
 /**
@@ -43,6 +44,8 @@ export interface ProfilePerson {
   displayName: string;
   category: string;
   avatarUrl: string | null;
+  /** Where the avatar came from, for the credit on the profile (2026-09-29); null for initials. */
+  avatarCredit: AvatarCredit | null;
   score: number;
   /** The Gravity force's target as the Engine last used it: the seed plus the drifting target's offset (Phase 14). Where the score settles with nothing happening. */
   revertTarget: number;
@@ -80,6 +83,8 @@ export interface ProfilePerson {
 
 /** The people row as it comes back from the database. */
 export interface ProfilePersonRow {
+  /** Read from the person's platform mapping, not the people row (2026-09-29). */
+  avatar_credit?: AvatarCredit | null;
   id: string;
   slug: string;
   display_name: string;
@@ -137,6 +142,7 @@ export function toProfilePerson(row: ProfilePersonRow): ProfilePerson {
     displayName: row.display_name,
     category: row.category,
     avatarUrl: row.avatar_url,
+    avatarCredit: row.avatar_credit ?? null,
     score,
     revertTarget: toNumber(row.revert_target) + toNumber(row.target_offset),
     spread: toNumber(row.spread),

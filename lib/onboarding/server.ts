@@ -6,7 +6,7 @@ import { getCurrentProfile } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 
-import type { RosterEntry } from "./model";
+import { pickTourPerson, type RosterEntry } from "./model";
 
 /**
  * What the onboarding screens and the profile read about following (Phase
@@ -27,6 +27,23 @@ export const getFollowRoster = cache(async (): Promise<RosterEntry[]> => {
     .order("id");
   if (error) throw new Error(`Could not load people: ${error.message}`);
   return (data ?? []).map((row) => ({ id: row.id, slug: row.slug, name: row.display_name, category: row.category, avatarUrl: row.avatar_url }));
+});
+
+/** The person the tour runs on (Phase 32b): MrBeast when tradeable, else the top tradeable person; null when nobody is. */
+export const getTourPersonSlug = cache(async (): Promise<string | null> => {
+  const admin = createSupabaseAdminClient();
+  const { data, error } = await admin
+    .from("people")
+    .select("slug, trading_mode")
+    .eq("is_active", true)
+    .eq("is_discoverable", true)
+    .order("current_score", { ascending: false })
+    .order("id");
+  if (error) {
+    console.warn("[tour] could not read people:", error.message);
+    return null;
+  }
+  return pickTourPerson((data ?? []).map((row) => ({ slug: row.slug, tradingMode: row.trading_mode ?? null })));
 });
 
 /** The signed-in person's follows, as person ids. Empty when signed out or on any failure. */

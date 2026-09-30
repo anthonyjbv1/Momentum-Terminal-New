@@ -3,11 +3,13 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
 import { getCurrentUser } from "@/lib/auth";
+import { isBetaSignupEnabled } from "@/lib/env";
 import { getForecastSummary, getForecastViewerState } from "@/lib/forecast/server";
 import { getPersonBySlug, getPersonProfile, getPersonSignals, getRenderedAt } from "@/lib/person/profile";
 import { readPublishedMarketParameters } from "@/lib/trading/published-parameters";
 import { getViewerTradingState } from "@/lib/trading/server";
 import { getPlatformSettings } from "@/lib/trading/settings";
+import { ProductTour } from "@/components/onboarding/product-tour";
 import { BackLink } from "@/components/person/back-link";
 import { Dossier } from "@/components/person/dossier";
 import { ForecastPanel } from "@/components/person/forecast-panel";
@@ -33,12 +35,24 @@ import { ProfileLogger } from "@/components/person/use-profile-logging";
  * person is a real HTTP 404 (a not-found thrown inside a Suspense boundary
  * can only ever be a 200). The readings behind the sections then stream in
  * behind a skeleton of the page's own shape.
+ *
+ * THE TOUR (Phase 32b). With ?tour=onboarding (from /start) or ?tour=replay
+ * (from the profile), a signed-in member sees the guided tour over this
+ * page: only behind BETA_SIGNUP_ENABLED, and only on a tradeable person,
+ * since one stop is the Buy pill. Nothing else about the page changes.
  */
 
 // The score and its history are live readings; never serve a stale page.
 export const dynamic = "force-dynamic";
 
 type Params = Promise<{ slug: string }>;
+type Search = Promise<{ tour?: string | string[] }>;
+
+/** ?tour=onboarding | replay, or nothing. */
+function tourOrigin(value: string | string[] | undefined): "onboarding" | "replay" | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return raw === "onboarding" || raw === "replay" ? raw : null;
+}
 
 export async function generateMetadata({ params }: { params: Params }): Promise<Metadata> {
   const { slug } = await params;
@@ -48,8 +62,8 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
     : { title: "Not found" };
 }
 
-export default async function PersonPage({ params }: { params: Params }) {
-  const { slug } = await params;
+export default async function PersonPage({ params, searchParams }: { params: Params; searchParams: Search }) {
+  const [{ slug }, search] = await Promise.all([params, searchParams]);
 
   const person = await getPersonBySlug(slug);
   if (!person) notFound();
@@ -58,14 +72,14 @@ export default async function PersonPage({ params }: { params: Params }) {
     <div className="flex flex-col gap-10 pb-28 md:pb-0">
       <BackLink />
       <Suspense fallback={<ProfileSkeleton />}>
-        <ProfileBody slug={slug} personId={person.id} personName={person.displayName} personCategory={person.category} />
+        <ProfileBody slug={slug} personId={person.id} personName={person.displayName} personCategory={person.category} tour={tourOrigin(search.tour)} />
       </Suspense>
     </div>
   );
 }
 
 /** Everything below the back link: the readings, streamed in once they are loaded. */
-async function ProfileBody({ slug, personId, personName, personCategory }: { slug: string; personId: string; personName: string; personCategory: string }) {
+async function ProfileBody({ slug, personId, personName, personCategory, tour }: { slug: string; personId: string; personName: string; personCategory: string; tour: "onboarding" | "replay" | null }) {
   const [profile, signals, user, settings, viewer, forecast, forecastViewer, market] = await Promise.all([
     getPersonProfile(slug),
     getPersonSignals({ id: personId, displayName: personName, category: personCategory }),
@@ -87,6 +101,8 @@ async function ProfileBody({ slug, personId, personName, personCategory }: { slu
     // (Phase 29b); the shell's pb-tabbar-safe already clears the tab bar and the home indicator.
     <div className="flex flex-col gap-10 pb-tradebar md:pb-0">
       <ProfileLogger personId={profile.person.id} enabled={loggingEnabled} />
+
+      {tour && user && isBetaSignupEnabled() && profile.person.tradingMode === "tradeable" ? <ProductTour origin={tour} loggingEnabled={loggingEnabled} /> : null}
 
       <Dossier person={profile.person} state={profile.state} conviction={profile.conviction} />
 

@@ -208,20 +208,20 @@ function BuyControl({
 }) {
   if (!state.enabled) {
     return (
-      <Button variant="outline" size={size} className={cn("text-fg-muted", className)} disabled aria-label={`Buy ${person.displayName}: ${state.label.toLowerCase()}`}>
+      <Button variant="outline" size={size} className={cn("text-fg-muted", className)} disabled aria-label={`Buy ${person.displayName}: ${state.label.toLowerCase()}`} data-tour="buy">
         {state.label}
       </Button>
     );
   }
   if (!viewer.signedIn) {
     return (
-      <Link href={`/login?next=${encodeURIComponent(`/person/${person.slug}`)}`} className={buttonClassName("buy", size, className)} aria-label={`Sign in to buy ${person.displayName}`}>
+      <Link href={`/login?next=${encodeURIComponent(`/person/${person.slug}`)}`} className={buttonClassName("buy", size, className)} aria-label={`Sign in to buy ${person.displayName}`} data-tour="buy">
         <TradeQuote label="Buy" cents={buyCents} />
       </Link>
     );
   }
   return (
-    <Button variant="buy" size={size} className={className} onClick={() => onTrade("BUY")} aria-label={`Buy ${person.displayName}`}>
+    <Button variant="buy" size={size} className={className} onClick={() => onTrade("BUY")} aria-label={`Buy ${person.displayName}`} data-tour="buy">
       <TradeQuote label="Buy" cents={buyCents} />
     </Button>
   );

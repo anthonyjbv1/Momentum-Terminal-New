@@ -67,13 +67,15 @@ export async function getFeedPreview(limit = 8): Promise<FeedPreviewItem[]> {
   const [narratives, signals, companies] = await Promise.all([
     supabase
       .from("narratives")
-      .select("id, text, created_at, score_before, score_after, people(id, slug, display_name, category), narrative_signals(relation, signals(id, headline, occurred_at, impact_score, raw_payload, data_sources(display_name), people(display_name)))")
+      .select("id, text, created_at, score_before, score_after, people(id, slug, display_name, category), narrative_signals(relation, signals(id, headline, occurred_at, impact_score, raw_payload, voided_at, data_sources(display_name), people(display_name)))")
+      .is("voided_at", null)
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(limit),
     supabase
       .from("signals")
-      .select("id, headline, occurred_at, impact_score, processed, sentiment_label, raw_payload, people(id, slug, display_name, category), data_sources(display_name), narrative_signals(relation)")
+      .select("id, headline, occurred_at, impact_score, processed, sentiment_label, raw_payload, voided_at, people(id, slug, display_name, category), data_sources(display_name), narrative_signals(relation)")
+      .is("voided_at", null)
       .order("occurred_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(limit * 4),

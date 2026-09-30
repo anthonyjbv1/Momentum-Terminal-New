@@ -19,6 +19,7 @@ export function DesktopNav({ className }: { className?: string }) {
             key={item.href}
             href={item.href}
             aria-current={active ? "page" : undefined}
+            data-tour={`nav-${item.key}`}
             className={cn(
               "inline-flex h-10 items-center rounded-full px-4 text-sm font-medium transition-colors",
               active ? "text-fg" : "text-fg-muted hover:text-fg-secondary",

@@ -9,7 +9,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Button, buttonClassName } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { categoryLabel } from "@/lib/home/board-model";
-import { ONBOARDING } from "@/lib/onboarding/copy";
+import { ONBOARDING, previousStep } from "@/lib/onboarding/copy";
 import type { RosterEntry } from "@/lib/onboarding/model";
 
 /**
@@ -75,7 +75,7 @@ export function FollowPicker({ roster, following, mode }: FollowPickerProps) {
             {copy.cancel}
           </Link>
         ) : (
-          <Link href="/start?step=paper" className={buttonClassName("outline", "lg")}>
+          <Link href={`/start?step=${previousStep("follow")}`} className={buttonClassName("outline", "lg")}>
             {ONBOARDING.back}
           </Link>
         )}

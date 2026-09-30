@@ -32,7 +32,7 @@ export default async function FeedPage() {
     <div className="flex flex-col gap-10">
       <PageHeader
         title="Feed"
-        description="The Engine, narrating every move across the board as it lands."
+        description="The timeline has a market"
         actions={
           live ? (
             <Badge tone="positive" dot>

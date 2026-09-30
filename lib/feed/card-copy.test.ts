@@ -358,6 +358,29 @@ describe("the server's projection of a payload", () => {
     expect(projectSignalDetail(null).kind).toBeNull();
   });
 
+  it("names the media the platform publishes for embedding, by id only, and a game's scoreboard (Phase 34)", () => {
+    const trending = projectSignalDetail({ kind: "trending", video_id: "y56D2WIeKxg", videoTitle: "DRAKE - QUEBEC", channel_id: "UCByOQJjav0CUDwxCk-jVNRQ", view_count: 1220369 });
+    expect(trending.media).toEqual({ kind: "youtube", videoId: "y56D2WIeKxg", title: "DRAKE - QUEBEC" });
+    expect(JSON.stringify(trending)).not.toContain("UCByOQJjav0CUDwxCk-jVNRQ");
+    const digest = projectSignalDetail({ kind: "comment_digest", lean: "mixed", sampled: 10, videoId: "CEJXqm2eiJ0", videoTitle: "A video", comments: [{ text: "private" }] });
+    expect(digest.media).toEqual({ kind: "youtube", videoId: "CEJXqm2eiJ0", title: "A video" });
+    expect(JSON.stringify(digest)).not.toContain("private");
+    // An id that is not an id is not embedded.
+    expect(projectSignalDetail({ kind: "trending", video_id: "../evil?x=1" }).media).toBeUndefined();
+
+    const moment = projectSignalDetail({ kind: "live_moment", channel: "KaiCenat", moment: "audience_surge", rationale: "internal", stream_id: "320393470558" });
+    expect(moment.media).toEqual({ kind: "twitch", channel: "kaicenat", clip: null, title: null });
+    expect(JSON.stringify(moment)).not.toContain("internal");
+    expect(projectSignalDetail({ kind: "stream", channel: "kaicenat", title: "WOLVERINE MARATHON", clip_slug: "FunnyClip-abc_123" }).media).toEqual({ kind: "twitch", channel: "kaicenat", clip: "FunnyClip-abc_123", title: "WOLVERINE MARATHON" });
+    expect(projectSignalDetail({ kind: "stream", channel: "not a login" }).media).toBeUndefined();
+    // An article has no media: nothing is scraped from it.
+    expect(projectSignalDetail({ kind: "article", link: "https://forbes.com/a", video_id: "y56D2WIeKxg" }).media).toBeUndefined();
+
+    const game = projectSignalDetail({ kind: "game_result", week: "Week 3", home: "Miami Dolphins", away: "Kansas City Chiefs", home_score: 10, away_score: 24, game_id: "21550", subject: "Patrick Mahomes" });
+    expect(game.game).toEqual({ week: "Week 3", home: "Miami Dolphins", away: "Kansas City Chiefs", homeScore: 10, awayScore: 24 });
+    expect(projectSignalDetail({ kind: "game_result", home: "Only one side" }).game).toBeUndefined();
+  });
+
   it("says where a narrative came from", () => {
     expect(engineLead([])).toBe("The Engine");
     expect(engineLead([evidence({ detail: article("ESPN", "espn.com") }), evidence({ id: "2", detail: article("MARCA", "marca.com") }), evidence({ id: "3", detail: article("Yahoo Sports", "sports.yahoo.com") })])).toBe("The Engine, from 3 stories in ESPN and 2 others");
@@ -402,7 +425,16 @@ describe("the went-live line", () => {
         for (const text of words(copy)) expect(text).not.toMatch(/viewers?|\b40,?327\b|\bto 0\b/);
       }
     }
-    expect(projectSignalDetail(KAI_0915)).toEqual({ kind: "stream", outlet: null, domain: null, link: null, digest: null, stream: { title: KAI_0915.title, category: "Marvel's Wolverine" } });
+    // The stream's shape, and (Phase 34, from main) the official Twitch player the story card embeds for it: the channel, no clip.
+    expect(projectSignalDetail(KAI_0915)).toEqual({
+      kind: "stream",
+      outlet: null,
+      domain: null,
+      link: null,
+      digest: null,
+      stream: { title: KAI_0915.title, category: "Marvel's Wolverine" },
+      media: { kind: "twitch", channel: "kaicenat", clip: null, title: KAI_0915.title },
+    });
     expect(JSON.stringify(projectSignalDetail(KAI_0915))).not.toContain("40327");
   });
 
@@ -448,5 +480,20 @@ describe("rule 8: one card per fact", () => {
     expect(isNarrativeEvidence([])).toBe(false);
     expect(isNarrativeEvidence(null)).toBe(false);
     expect(isNarrativeEvidence(undefined)).toBe(false);
+  });
+});
+
+describe("HTML entities in stored headlines (2026-09-29)", () => {
+  it("decodes a stored article title, a digest's video title and an Engine sentence at display, double-encoded too", () => {
+    const article = signal(cenat, { headline: "Kai Cenat&#8217;s stream breaks a record", detail: { kind: "article", outlet: "Dexerto", domain: "dexerto.com", link: "https://www.dexerto.com/a", digest: null } });
+    expect(article.headline).toBe("Kai Cenat’s stream breaks a record");
+    const doubled = signal(cenat, { headline: "Kai Cenat&amp;#8217;s stream breaks a record", detail: { kind: "article", outlet: "Dexerto", domain: "dexerto.com", link: "https://www.dexerto.com/a", digest: null } });
+    expect(doubled.headline).toBe("Kai Cenat’s stream breaks a record");
+    const digest = signal(mrbeast, { sourceName: "YouTube comments", headline: "x", detail: { kind: "comment_digest", outlet: null, domain: null, link: null, digest: { lean: "mixed", videoTitle: "What&#8217;s Inside My Briefcase?", sampled: 10 } } });
+    expect(digest.headline).toBe("Comments under “What’s Inside My Briefcase?” are mixed.");
+    const narrative = narrativeCard({ subject: cenat, text: "Kai Cenat&#8217;s momentum climbed on \"a record &quot;subathon&quot;\".", impact: 0.8, evidence: [] });
+    expect(narrative.headline).toBe("a record \"subathon\"");
+    const sentence = narrativeCard({ subject: cenat, text: "Kai Cenat&#8217;s stream drew a record crowd &amp; a week of coverage.", impact: 0.8, evidence: [] });
+    expect(sentence.headline).toBe("Kai Cenat’s stream drew a record crowd & a week of coverage.");
   });
 });

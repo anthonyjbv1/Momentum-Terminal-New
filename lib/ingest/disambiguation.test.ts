@@ -259,3 +259,33 @@ describe("the obituary guard (Phase 31)", () => {
     expect(obituaryReason({ headline: "Warren Buffett hands Berkshire chairman seat to son Howard", outlet: "TheStreet", domain: "thestreet.com" })).toBeNull();
   });
 });
+
+describe("the obituary guard (hotfix 2026-09-28)", () => {
+  it("refuses the three funeral notices scored for public figures who are alive, as they were stored", () => {
+    // Larry Page, 2026-09-26 (signal 1cd53fad…): the Legacy.com notice that primed the false death.
+    expect(obituaryReason({ headline: "Larry Page Obituary (2026) - Greeneville, TN", outlet: "Legacy obituary", domain: "legacy.com" })).toEqual({ reason: "obituary", term: "obituary" });
+    // Larry Ellison, 2026-09-22 (signal 32f2e4f2…).
+    expect(obituaryReason({ headline: "Larry Dean Ellison Obituary Sep 22, 2026", outlet: "Reynolds-Love Funeral Home", domain: "reynoldslovefuneralhome.com" })).toEqual({ reason: "obituary", term: "obituary" });
+    // Michael Dell, 2026-09-24 and 2026-09-17 (signals 04d17d77…, 9c3addc6…).
+    expect(obituaryReason({ headline: "Michael Henry Dell's Obituary, Visitation & Funeral Information", outlet: "Aftercare Cremation & Burial Service", domain: "aftercare.org" })).toEqual({ reason: "obituary", term: "obituary" });
+    expect(obituaryReason({ headline: "Tribute Wall | Michael Henry Dell", outlet: "Aftercare Cremation & Burial Service", domain: "aftercare.org" })).toEqual({ reason: "obituary", term: "tribute wall" });
+  });
+
+  it("refuses on the publisher alone when the headline is only a name", () => {
+    expect(obituaryReason({ headline: "Michael Henry Dell", outlet: "Aftercare Cremation & Burial Service", domain: "aftercare.org" })).toEqual({ reason: "obituary", term: "cremation" });
+    expect(obituaryReason({ headline: "In memory of a friend", domain: "legacy.com" })).toEqual({ reason: "obituary", term: "legacy.com" });
+    expect(obituaryReason({ headline: "Larry Page", outlet: "Legacy obituary", domain: null })).toEqual({ reason: "obituary", term: "obituar" });
+  });
+
+  it("does NOT refuse the wgrv.com item of 2026-09-28 (signal 2d73f458…): a bare name from a radio station is not a funeral notice", () => {
+    // On record: the guard is about obituaries, not namesakes. The narrative guard is what stops that item becoming a death on the Feed.
+    expect(obituaryReason({ headline: "Larry Page", outlet: "wgrv.com", domain: "wgrv.com" })).toBeNull();
+  });
+
+  it("does not refuse a public figure's death reported as news, a memorial they fund, or a succession story", () => {
+    expect(obituaryReason({ headline: "Madeline Ross Dead - Sister of Adin Ross Dies at 36", outlet: "TMZ", domain: "tmz.com" })).toBeNull();
+    expect(obituaryReason({ headline: "Tay Keith, Grammy-nominated record producer, died of drug overdose: Autopsy report", outlet: "ABC News", domain: "abcnews.com" })).toBeNull();
+    expect(obituaryReason({ headline: "MrBeast funds a scholarship in Ghana", outlet: "GhanaWeb", domain: "ghanaweb.com" })).toBeNull();
+    expect(obituaryReason({ headline: "Warren Buffett hands Berkshire chairman seat to son Howard", outlet: "TheStreet", domain: "thestreet.com" })).toBeNull();
+  });
+});

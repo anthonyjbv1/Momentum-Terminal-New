@@ -9,6 +9,7 @@ import { noopUsageLogger, recordedCall, type LLMUsageLogger } from "@/lib/llm/us
 import type { Json } from "@/types/database";
 
 import { TickCallBudget, type DeferralReason } from "./budget";
+import { guardNarrative, sourceOf, zeroedGraveClaim } from "./grave-claims";
 import { metricScorer as defaultMetricScorer } from "./metric";
 import { LIVE_MOMENT_KIND, prescoredScorer } from "./prescored";
 import { buildSentimentUserPrompt, sentimentPrompt, type SentimentPromptVersion } from "./prompts";
@@ -372,6 +373,19 @@ export class LLMScorer implements SentimentScorer {
       return;
     }
 
+    // The narrative safety rule: a grave claim (a death, an arrest, a charge,
+    // a serious illness; since 2026-09-29 abuse, assault and sexual-misconduct
+    // allegations too) stands only on a reputable source or two independent
+    // outlets. Otherwise the sentence is withheld and the template speaks.
+    const guarded = guardNarrative(parsed.narrative, signals);
+    if (guarded.withheld) {
+      this.log("narrative withheld: grave claim without a reputable or second source", { personId, tickNumber, term: guarded.withheld.term, sources: guarded.withheld.sources, narrative: parsed.narrative });
+    }
+
+    // The companion scoring rule: a signal the model assessed as a death, an
+    // arrest, a charge or a serious illness scores zero on the same test.
+    const sources = signals.map(sourceOf);
+
     const byId = new Map(parsed.signals.map((s) => [s.id, s]));
     const unmatched: Pending[] = [];
     for (const item of items) {
@@ -380,25 +394,34 @@ export class LLMScorer implements SentimentScorer {
         unmatched.push(item);
         continue;
       }
-      item.resolve(this.toResult(assessment, parsed));
+      const zeroed = zeroedGraveClaim(assessment.rationale, sources);
+      if (zeroed) {
+        this.log("signal zeroed: grave claim without a reputable or second source", { personId, tickNumber, signalId: item.signal.id, headline: item.signal.headline, term: zeroed, sources, rationale: assessment.rationale });
+      }
+      item.resolve(this.toResult(assessment, { ...parsed, narrative: guarded.narrative }, zeroed));
     }
     if (unmatched.length > 0) await this.fallbackFor(unmatched, "LLM omitted the signal from its response");
   }
 
-  private toResult(assessment: ParsedSignalAssessment, parsed: Pick<ParsedResponse, "narrative" | "narrativeDirection">): SentimentResult {
+  private toResult(assessment: ParsedSignalAssessment, parsed: Pick<ParsedResponse, "narrative" | "narrativeDirection">, zeroed: string | null = null): SentimentResult {
     const multiplier = {
       routine: this.config.routineConfidenceMultiplier,
       notable: this.config.notableConfidenceMultiplier,
       anomalous: this.config.anomalousConfidenceMultiplier,
     }[assessment.anomaly];
     const direction: SentimentResult["direction"] = assessment.label === "positive" ? 1 : assessment.label === "negative" ? -1 : 0;
-    const confidence = direction === 0 ? 0 : Math.round(clamp01(assessment.confidence * multiplier) * 1000) / 1000;
+    const assessed = direction === 0 ? 0 : Math.round(clamp01(assessment.confidence * multiplier) * 1000) / 1000;
+    // Zeroed: the label and direction are kept as the model gave them (the
+    // audit trail says what it thought), the confidence is 0, so the impact
+    // is 0, and the rationale says why.
+    const confidence = zeroed ? 0 : assessed;
+    const rationale = zeroed ? `${assessment.rationale} [zeroed: a grave claim ("${zeroed}") from no reputable or second source]`.slice(0, 400) : assessment.rationale;
     return {
       label: assessment.label,
       direction,
       confidence,
       anomaly: assessment.anomaly,
-      rationale: assessment.rationale,
+      rationale,
       narrative: parsed.narrative?.trim() || undefined,
       scorer: this.name,
       // Version 2 fields only. A version-2 answer that leaves salience out is

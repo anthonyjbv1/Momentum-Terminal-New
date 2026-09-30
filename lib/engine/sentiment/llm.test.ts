@@ -419,3 +419,64 @@ describe("prompt version 2 (Phase 31)", () => {
     expect(result.narrativeDirection).toBeUndefined();
   });
 });
+
+describe("the narrative safety rule (hotfix 2026-09-28)", () => {
+  /** The wgrv.com item exactly as the scorer saw it: the RSS source at tier 3, the publisher resolved to 5. */
+  const wgrv: SentimentInput = {
+    id: "2d73f458-a4f8-4a3b-b3f5-ae810d9e1025",
+    personId: "p-buffett",
+    headline: "Larry Page",
+    rawPayload: { kind: "article", outlet: "wgrv.com", publisher_tier: 5, publisher_domain: "wgrv.com", publisher_status: "unknown" },
+    sourceName: "rss",
+    sourceTier: 3,
+  };
+  const death = "Larry Page has died. This ends his momentum profile as an active market figure.";
+
+  it("withholds a death written from one unknown outlet: the signal is still scored, the sentence is not kept, and the log says why", async () => {
+    const complete = fakeComplete(() => ({ label: "negative", confidence: 1, anomaly: "anomalous" }), death);
+    const { scorer, log } = makeScorer(complete);
+    const result = scored(await scorer.scoreSignal(wgrv));
+    expect(result).toMatchObject({ label: "negative", direction: -1, scorer: "llm" });
+    expect(result.narrative).toBeUndefined();
+    expect(log).toHaveBeenCalledWith("narrative withheld: grave claim without a reputable or second source", expect.objectContaining({ personId: "p-buffett", term: "died", sources: [{ tier: 5, outlet: "wgrv.com" }], narrative: death }));
+  });
+
+  it("keeps the same sentence when a reputable outlet is in the batch", async () => {
+    const complete = fakeComplete(() => ({ label: "negative", confidence: 1, anomaly: "anomalous" }), death);
+    const { scorer, log } = makeScorer(complete);
+    const reuters: SentimentInput = { ...wgrv, id: "s-reuters", headline: "Larry Page dies at 53", rawPayload: { kind: "article", publisher_tier: 1, publisher_domain: "reuters.com" } };
+    const results = (await Promise.all([scorer.scoreSignal(wgrv), scorer.scoreSignal(reuters)])).map(scored);
+    expect(results.map((r) => r.narrative)).toEqual([death, death]);
+    expect(log).not.toHaveBeenCalledWith("narrative withheld: grave claim without a reputable or second source", expect.anything());
+  });
+});
+
+describe("the companion scoring rule (decision 4, 2026-09-28)", () => {
+  const wgrv: SentimentInput = {
+    id: "2d73f458-a4f8-4a3b-b3f5-ae810d9e1025",
+    personId: "p-buffett",
+    headline: "Larry Page",
+    rawPayload: { kind: "article", outlet: "wgrv.com", publisher_tier: 5, publisher_domain: "wgrv.com", publisher_status: "unknown" },
+    sourceName: "rss",
+    sourceTier: 3,
+  };
+  const rationale = "Obituary published today confirms Larry Page's death, a catastrophic and unprecedented event for his momentum.";
+
+  it("scores the wgrv.com item at zero confidence, keeps the model's label and says why in the rationale, and logs it", async () => {
+    const complete = fakeComplete(() => ({ label: "negative", confidence: 1, anomaly: "anomalous", rationale }), "Momentum shifted on fresh news.");
+    const { scorer, log } = makeScorer(complete);
+    const result = scored(await scorer.scoreSignal(wgrv));
+    expect(result).toMatchObject({ label: "negative", direction: -1, confidence: 0, scorer: "llm" });
+    expect(result.rationale).toBe(`${rationale} [zeroed: a grave claim ("obituary") from no reputable or second source]`);
+    expect(log).toHaveBeenCalledWith("signal zeroed: grave claim without a reputable or second source", expect.objectContaining({ signalId: wgrv.id, term: "obituary", sources: [{ tier: 5, outlet: "wgrv.com" }] }));
+  });
+
+  it("scores the same assessment in full beside a reputable outlet", async () => {
+    const complete = fakeComplete(() => ({ label: "negative", confidence: 1, anomaly: "anomalous", rationale }), "Momentum shifted on fresh news.");
+    const { scorer, log } = makeScorer(complete);
+    const reuters: SentimentInput = { ...wgrv, id: "s-reuters", rawPayload: { kind: "article", publisher_tier: 1, publisher_domain: "reuters.com" } };
+    const results = (await Promise.all([scorer.scoreSignal(wgrv), scorer.scoreSignal(reuters)])).map(scored);
+    expect(results.map((r) => r.confidence)).toEqual([1, 1]);
+    expect(log).not.toHaveBeenCalledWith("signal zeroed: grave claim without a reputable or second source", expect.anything());
+  });
+});
