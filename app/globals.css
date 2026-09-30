@@ -7,10 +7,18 @@
     color-scheme: dark;
   }
 
+  /* The document is the app's scroll container (the banner and the tab bar
+     are fixed over it). Its scroll indicator is hidden (2026-09-30): touch,
+     wheel and keyboard scrolling are untouched, only the bar is gone. Inner
+     scrollers (the right rail) keep the styled bar below. */
   html {
     background-color: var(--color-canvas);
     -webkit-text-size-adjust: 100%;
     scrollbar-color: var(--color-line-strong) transparent;
+    scrollbar-width: none;
+  }
+  html::-webkit-scrollbar {
+    display: none;
   }
 
   body {
