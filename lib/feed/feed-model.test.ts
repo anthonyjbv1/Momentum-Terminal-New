@@ -187,6 +187,41 @@ describe("toFeedEntry", () => {
   });
 });
 
+describe("a story entry (Part B)", () => {
+  it("reads the story's span, the move today against the whole, and is always a card", () => {
+    const lead = "cccccccc-0000-4000-8000-000000000001";
+    const copy = "cccccccc-0000-4000-8000-000000000002";
+    const later = "cccccccc-0000-4000-8000-000000000003";
+    const lastAt = iso(NOW);
+    const made = toFeedEntry(
+      row({
+        kind: "story",
+        id: "dddddddd-0000-4000-8000-000000000001",
+        text: "Drake drops surprise album",
+        impact: "1.05",
+        score_before: null,
+        score_after: null,
+        tick_number: null,
+        occurred_at: lastAt,
+        story_first_at: iso(NOW - 3 * 86_400_000),
+        story_signals: 3,
+        sources: ["RSS (per-person news feed)"],
+        evidence: [
+          { id: lead, headline: "Drake drops surprise album", source: "RSS (per-person news feed)", impact: 0.8, occurred_at: iso(NOW - 3 * 86_400_000), processed: true, relation: "direct" },
+          { id: copy, headline: "Drake's surprise album lands", source: "RSS (per-person news feed)", impact: 0.15, occurred_at: iso(NOW - 2 * 86_400_000), processed: true, relation: "direct" },
+          { id: later, headline: "Drake's album: the reviews", source: "RSS (per-person news feed)", impact: 0.1, occurred_at: iso(NOW - 3_600_000), processed: true, relation: "direct" },
+        ],
+      }),
+      { details: new Map([[lead, article], [copy, article], [later, article]]), companies: new Map() },
+    );
+    expect(made).toMatchObject({ kind: "story", impact: 1.05, direction: "heating", occurredAt: lastAt, story: { lastAt, signalCount: 3, impactTotal: 1.05 } });
+    expect(made?.story?.impactToday).toBeCloseTo(0.1, 6);
+    expect(made?.copy).toEqual({ label: "Billboard", headline: "Drake drops surprise album", link: "https://www.billboard.com/story", line: "3 stories in Billboard · +0.1 today · +1.1 over 3 days.", attribution: "Billboard", quoted: true });
+    expect(made ? isCard(made) : null).toBe(true);
+    expect(made?.evidence).toHaveLength(3);
+  });
+});
+
 describe("paging", () => {
   it("cursors from the last entry of a full page only", () => {
     const full = Array.from({ length: 3 }, (_, index) => entry({ id: `e${index}`, occurredAt: iso(NOW - index * 1000) }));

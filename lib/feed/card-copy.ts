@@ -654,6 +654,63 @@ export function narrativeCard(input: NarrativeCardInput): CardCopy {
 }
 
 // ---------------------------------------------------------------------------
+// Stories (Feed upgrade, Part B)
+// ---------------------------------------------------------------------------
+
+export interface StoryCardInput {
+  subject: CardSubject;
+  /** The leader's headline, as stored. */
+  headline: string;
+  impactToday: number;
+  impactTotal: number;
+  /** How many calendar days the story spans, at least 1. */
+  days: number;
+  evidence: CardEvidenceInput[];
+}
+
+/** How many days a story spans, first signal to last: the same day is 1. */
+export function storyDays(firstAt: string, lastAt: string): number {
+  const span = Date.parse(lastAt) - Date.parse(firstAt);
+  if (!Number.isFinite(span) || span <= 0) return 1;
+  return Math.max(1, Math.ceil(span / 86_400_000));
+}
+
+/**
+ * The move of a story: "+0.6 today · +1.4 over 3 days". A story inside one
+ * day, or one whose whole move happened today, says the total once.
+ */
+export function storyMove(impactToday: number, impactTotal: number, days: number): string {
+  const today = signedMove(impactToday);
+  const total = signedMove(impactTotal);
+  if (days <= 1 || today === total) return `${total} today`;
+  return `${today} today · ${total} over ${days} days`;
+}
+
+/**
+ * The story card: the leader's headline (the publisher's, linked, under its
+ * outlet, when the leader is an article), and one line that says where the
+ * copies came from and how the score moved today and over the story's life.
+ * The person is named once (rule 7): in the line, since the headline is the
+ * publisher's or a stored sentence that may not name them.
+ */
+export function storyCard(input: StoryCardInput): CardCopy {
+  const { subject, evidence } = input;
+  const leader = evidence.find((item) => item.relation === "direct") ?? null;
+  const rendered = leader ? evidenceSentence(leader, subject) : { headline: input.headline, quoted: false };
+  const outlet = leader && rendered.quoted ? outletName(leader.detail?.outlet, leader.detail?.domain) : null;
+  const lead = engineLead(evidence).replace(/^The Engine, from /, "").replace(/^The Engine$/, "Coverage");
+  const who = namesPerson(rendered.headline, subject.name) ? "" : `${shortName(subject.name)} `;
+  return {
+    label: outlet,
+    headline: rendered.headline,
+    link: outlet ? (leader?.detail?.link ?? null) : null,
+    line: `${lead[0].toUpperCase()}${lead.slice(1)} · ${who}${storyMove(input.impactToday, input.impactTotal, input.days)}.`,
+    attribution: engineAttribution(evidence).replace(/^The Engine · /, "").replace(/^The Engine$/, "Coverage"),
+    quoted: rendered.quoted,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Detail panels
 // ---------------------------------------------------------------------------
 
