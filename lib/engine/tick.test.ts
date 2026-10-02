@@ -663,3 +663,74 @@ describe("Engine tick — freshness", () => {
     expect(summary.scoring.expired).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE NEWS-VOLUME TUNE (variant C, 2026-10-02)
+// ---------------------------------------------------------------------------
+
+describe("Engine tick — the news-volume tune", () => {
+  const minutesBefore = (minutes: number) => new Date(NOW.getTime() - minutes * 60_000);
+  const article = (id: string, headline: string, minutesAgo: number): EngineSignal => ({ id, personId: "p-drake", headline, rawPayload: { kind: "article" }, sourceName: "rss", sourceTier: 2, occurredAt: minutesBefore(minutesAgo), createdAt: NOW });
+  const firing = (id: string, sigma: number, at: Date): EngineSignal => ({
+    id,
+    personId: "p-drake",
+    headline: "Drake is getting more coverage than usual",
+    rawPayload: { kind: "metric", metric: "news_volume_24h", label: "news volume", sigma, polarity: 1, scale: 0.7, window_hours: 336, source: "rss" },
+    sourceName: "rss",
+    sourceTier: 2,
+    occurredAt: at,
+    createdAt: at,
+  });
+  const allegations = [article("a1", "Drake sued over lawsuit claims", 30), article("a2", "Drake scandal deepens as fraud alleged", 20), article("a3", "Drake arrested, charged with fraud", 10)];
+  const quiet = withEngineConfig({ marketMood: { ratePerHour: 0 }, inversePairs: { defaultDampening: 0 } });
+  const tuned = withEngineConfig({ newsVolume: { enabled: true } }, quiet);
+
+  it("off, the metric scorer's reading stands: a surge is a positive move whatever the stories say", async () => {
+    const store = createMemoryEngineStore(seed({ signals: [...allegations, firing("nv", 3, NOW)] }));
+    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config: quiet });
+    const nv = summary.signals.find((s) => s.id === "nv")!;
+    expect(nv.impact).toBeCloseTo(1.5 * 1 * 0.7, 6);
+    expect(nv.newsVolume).toBeUndefined();
+  });
+
+  it("on, the firing takes the rule's reading: signed by its stories, sized by the surge, capped; the stories themselves are untouched", async () => {
+    const store = createMemoryEngineStore(seed({ signals: [...allegations, firing("nv", 3, NOW)] }));
+    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config: tuned });
+    const stories = summary.signals.filter((s) => s.id.startsWith("a"));
+    expect(stories).toHaveLength(3);
+    expect(stories.every((s) => s.impact < 0)).toBe(true);
+    const signed = stories.reduce((sum, s) => sum + s.impact, 0);
+    const nv = summary.signals.find((s) => s.id === "nv")!;
+    expect(nv.newsVolume).toMatchObject({ sigma: 3, signedStories: 3, balance: -1, multiplier: 1.5, zeroBecause: null, dayBefore: { peakSigma: null, applied: 0 } });
+    expect(nv.impact).toBeCloseTo(-Math.min(0.75, 0.5 * Math.abs(signed)), 6);
+    // The stored impact is the rule's, so the day's state can be read back from it.
+    expect(store.processedSignals.find((s) => s.id === "nv")?.impactScore).toBeCloseTo(nv.impact, 6);
+    const event = store.scoreEvents.find((e) => e.personId === "p-drake" && e.force === "signals")!;
+    expect((event.details as { signals: Array<{ id: string; newsVolume?: unknown }> }).signals.find((s) => s.id === "nv")?.newsVolume).toBeDefined();
+  });
+
+  it("across ticks, the day keeps a running peak: a smaller firing adds nothing, a larger one adds the difference, and a lull nothing", async () => {
+    const store = createMemoryEngineStore(seed({ signals: [...allegations, firing("nv1", 3, NOW)] }));
+    const first = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config: tuned });
+    const applied = first.signals.find((s) => s.id === "nv1")!.impact;
+    expect(applied).toBeLessThan(0);
+
+    const t2 = new Date(NOW.getTime() + 30_000);
+    store.signals.push({ ...firing("nv2", 2.5, t2) });
+    const second = await runEngineTick({ store, scorer: rulesBasedScorer, now: t2, config: tuned });
+    expect(second.signals.find((s) => s.id === "nv2")).toMatchObject({ impact: 0, newsVolume: { zeroBecause: "not_the_peak", dayBefore: { peakSigma: 3, applied: expect.closeTo(applied, 6) } } });
+
+    const t3 = new Date(NOW.getTime() + 60_000);
+    store.signals.push({ ...firing("nv3", 4, t3) });
+    const third = await runEngineTick({ store, scorer: rulesBasedScorer, now: t3, config: tuned });
+    const nv3 = third.signals.find((s) => s.id === "nv3")!;
+    expect(nv3.newsVolume?.multiplier).toBe(2);
+    expect(nv3.newsVolume?.reading).toBeCloseTo(Math.max(-0.75, 2 * applied), 6);
+    expect(nv3.impact).toBeCloseTo(nv3.newsVolume!.reading - applied, 6);
+
+    const t4 = new Date(NOW.getTime() + 90_000);
+    store.signals.push({ ...firing("nv4", -2.2, t4) });
+    const fourth = await runEngineTick({ store, scorer: rulesBasedScorer, now: t4, config: tuned });
+    expect(fourth.signals.find((s) => s.id === "nv4")).toMatchObject({ impact: 0, newsVolume: { zeroBecause: "lull" } });
+  });
+});

@@ -264,6 +264,8 @@ export function signalsForce(scored: ScoredSignal[], config: EngineConfig["signa
         // Phase 31, present only while the quality rules are on.
         ...(s.salienceWeight !== undefined ? { salience: s.sentiment.salience ?? null, salienceWeight: s.salienceWeight } : {}),
         ...(s.story ? { story: s.story } : {}),
+        // The news-volume tune's reading (variant C), present only on a news-volume firing while the tune is on.
+        ...(s.newsVolume ? { newsVolume: s.newsVolume } : {}),
         scorer: s.sentiment.scorer,
         anomaly: s.sentiment.anomaly,
         rationale: s.sentiment.rationale,

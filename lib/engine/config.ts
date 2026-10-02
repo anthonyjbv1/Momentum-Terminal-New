@@ -552,6 +552,35 @@ export interface EngineConfig {
     /** The most a confirming copy contributes, in points, whatever its own impact. */
     storyConfirmationCap: number;
   };
+  /**
+   * THE NEWS-VOLUME TUNE (variant C, 2026-10-02; lib/engine/news-volume.ts).
+   * The news_volume_24h metric's reading, replaced: one firing a day counts
+   * (the day's largest sigma, kept as a running peak), its sign is the
+   * confidence-weighted count balance of the stories in its window, a
+   * balance inside the dead zone or fewer than minSignedStories signed
+   * stories reads as nothing, a lull (sigma at or below 0) reads as nothing,
+   * its size is (min(maxMultiplier, sigma / thresholdSigma) − 1) times the
+   * window's signed story impact, and the day is capped at ceilingPoints.
+   * Off, the metric scorer's reading stands exactly as before.
+   */
+  newsVolume: {
+    /** The switch. Ships false. NEWS_VOLUME_TUNE_ENABLED=true turns it on deliberately. */
+    enabled: boolean;
+    /** The metric key the tune replaces. */
+    metric: string;
+    /** The stories driving the surge: the person's articles over this many hours up to the firing (the metric's own window). */
+    windowHours: number;
+    /** The sigma the metric fires at; the multiplier is sigma over this. */
+    thresholdSigma: number;
+    /** The multiplier's cap: four sigma doubles the stories, no surge more than that. */
+    maxMultiplier: number;
+    /** A balance inside ±deadZone is mixed coverage and reads as nothing. */
+    deadZone: number;
+    /** Fewer signed stories than this and the surge has no lean to read. */
+    minSignedStories: number;
+    /** The most a person's news volume moves them in one UTC day, in points, either way. */
+    ceilingPoints: number;
+  };
 }
 
 export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
@@ -643,6 +672,16 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     storyConfirmationShare: 0.2,
     storyConfirmationCap: 0.15,
   },
+  newsVolume: {
+    enabled: false,
+    metric: "news_volume_24h",
+    windowHours: 24,
+    thresholdSigma: 2,
+    maxMultiplier: 2,
+    deadZone: 0.25,
+    minSignedStories: 3,
+    ceilingPoints: 0.75,
+  },
 };
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
@@ -719,6 +758,12 @@ export interface EngineEnvOverrides {
    * turns it on, like the two cron flags; anything else leaves it off.
    */
   signalQualityEnabled?: string | undefined;
+  /**
+   * NEWS_VOLUME_TUNE_ENABLED. The switch of the news-volume tune (variant C;
+   * newsVolume.enabled, default false). Only the exact string "true" turns
+   * it on; anything else leaves it off.
+   */
+  newsVolumeTuneEnabled?: string | undefined;
 }
 
 /** A strictly positive integer from a raw environment string, or null. */
@@ -752,6 +797,7 @@ export function engineConfigFromEnv(env: EngineEnvOverrides, base: EngineConfig 
   if (parseExactTrue(env.targetDriftEnabled)) overrides.targetDrift = { enabled: true };
   // Handed over whole, like the volume block below: the section carries nested tunables.
   if (parseExactTrue(env.signalQualityEnabled)) overrides.signalQuality = { ...base.signalQuality, enabled: true };
+  if (parseExactTrue(env.newsVolumeTuneEnabled)) overrides.newsVolume = { ...base.newsVolume, enabled: true };
   const volumeReference = parsePositiveNumber(env.volumeReference);
   // withEngineConfig merges ONE level deep, so a nested section has to be
   // handed over whole: `{ volume: { referenceSignalsPerDay } }` alone would
@@ -782,6 +828,9 @@ export function describeEngineOverrides(config: EngineConfig, base: EngineConfig
   }
   if (config.signalQuality.enabled !== base.signalQuality.enabled) {
     out.push(`signalQuality.enabled = ${config.signalQuality.enabled} (default ${base.signalQuality.enabled})`);
+  }
+  if (config.newsVolume.enabled !== base.newsVolume.enabled) {
+    out.push(`newsVolume.enabled = ${config.newsVolume.enabled} (default ${base.newsVolume.enabled})`);
   }
   return out;
 }

@@ -9,6 +9,7 @@ import { inversePairAdjustments } from "@/lib/engine/inverse-pairs";
 import { clamp, round } from "@/lib/engine/math";
 import { isFreeSignal, selectTickSignals } from "@/lib/engine/selection";
 import { getSentimentScorer } from "@/lib/engine/sentiment";
+import { tuneNewsVolume } from "@/lib/engine/news-volume";
 import { volumeWeight } from "@/lib/engine/signal-volume";
 import { confirmStories, storyOptions } from "@/lib/engine/stories";
 import { storyRecords } from "@/lib/engine/story-records";
@@ -195,6 +196,10 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       scoredSignals = confirmed.scored;
       storyClusters = confirmed.clusters;
     }
+    // The news-volume tune (variant C, 2026-10-02): a news-volume firing's
+    // impact becomes the rule's reading, once a day, signed by its stories,
+    // capped. Off, the metric scorer's reading stands and nothing is loaded.
+    if (config.newsVolume.enabled) scoredSignals = tuneNewsVolume(scoredSignals, context.newsVolumeByPerson?.get(person.id), config.newsVolume);
     const signalsEntry = signalsForce(scoredSignals, config.signals, volume);
     const signals = roundForce(quality ? { ...signalsEntry, details: { ...signalsEntry.details, salienceMultipliers: quality.salienceMultipliers, storyClusters } } : signalsEntry);
     // The target: the seed, plus the drift's offset when the drift is on.
@@ -385,6 +390,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       ...(s.sentiment.salience ? { salience: s.sentiment.salience } : {}),
       ...(s.salienceWeight !== undefined ? { salienceWeight: s.salienceWeight } : {}),
       ...(s.story ? { story: s.story } : {}),
+      ...(s.newsVolume ? { newsVolume: s.newsVolume } : {}),
       narrative: s.sentiment.narrative,
       ...(s.sentiment.narrativeDirection ? { narrativeDirection: s.sentiment.narrativeDirection } : {}),
     })),

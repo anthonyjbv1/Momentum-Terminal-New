@@ -190,6 +190,7 @@ export function getEngineEnvOverrides(): {
   moodWindowMinutes: string | undefined;
   moodRatePerHour: string | undefined;
   signalQualityEnabled: string | undefined;
+  newsVolumeTuneEnabled: string | undefined;
 } {
   return {
     tradingMinPopulatedWindows: process.env.ENGINE_TRADING_MIN_POPULATED_WINDOWS,
@@ -198,6 +199,7 @@ export function getEngineEnvOverrides(): {
     moodWindowMinutes: process.env.ENGINE_MOOD_WINDOW_MINUTES,
     moodRatePerHour: process.env.ENGINE_MOOD_RATE_PER_HOUR,
     signalQualityEnabled: process.env.SIGNAL_QUALITY_ENABLED,
+    newsVolumeTuneEnabled: process.env.NEWS_VOLUME_TUNE_ENABLED,
   };
 }
 
@@ -211,6 +213,16 @@ export function getEngineEnvOverrides(): {
  */
 export function isSignalQualityEnabled(): boolean {
   return process.env.SIGNAL_QUALITY_ENABLED?.trim() === "true";
+}
+
+/**
+ * The switch of the news-volume tune (variant C, 2026-10-02): the
+ * news_volume_24h metric read once a day, signed by its stories, capped.
+ * Exactly "true" turns it on; it ships unset, which is off, and off means
+ * the metric scorer's reading stands exactly as before.
+ */
+export function isNewsVolumeTuneEnabled(): boolean {
+  return process.env.NEWS_VOLUME_TUNE_ENABLED?.trim() === "true";
 }
 
 /**

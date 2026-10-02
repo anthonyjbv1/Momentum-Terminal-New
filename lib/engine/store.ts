@@ -2,6 +2,7 @@ import type { EngineConfig } from "@/lib/engine/config";
 import type { MoodWindowHistory } from "@/lib/engine/forces/market-mood";
 import { isFreeSignal } from "@/lib/engine/selection";
 import { LIVE_MOMENT_KIND } from "@/lib/engine/sentiment/prescored";
+import { dayStateFromSignals, type NewsVolumeContext, type WindowStory } from "@/lib/engine/news-volume";
 import { readSignalVolumeRow, type PersonSignalVolume, type PersonSignalVolumeRow } from "@/lib/engine/signal-volume";
 import { VOIDED_COLUMN_PATH } from "@/lib/signals/voided";
 import type {
@@ -86,6 +87,41 @@ export function groupRecentStories(rows: Array<{ id: string; person_id: string; 
     const list = out.get(row.person_id) ?? [];
     list.push({ id: row.id, personId: row.person_id, headline: row.headline, occurredAt: new Date(row.occurred_at), impact });
     out.set(row.person_id, list);
+  }
+  return out;
+}
+
+/**
+ * The news-volume tune's inputs per person (variant C), as the store reads
+ * them back: the signed article stories of the trailing window and the
+ * day's state from the processed news-volume signals of the UTC day.
+ */
+export function groupNewsVolumeContext(
+  stories: Array<{ person_id: string; impact_score: number | string | null; sentiment_confidence: number | string | null; occurred_at: string }>,
+  firings: Array<{ person_id: string; impact_score: number | string | null; occurred_at: string; sigma: number | string | null }>,
+  activeIds: Set<string>,
+  now: Date,
+): Map<string, NewsVolumeContext> {
+  const storiesByPerson = new Map<string, WindowStory[]>();
+  for (const row of stories) {
+    if (!activeIds.has(row.person_id)) continue;
+    const impact = Number(row.impact_score);
+    if (!Number.isFinite(impact) || impact === 0) continue;
+    const list = storiesByPerson.get(row.person_id) ?? [];
+    list.push({ occurredAt: new Date(row.occurred_at), impact, confidence: Number(row.sentiment_confidence ?? 0) || 0 });
+    storiesByPerson.set(row.person_id, list);
+  }
+  const firingsByPerson = new Map<string, Array<{ sigma: number | null; impact: number; occurredAt: Date }>>();
+  for (const row of firings) {
+    if (!activeIds.has(row.person_id)) continue;
+    const list = firingsByPerson.get(row.person_id) ?? [];
+    const sigma = row.sigma === null ? null : Number(row.sigma);
+    list.push({ sigma: sigma !== null && Number.isFinite(sigma) ? sigma : null, impact: Number(row.impact_score) || 0, occurredAt: new Date(row.occurred_at) });
+    firingsByPerson.set(row.person_id, list);
+  }
+  const out = new Map<string, NewsVolumeContext>();
+  for (const id of new Set([...storiesByPerson.keys(), ...firingsByPerson.keys()])) {
+    out.set(id, { stories: (storiesByPerson.get(id) ?? []).sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime()), today: dayStateFromSignals(firingsByPerson.get(id) ?? [], now) });
   }
   return out;
 }
@@ -183,6 +219,44 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         recentStoriesByPerson = groupRecentStories(recent.data ?? [], activeIds);
       }
 
+      // The news-volume tune's inputs (variant C), read only while the tune is
+      // on: the signed articles of the trailing window and today's processed
+      // news-volume firings (the day's peak sigma and what it was given).
+      let newsVolumeByPerson: Map<string, NewsVolumeContext> | undefined;
+      if (config.newsVolume.enabled) {
+        const windowSince = new Date(now.getTime() - config.newsVolume.windowHours * 3600 * 1000).toISOString();
+        const dayStart = `${now.toISOString().slice(0, 10)}T00:00:00.000Z`;
+        const [windowStories, todaysFirings] = await Promise.all([
+          client
+            .from("signals")
+            .select("person_id, impact_score, sentiment_confidence, occurred_at")
+            .eq("processed", true)
+            .is(VOIDED_COLUMN_PATH, null)
+            .eq("raw_payload->>kind", "article")
+            .neq("impact_score", 0)
+            .gte("occurred_at", windowSince)
+            .in("person_id", [...activeIds])
+            .limit(2_000),
+          client
+            .from("signals")
+            .select("person_id, impact_score, occurred_at, sigma:raw_payload->sigma")
+            .eq("processed", true)
+            .is(VOIDED_COLUMN_PATH, null)
+            .eq("raw_payload->>metric", config.newsVolume.metric)
+            .gte("occurred_at", dayStart)
+            .in("person_id", [...activeIds])
+            .limit(2_000),
+        ]);
+        if (windowStories.error) throw new Error(`Engine failed to load news-volume stories: ${windowStories.error.message}`);
+        if (todaysFirings.error) throw new Error(`Engine failed to load news-volume firings: ${todaysFirings.error.message}`);
+        newsVolumeByPerson = groupNewsVolumeContext(
+          windowStories.data ?? [],
+          (todaysFirings.data ?? []) as Array<{ person_id: string; impact_score: number | string | null; occurred_at: string; sigma: number | string | null }>,
+          activeIds,
+          now,
+        );
+      }
+
       const engineSignals: EngineSignal[] = (signals.data ?? [])
         .filter((row) => activeIds.has(row.person_id))
         .map((row) => ({
@@ -214,6 +288,7 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         signalActivityByPerson: aggregateSignalActivity(activity.data ?? []),
         signalVolumeByPerson: new Map(((volume.data ?? []) as PersonSignalVolumeRow[]).map(readSignalVolumeRow)),
         ...(recentStoriesByPerson ? { recentStoriesByPerson } : {}),
+        ...(newsVolumeByPerson ? { newsVolumeByPerson } : {}),
         tradeEvents,
         moodWindow: readMoodWindowHistory(moodEvents.data ?? [], activeIds),
         inversePairs: pairs.data ?? [],
@@ -294,6 +369,20 @@ export interface MemoryEngineStore extends EngineStore {
   readonly processedSignals: TickPersistence["signals"];
 }
 
+function isArticlePayload(payload: unknown): boolean {
+  return payload !== null && typeof payload === "object" && !Array.isArray(payload) && (payload as Record<string, unknown>).kind === "article";
+}
+function metricKey(payload: unknown): string | null {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const record = payload as Record<string, unknown>;
+  return record.kind === "metric" && typeof record.metric === "string" ? record.metric : null;
+}
+function metricSigma(payload: unknown): number | null {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const sigma = (payload as Record<string, unknown>).sigma;
+  return typeof sigma === "number" && Number.isFinite(sigma) ? sigma : null;
+}
+
 export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineStore {
   const people = seed.people.map((p) => ({ ...p }));
   const signals = (seed.signals ?? []).map((s) => ({ ...s }));
@@ -350,6 +439,31 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
                     occurred_at: s.occurredAt.toISOString(),
                   })),
                 activeIds,
+              ),
+            }
+          : {}),
+        // The news-volume tune's inputs (variant C), from what this store has scored, as the Supabase store reads them back.
+        ...(config.newsVolume.enabled
+          ? {
+              newsVolumeByPerson: groupNewsVolumeContext(
+                signals
+                  .filter((s) => s.processed && activeIds.has(s.personId) && isArticlePayload(s.rawPayload) && s.occurredAt.getTime() >= now.getTime() - config.newsVolume.windowHours * 3600 * 1000)
+                  .map((s) => ({
+                    person_id: s.personId,
+                    impact_score: processedSignals.find((p) => p.id === s.id)?.impactScore ?? 0,
+                    sentiment_confidence: s.sentimentConfidence ?? null,
+                    occurred_at: s.occurredAt.toISOString(),
+                  })),
+                signals
+                  .filter((s) => s.processed && activeIds.has(s.personId) && metricKey(s.rawPayload) === config.newsVolume.metric)
+                  .map((s) => ({
+                    person_id: s.personId,
+                    impact_score: processedSignals.find((p) => p.id === s.id)?.impactScore ?? 0,
+                    occurred_at: s.occurredAt.toISOString(),
+                    sigma: metricSigma(s.rawPayload),
+                  })),
+                activeIds,
+                now,
               ),
             }
           : {}),

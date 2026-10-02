@@ -65,8 +65,11 @@ export interface ScoredSignal {
   salienceWeight?: number;
   /** Set when this signal confirmed a story already scored (Phase 31): its impact was bounded to a confirmation. */
   story?: StoryConfirmation;
+  /** Set on a news-volume firing while the tune is on (variant C, 2026-10-02): the reading behind the impact. */
+  newsVolume?: NewsVolumeDetail;
 }
 
+import type { NewsVolumeContext, NewsVolumeDetail } from "./news-volume";
 import type { StoryClusterRecord } from "./story-records";
 
 /** How a confirming copy of an already-scored story was bounded (Phase 31). */
@@ -124,6 +127,8 @@ export interface TickContext {
   signalVolumeByPerson: Map<string, PersonSignalVolume>;
   /** Event signals scored inside the story window, per person (Phase 31). Loaded only while the quality rules are on. */
   recentStoriesByPerson?: Map<string, RecentStory[]>;
+  /** The news-volume tune's inputs per person (variant C): the window's signed stories and the day's state. Loaded only while the tune is on. */
+  newsVolumeByPerson?: Map<string, NewsVolumeContext>;
   /** Trade events inside the Trading Activity history window. */
   tradeEvents: TradeEvent[];
   /**
@@ -270,6 +275,8 @@ export interface TickSummary {
     salienceWeight?: number;
     /** Set when the impact was bounded as a confirmation of an already-scored story (Phase 31). */
     story?: StoryConfirmation;
+    /** The news-volume tune's reading behind a news-volume firing's impact (variant C, 2026-10-02). */
+    newsVolume?: NewsVolumeDetail;
     /** The Engine's one-sentence explanation from LLM reasoning, reused by narratives. */
     narrative?: string;
     /** The direction the narrative claims (Phase 31), checked against the Signals force before it is published. */
