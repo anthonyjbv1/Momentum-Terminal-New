@@ -51,7 +51,7 @@ describe("every way in is closed while the switch is off", () => {
     { path: "app/join/[token]/actions.ts", why: "the join form refuses", pattern: /enabled: isBetaSignupEnabled\(\)/ },
     { path: "app/start/page.tsx", why: "onboarding 404s", pattern: /if \(!isBetaSignupEnabled\(\)\) notFound\(\)/ },
     { path: "app/start/actions.ts", why: "onboarding actions go Home", pattern: /if \(!isBetaSignupEnabled\(\)\) redirect\("\/"\)/ },
-    { path: "app/(app)/person/[slug]/page.tsx", why: "no guided tour on a person's page (Phase 32b)", pattern: /tour && user && isBetaSignupEnabled\(\) && profile\.person\.tradingMode === "tradeable" \? <ProductTour/ },
+    { path: "app/(app)/person/[slug]/page.tsx", why: "no guided tour on a person's page (Phase 32b)", pattern: /tour && user && isBetaSignupEnabled\(\) && person\.tradingMode === "tradeable" \? <ProductTour/ },
     { path: "app/(public)/terms/page.tsx", why: "the draft Terms 404", pattern: /if \(!isBetaSignupEnabled\(\)\) notFound\(\)/ },
     { path: "app/(app)/profile/page.tsx", why: "the old profile renders", pattern: /if \(isBetaSignupEnabled\(\)\) \{[\s\S]*return <MemberProfile/ },
     { path: "app/(app)/profile/actions.ts", why: "profile actions do nothing", pattern: /if \(!isBetaSignupEnabled\(\)\) redirect\("\/profile"\)/ },

@@ -3146,6 +3146,7 @@ export type Database = {
         Returns: number
       }
       new_referral_code: { Args: never; Returns: string }
+      person_profile_header: { Args: { p_slug: string }; Returns: Json }
       person_market_series: {
         Args: { p_person_id: string; p_points?: number; p_since?: string }
         Returns: {

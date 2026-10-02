@@ -9,15 +9,15 @@ type Params = Promise<{ slug: string }>;
 
 /**
  * The person page's desktop rail: the signal list, beside the score. The
- * reads are shared with the page through React cache(), so the rail costs
- * no extra queries. Unknown slugs render nothing; the page itself 404s.
+ * reads are shared with the page through React cache(), keyed by the slug
+ * (2026-10-02; an object literal as the key made the rail re-run the
+ * signals and narratives reads), so the rail costs no extra queries.
+ * Unknown slugs render nothing; the page itself 404s.
  */
 export default async function PersonRail({ params }: { params: Params }) {
   const { slug } = await params;
-  const [person, user] = await Promise.all([getPersonBySlug(slug).catch(() => null), getCurrentUser().catch(() => null)]);
+  const [person, user, signals] = await Promise.all([getPersonBySlug(slug).catch(() => null), getCurrentUser().catch(() => null), getPersonSignals(slug).catch(() => [])]);
   if (!person) return null;
-
-  const signals = await getPersonSignals({ id: person.id, displayName: person.displayName, category: person.category });
 
   return <SignalsList items={signals} personId={person.id} personName={person.displayName} loggingEnabled={Boolean(user)} renderedAt={getRenderedAt()} />;
 }

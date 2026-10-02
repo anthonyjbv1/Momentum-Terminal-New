@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
+import { Suspense, use, useCallback, useEffect, useMemo, useState } from "react";
 
 import { cn } from "@/lib/cn";
 import { relativeTime } from "@/lib/home/relative-time";
@@ -17,7 +17,9 @@ import {
   tradingAvailability,
   type PeriodChange,
   type PersonProfile,
+  type ProfilePerson,
   type RangeKey,
+  type SeriesByRange,
   type TradingAvailability,
 } from "@/lib/person/profile-model";
 import type { OrderSide } from "@/lib/trading/direction";
@@ -32,6 +34,7 @@ import { SectionHeader } from "@/components/ui/page-header";
 import { ScoreDisplay } from "@/components/ui/score-display";
 import { useNow } from "@/components/ui/use-now";
 
+import { ChangeLineSkeleton, ChartSkeleton } from "./profile-skeleton";
 import { RangeToggle } from "./range-toggle";
 import { ScoreChart } from "./score-chart";
 import { TradeActions, TradeBar } from "./trade-bar";
@@ -65,7 +68,16 @@ import { PROFILE_SURFACE, logProfileEvent } from "./use-profile-logging";
  * the new tick. With the Engine dormant nothing changes.
  */
 export interface ScorePanelProps {
-  profile: PersonProfile;
+  person: ProfilePerson;
+  /** The person's newest score_history row, or null before their first tick. */
+  latestTick: PersonProfile["latestTick"];
+  /**
+   * The chart's series, streamed in after the score (2026-10-02): the panel
+   * renders the number, the market line and the Buy / Sell entry from the
+   * slug lookup, and the change line and the chart wait on this behind
+   * their own boundary. Given resolved, the chart renders at once.
+   */
+  series: Promise<SeriesByRange> | SeriesByRange;
   loggingEnabled: boolean;
   /** Server render time, so relative ages agree between server and client. */
   renderedAt: number;
@@ -174,10 +186,20 @@ function AvailabilityNotice({ availability, personName }: { availability: Tradin
   );
 }
 
-export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnabled, viewer: initialViewer, toleranceCents, minOrderCents, live, className }: ScorePanelProps) {
-  const { person, series: initialSeries, latestTick } = profile;
+/** Hands the streamed series to the live hook the moment it resolves; renders nothing. */
+function SeriesSeed({ series, onSeries }: { series: Promise<SeriesByRange>; onSeries: (series: SeriesByRange) => void }) {
+  const resolved = use(series);
+  useEffect(() => {
+    onSeries(resolved);
+  }, [resolved, onSeries]);
+  return null;
+}
+
+export function ScorePanel({ person, latestTick, series: seriesInput, loggingEnabled, renderedAt, shortingEnabled, viewer: initialViewer, toleranceCents, minOrderCents, live, className }: ScorePanelProps) {
   const router = useRouter();
-  const { state, applyQuote, refresh } = useLiveSeries(person, initialSeries, live);
+  // A series handed over resolved seeds the hook at once; a promise seeds it when it lands.
+  const initialSeries = seriesInput instanceof Promise ? null : seriesInput;
+  const { state, seeded, seed, applyQuote, refresh } = useLiveSeries(person, initialSeries, live);
   const series = state.series;
   const now = useNow(renderedAt);
 
@@ -185,7 +207,7 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnable
     () => Object.fromEntries(RANGES.map((range) => [range.key, rangeAvailable(series[range.key])])) as Record<RangeKey, boolean>,
     [series],
   );
-  const [chosen, setChosen] = useState<RangeKey | null>(() => defaultRange(initialSeries));
+  const [chosen, setChosen] = useState<RangeKey | null>(() => (initialSeries ? defaultRange(initialSeries) : null));
   // The chosen range, or the shortest drawable one once ticks have started landing.
   const range = chosen !== null && available[chosen] ? chosen : defaultRange(series);
   const points = useMemo(() => (range ? series[range] : []), [range, series]);
@@ -288,7 +310,7 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnable
               <ScoreDisplay score={state.score} size="xl" flash />
             </span>
 
-            {change ? <ChangeLine change={change} rangeLabel={rangeLabel} /> : <p className="text-base text-fg-muted">No change recorded yet</p>}
+            {!seeded ? <ChangeLineSkeleton /> : change ? <ChangeLine change={change} rangeLabel={rangeLabel} /> : <p className="text-base text-fg-muted">No change recorded yet</p>}
 
             {/* Display-only (Phase 29b): the score is the only number shown. */}
             {scoreOnly ? null : <MarketLine marketPrice={state.marketPrice} premiumCents={state.premiumCents} />}
@@ -309,21 +331,31 @@ export function ScorePanel({ profile, loggingEnabled, renderedAt, shortingEnable
 
         <AvailabilityNotice availability={availability} personName={person.displayName} />
 
-        <div className="flex flex-col gap-4">
-          <div className="flex items-center justify-between gap-3">
-            <p className="shrink-0 whitespace-nowrap text-label text-fg-muted">Score history</p>
-            <RangeToggle value={range} available={available} onChange={onRange} />
+        {/* The chart waits on its series (2026-10-02): a skeleton of its own shape until the read lands, the panel above it already live. */}
+        {seriesInput instanceof Promise ? (
+          <Suspense fallback={null}>
+            <SeriesSeed series={seriesInput} onSeries={seed} />
+          </Suspense>
+        ) : null}
+        {!seeded ? (
+          <ChartSkeleton />
+        ) : (
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="shrink-0 whitespace-nowrap text-label text-fg-muted">Score history</p>
+              <RangeToggle value={range} available={available} onChange={onRange} />
+            </div>
+            <ScoreChart
+              points={points}
+              range={range ?? "1h"}
+              revertTarget={person.revertTarget}
+              personName={person.displayName}
+              showMarket={!scoreOnly}
+              version={state.version}
+              cadenceMs={live?.cadenceMs}
+            />
           </div>
-          <ScoreChart
-            points={points}
-            range={range ?? "1h"}
-            revertTarget={person.revertTarget}
-            personName={person.displayName}
-            showMarket={!scoreOnly}
-            version={state.version}
-            cadenceMs={live?.cadenceMs}
-          />
-        </div>
+        )}
       </Card>
 
       {viewer.signedIn ? <PositionCard position={position} buyCents={quote.buyCents} sellCents={quote.sellCents} premiumCents={state.premiumCents} scoreOnly={scoreOnly} /> : null}

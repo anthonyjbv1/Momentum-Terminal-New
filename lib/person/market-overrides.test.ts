@@ -87,8 +87,16 @@ describe("the profile reads every override there is", () => {
   });
 
   it("the profile's person read selects all of them", () => {
-    const profile = readFileSync(join(ROOT, "lib", "person", "profile.ts"), "utf8");
-    for (const column of Object.values(OVERRIDE_COLUMNS)) expect(profile).toContain(column);
+    // The read is person_profile_header() (2026-10-02): the newest migration that defines it is the one that runs.
+    const dir = join(ROOT, "supabase", "migrations");
+    const file = readdirSync(dir)
+      .sort()
+      .filter((name) => readFileSync(join(dir, name), "utf8").includes("function public.person_profile_header("))
+      .at(-1);
+    expect(file).toBeDefined();
+    const sql = readFileSync(join(dir, file!), "utf8");
+    const body = sql.slice(sql.indexOf("function public.person_profile_header("));
+    for (const column of Object.values(OVERRIDE_COLUMNS)) expect(body).toContain(column);
   });
 
   it("parses the row the database returns, and ignores anything that is not a setting", () => {

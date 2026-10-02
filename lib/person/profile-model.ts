@@ -471,6 +471,17 @@ export function isForceKey(value: unknown): value is ForceKey {
 export const FORCES_WINDOW_MINUTES = 60;
 
 /**
+ * The window as the database is asked for it (2026-10-02): the Engine ticks
+ * every 30 seconds, so the last FORCES_WINDOW_MINUTES are the last
+ * FORCES_WINDOW_TICKS tick numbers up to the person's newest one. The read
+ * is bounded by tick number, which score_events is indexed on per person,
+ * rather than by created_at. While the Engine runs on its cadence the two
+ * are the same window; across a pause the tick window reaches further back,
+ * to the ticks that actually moved the score.
+ */
+export const FORCES_WINDOW_TICKS = FORCES_WINDOW_MINUTES * 2;
+
+/**
  * The window in words. The panel's caption is built from this rather than
  * writing "hour" down, so the number and the words cannot come apart when the
  * constant changes.

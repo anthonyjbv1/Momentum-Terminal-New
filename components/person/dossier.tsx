@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 
 import { cn } from "@/lib/cn";
 import {
@@ -17,6 +17,8 @@ import { Avatar } from "@/components/ui/avatar";
 import { Card } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/page-header";
 
+import { DossierFieldSkeleton } from "./profile-skeleton";
+
 /**
  * The identity block: a data dossier laid out as a labelled grid. Small grey
  * uppercase label, large white value, hairline rules between rows. The name
@@ -28,8 +30,14 @@ import { SectionHeader } from "@/components/ui/page-header";
  */
 export interface DossierProps {
   person: ProfilePerson;
-  state: StateReading;
-  conviction: ConvictionLevel | null;
+  /**
+   * The two readings that wait on a database read (2026-10-02): STATE on the
+   * 24-hour series, CONVICTION on the open capital. Each streams into its
+   * own field behind a Suspense boundary, so the name, the picture and the
+   * rest of the grid render from the slug lookup alone.
+   */
+  state: Promise<StateReading>;
+  conviction: Promise<ConvictionLevel | null>;
   className?: string;
 }
 
@@ -115,13 +123,27 @@ export function Dossier({ person, state, conviction, className }: DossierProps) 
 
             <Field label="Category" value={categoryLabel(person.category)} />
             <Field label="Tracked since" value={formatTrackedSince(person.createdAt)} />
-            <Field label="State" value={stateLabels[state.state]} tone={stateTones[state.state]} caption={stateCaption(state)} />
-            <Field label="Conviction" value={conviction ? convictionLabels[conviction] : "—"} tone={conviction ? "text-fg" : "text-fg-faint"} caption={convictionCaption(conviction)} />
+            <Suspense fallback={<DossierFieldSkeleton />}>
+              <StateField reading={state} />
+            </Suspense>
+            <Suspense fallback={<DossierFieldSkeleton />}>
+              <ConvictionField reading={conviction} />
+            </Suspense>
           </dl>
         </div>
       </Card>
     </section>
   );
+}
+
+async function StateField({ reading }: { reading: Promise<StateReading> }) {
+  const state = await reading;
+  return <Field label="State" value={stateLabels[state.state]} tone={stateTones[state.state]} caption={stateCaption(state)} />;
+}
+
+async function ConvictionField({ reading }: { reading: Promise<ConvictionLevel | null> }) {
+  const conviction = await reading;
+  return <Field label="Conviction" value={conviction ? convictionLabels[conviction] : "—"} tone={conviction ? "text-fg" : "text-fg-faint"} caption={convictionCaption(conviction)} />;
 }
 
 function Field({ label, value, tone = "text-fg", caption }: { label: string; value: string; tone?: string; caption?: ReactNode }) {

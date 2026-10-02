@@ -5,7 +5,7 @@ import { useCallback, useRef, useState } from "react";
 import { useTickPolling } from "@/components/engine/use-tick-polling";
 import { LIVE_TICK_MS, latestTickAt } from "@/lib/person/live-series";
 import { applyTradeQuote, mergeLiveResponse, type LiveResponse, type LiveState } from "@/lib/person/live-state";
-import type { ProfilePerson, SeriesByRange } from "@/lib/person/profile-model";
+import { emptySeries, type ProfilePerson, type SeriesByRange } from "@/lib/person/profile-model";
 import type { TradeQuote } from "@/lib/trading/model";
 
 /**
@@ -28,6 +28,13 @@ import type { TradeQuote } from "@/lib/trading/model";
  * `refresh` asks for the live book now rather than at the next tick (the
  * trade sheet does both). lib/person/live-state.ts has the rule for which of
  * a poll and a quote is newer.
+ *
+ * A SERIES THAT ARRIVES LATER (2026-10-02). The page renders the score from
+ * the slug lookup and streams the chart's series in behind it, so the hook
+ * can start without one: `seeded` is false, the series is empty and polling
+ * waits, because a poll folds ticks into the series it has and a seed that
+ * landed afterwards would drop them. `seed` sets the series, the cursor the
+ * next poll reads from, and lets polling begin.
  */
 
 export { LIVE_POLL_DELAY_MS, LIVE_RETRY_DELAY_MS } from "@/components/engine/use-tick-polling";
@@ -44,19 +51,24 @@ export interface LiveSeriesOptions {
 
 export interface LiveSeries {
   state: LiveState;
+  /** False until the chart's series has landed; the chart and the change line wait on it. */
+  seeded: boolean;
+  /** The series, once it has loaded on the server. A second call is ignored. */
+  seed: (series: SeriesByRange) => void;
   /** An order's quote, from a fill or a refusal: the book as the server read it. */
   applyQuote: (quote: TradeQuote) => void;
   /** Read the live book now. A poll already in flight is followed by one more. */
   refresh: () => void;
 }
 
-export function useLiveSeries(person: ProfilePerson, initial: SeriesByRange, options: LiveSeriesOptions = {}): LiveSeries {
+export function useLiveSeries(person: ProfilePerson, initial: SeriesByRange | null, options: LiveSeriesOptions = {}): LiveSeries {
   const endpoint = options.endpoint ?? `/api/person/${person.slug}/live`;
   const cadenceMs = options.cadenceMs ?? LIVE_TICK_MS;
-  const enabled = options.enabled ?? true;
+  const [seeded, setSeeded] = useState(initial !== null);
+  const enabled = (options.enabled ?? true) && seeded;
 
   const [state, setState] = useState<LiveState>(() => ({
-    series: initial,
+    series: initial ?? emptySeries(),
     score: person.score,
     lastTickAt: person.lastTickAt,
     buyPrice: person.buyPrice,
@@ -71,7 +83,7 @@ export function useLiveSeries(person: ProfilePerson, initial: SeriesByRange, opt
     version: 0,
     updatedAt: null,
   }));
-  const cursor = useRef<string | null>(latestTickAt(initial));
+  const cursor = useRef<string | null>(initial ? latestTickAt(initial) : null);
   const inFlight = useRef(false);
   const again = useRef(false);
   // One sequence for polls sent and quotes applied: a poll numbered below
@@ -117,6 +129,15 @@ export function useLiveSeries(person: ProfilePerson, initial: SeriesByRange, opt
     setState((previous) => applyTradeQuote(previous, quote, Date.now()));
   }, []);
 
+  const seededOnce = useRef(initial !== null);
+  const seed = useCallback((series: SeriesByRange) => {
+    if (seededOnce.current) return;
+    seededOnce.current = true;
+    cursor.current = latestTickAt(series);
+    setState((previous) => ({ ...previous, series }));
+    setSeeded(true);
+  }, []);
+
   const refresh = useCallback(() => {
     if (!enabled) return;
     if (inFlight.current) {
@@ -126,5 +147,5 @@ export function useLiveSeries(person: ProfilePerson, initial: SeriesByRange, opt
     void poll();
   }, [enabled, poll]);
 
-  return { state, applyQuote, refresh };
+  return { state, seeded, seed, applyQuote, refresh };
 }
