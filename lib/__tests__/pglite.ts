@@ -26,6 +26,13 @@ export interface TestDatabase {
   exec(sql: string): Promise<void>;
   /** Act as this user (auth.uid()) for the following statements; null signs out. */
   actAs(userId: string | null): Promise<void>;
+  /**
+   * Run one statement inside a transaction the market-controls guards treat
+   * as an admin function's (momentum.market_write = 'admin', transaction-local;
+   * 20261005090000): a fixture's direct write to a market parameter or a void
+   * column, where the test is not about the guard itself.
+   */
+  operator<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;
   close(): Promise<void>;
 }
 
@@ -63,6 +70,13 @@ export async function createTestDatabase(options: TestDatabaseOptions = {}): Pro
     },
     async actAs(userId) {
       await db.query("select set_config('request.jwt.claim.sub', $1, false)", [userId ?? ""]);
+    },
+    async operator<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> {
+      return db.transaction(async (tx) => {
+        await tx.query("select set_config('momentum.market_write', 'admin', true)");
+        const result = await tx.query<T>(sql, params);
+        return result.rows;
+      });
     },
     close: () => db.close(),
   };

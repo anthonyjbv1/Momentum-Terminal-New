@@ -2805,12 +2805,36 @@ export type Database = {
         }
         Returns: Json
       }
+      admin_reset_market: {
+        Args: { p_alert_id?: string; p_person_id: string; p_reason: string }
+        Returns: Json
+      }
       admin_resolve_alert: {
         Args: { p_alert_id: string; p_note: string; p_status: string }
         Returns: Json
       }
       admin_revoke_invite: {
         Args: { p_invite_id: string; p_note?: string }
+        Returns: Json
+      }
+      admin_set_person_market_parameter: {
+        Args: {
+          p_alert_id?: string
+          p_parameter: string
+          p_person_id: string
+          p_reason: string
+          p_value: Json
+        }
+        Returns: Json
+      }
+      admin_set_tier_market_parameter: {
+        Args: {
+          p_alert_id?: string
+          p_parameter: string
+          p_reason: string
+          p_tier: string
+          p_value: Json
+        }
         Returns: Json
       }
       admin_set_trading_mode: {
@@ -2824,6 +2848,14 @@ export type Database = {
       }
       admin_unfreeze_account: {
         Args: { p_alert_id?: string; p_note: string; p_user_id: string }
+        Returns: Json
+      }
+      admin_void_narrative: {
+        Args: { p_alert_id?: string; p_narrative_id: string; p_reason: string }
+        Returns: Json
+      }
+      admin_void_signal: {
+        Args: { p_alert_id?: string; p_reason: string; p_signal_id: string }
         Returns: Json
       }
       admin_user_list: {
@@ -3090,6 +3122,15 @@ export type Database = {
       market_premium_cents: {
         Args: { p_depth_units: number; p_inventory_units: number }
         Returns: number
+      }
+      market_reset_inventory: {
+        Args: {
+          p_at: string
+          p_details?: Json
+          p_person_id: string
+          p_tick_number: number
+        }
+        Returns: Json
       }
       market_walk_cents: {
         Args: {

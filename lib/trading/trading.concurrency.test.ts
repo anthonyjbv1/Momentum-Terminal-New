@@ -43,7 +43,8 @@ beforeAll(async () => {
     await admin.query("update public.people set current_score = 50, spread = 0.5 where id = $1", [drake]); // Buy 5050¢
     await admin.query("update public.platform_settings set close_cooldown_seconds = 0 where id");
     // A flat market (Phase 29): the race is the point, not the curve.
-    await admin.query("update public.market_tier_settings set pricing_mode = 'flat', min_hold_seconds = 0");
+    // Through the market-controls door (20261005090000): a tier parameter changes only inside an admin transaction.
+    await admin.query("begin; select set_config('momentum.market_write', 'admin', true); update public.market_tier_settings set pricing_mode = 'flat', min_hold_seconds = 0; commit");
   } finally {
     admin.release();
   }

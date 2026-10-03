@@ -49,14 +49,14 @@ async function tierPatch(tier: string, patch: Record<string, unknown>): Promise<
   const sets = Object.keys(patch)
     .map((key, index) => `${key} = $${index + 2}`)
     .join(", ");
-  await database.rows(`update public.market_tier_settings set ${sets}, updated_at = now() where tier = $1`, [tier, ...Object.values(patch)]);
+  await database.operator(`update public.market_tier_settings set ${sets}, updated_at = now() where tier = $1`, [tier, ...Object.values(patch)]);
 }
 
 async function personPatch(slug: string, patch: Record<string, unknown>): Promise<void> {
   const sets = Object.keys(patch)
     .map((key, index) => `${key} = $${index + 2}`)
     .join(", ");
-  await database.rows(`update public.people set ${sets} where slug = $1`, [slug, ...Object.values(patch)]);
+  await database.operator(`update public.people set ${sets} where slug = $1`, [slug, ...Object.values(patch)]);
 }
 
 async function resolved(slug: string): Promise<{ depth: number | null; mode: string }> {
@@ -74,7 +74,7 @@ async function quote(slug: string): Promise<Record<string, unknown>> {
 
 async function sqlError(sql: string): Promise<string> {
   try {
-    await database.exec(sql);
+    await database.operator(sql);
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
@@ -157,7 +157,7 @@ describe("flat is a named mode", () => {
     expect(await resolved("drake")).toEqual({ depth: 300_000, mode: "curve" });
   });
 
-  it("a person's 'flat' leaves the rest of the tier on the curve, and the next decay returns their inventory to zero with a reset row", async () => {
+  it("a person's 'flat' leaves the rest of the tier on the curve, and the next decay after the last position closes returns their inventory to zero with a reset row", async () => {
     const user = await createUser("reset@example.com");
     const first = await order(user, "kendrick-lamar", "BUY", 30 * SHARE);
     expect(first.ok).toBe(true);
@@ -168,6 +168,12 @@ describe("flat is a named mode", () => {
     expect(await resolved("kendrick-lamar")).toEqual({ depth: null, mode: "flat" });
     expect(await resolved("drake")).toEqual({ depth: 300_000, mode: "curve" });
 
+    // Market controls (2026-10-05): while the position is open the reset is refused and the row is left as it is.
+    await database.rows("select public.apply_market_decay(now(), 7000)");
+    const [held] = await database.rows<{ inv: string; premium: string }>("select market_inventory_units::text as inv, premium_cents::text as premium from public.people where slug = 'kendrick-lamar'");
+    expect([held.inv, held.premium]).toEqual(["30000", "10"]);
+    await database.rows("update public.positions set opened_at = opened_at - interval '2 days' where user_id = $1 and is_open", [user]);
+    expect((await order(user, "kendrick-lamar", "SELL", 30 * SHARE)).ok).toBe(true); // a flat close: the inventory stays
     await database.rows("select public.apply_market_decay(now(), 7001)");
     const [after] = await database.rows<{ inv: string; premium: string }>("select market_inventory_units::text as inv, premium_cents::text as premium from public.people where slug = 'kendrick-lamar'");
     expect([after.inv, after.premium]).toEqual(["0", "0"]);

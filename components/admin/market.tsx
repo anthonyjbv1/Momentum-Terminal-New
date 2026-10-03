@@ -132,9 +132,48 @@ export function MarketSection({ report, now, notice }: { report: MarketReport; n
           </table>
         </Scroll>
         <p className="adm-note">
-          <b>Premium</b> is trunc(inventory × 100 / depth) in cents a share; <b>Market</b> is the score plus it. A halt refuses every order until it lapses or is lifted; <b>display_only</b>{" "}
-          shows the score and lets holders close; <b>paused</b> refuses everything. Depth, half-life and caps are the tier&rsquo;s unless an override is set on the row (by migration).
+          <b>Premium</b> is trunc(inventory × 100 / depth) in cents a share; <b>Market</b> is the score plus it. A halt refuses every order until it lapses or is lifted, and freezes the premium (no decay
+          while halted); <b>display_only</b> shows the score and lets holders close; <b>paused</b> refuses everything. Depth, half-life and caps are the tier&rsquo;s unless an override is set on the row.
+          Every parameter change, reset and void below is an audit-logged RPC; the columns refuse any other write. A reset is refused while anyone holds a position on the person.
         </p>
+
+        <div className="adm-cols" style={{ marginTop: 12 }}>
+          <form action={marketAction} className="adm-form">
+            <input type="hidden" name="action" value="set_tier_parameter" />
+            <select name="tier" aria-label="Tier" defaultValue="public_figure">
+              <option value="public_figure">public_figure</option>
+              <option value="private_individual">private_individual</option>
+            </select>
+            <select name="parameter" aria-label="Tier parameter" defaultValue="depth_units">
+              {["pricing_mode", "depth_units", "decay_half_life_ticks", "premium_cap_cents", "min_hold_seconds", "max_order_share_of_depth", "aggregate_exposure_cap_units", "breaker_premium_cents", "breaker_window_seconds", "breaker_halt_seconds", "breaker_price_cents", "shorting_allowed", "alert_on_halt"].map((key) => (
+                <option key={key} value={key}>
+                  {key}
+                </option>
+              ))}
+            </select>
+            <input name="value" placeholder="value" aria-label="Tier parameter value" style={{ width: 120 }} />
+            <input name="note" placeholder="reason (required)" aria-label="Reason for the tier parameter change" required />
+            <button type="submit" className="adm-btn">
+              Set tier parameter
+            </button>
+          </form>
+          <form action={marketAction} className="adm-form">
+            <input type="hidden" name="action" value="void_signal" />
+            <input name="signal_id" placeholder="signal id (uuid)" aria-label="Signal id to void" required style={{ width: 300 }} />
+            <input name="note" placeholder="reason (required)" aria-label="Void reason" required />
+            <button type="submit" className="adm-btn" data-tone="bad">
+              Void signal
+            </button>
+          </form>
+          <form action={marketAction} className="adm-form">
+            <input type="hidden" name="action" value="void_narrative" />
+            <input name="narrative_id" placeholder="narrative id (uuid)" aria-label="Narrative id to void" required style={{ width: 300 }} />
+            <input name="note" placeholder="reason (required)" aria-label="Void reason" required />
+            <button type="submit" className="adm-btn" data-tone="bad">
+              Void narrative
+            </button>
+          </form>
+        </div>
 
         <div className="adm-cols" style={{ marginTop: 16 }}>
           <div>
@@ -625,6 +664,33 @@ function PersonRow({ person, now }: { person: MarketPersonRow; now: number }) {
               </button>
             </form>
           )}
+          <form action={marketAction} className="adm-form">
+            <input type="hidden" name="action" value="set_parameter" />
+            <input type="hidden" name="person_id" value={person.id} />
+            <select name="parameter" aria-label={`Market parameter for ${person.slug}`} defaultValue="depth_units_override">
+              <option value="depth_units_override">depth override</option>
+              <option value="pricing_mode_override">pricing mode override</option>
+              <option value="decay_half_life_ticks_override">half-life override</option>
+              <option value="premium_cap_cents_override">premium cap override</option>
+              <option value="shorting_override">shorting override</option>
+              <option value="tier">tier</option>
+            </select>
+            <input name="value" placeholder="value (blank clears)" aria-label={`Parameter value for ${person.slug}`} style={{ width: 120 }} />
+            <input name="note" placeholder="reason" aria-label={`Reason for the parameter change on ${person.slug}`} required />
+            <button type="submit" className="adm-btn">
+              Set parameter
+            </button>
+          </form>
+          {person.inventoryUnits !== 0 || person.premiumCents !== 0 ? (
+            <form action={marketAction} className="adm-form">
+              <input type="hidden" name="action" value="reset_market" />
+              <input type="hidden" name="person_id" value={person.id} />
+              <input name="note" placeholder="reason" aria-label={`Reason to reset the market on ${person.slug}`} required />
+              <button type="submit" className="adm-btn" data-tone="bad">
+                Reset market
+              </button>
+            </form>
+          ) : null}
         </div>
         <span className="adm-dim adm-k">{person.haltedUntil ? `lapses ${age(person.haltedUntil, now).replace(" ago", "")} from now` : ""}</span>
       </td>
