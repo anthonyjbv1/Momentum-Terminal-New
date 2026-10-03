@@ -39,14 +39,22 @@ import type { ScoredSignal } from "@/lib/engine/types";
  *      the firing reads as nothing.
  *   5. LULLS CONTRIBUTE NOTHING. The metric also fires on a count two sigma
  *      BELOW the baseline; the rule scales a surge's stories and a lull has
- *      none, so a non-positive sigma reads as nothing (Huang 10-02).
+ *      none, so a non-positive sigma reads as nothing (Huang 10-02). The
+ *      same guard covers any sigma under the firing threshold (confirmed
+ *      2026-10-03): the size factor is sigma over the threshold less one,
+ *      and it must never go negative, so a sub-threshold firing reads as
+ *      nothing and does not take the day's peak.
  *   6. SIZE: the volume scales the stories. The multiplier is sigma over the
  *      firing threshold, at most 2 (four sigma doubles the stories); the
  *      reading is (multiplier − 1) × |the window's signed story impact|,
  *      signed by the balance. At the threshold the surge adds nothing.
  *   7. CEILING 0.75 POINTS PER PERSON PER UTC DAY, one full-confidence
  *      firing as the metric stands today: the surge can never outweigh the
- *      biggest story of its own window (1.23 points, the largest seen).
+ *      biggest story of its own window (1.23 points, the largest seen). The
+ *      same ceiling bounds any single firing's delta (confirmed 2026-10-03):
+ *      a day that stood at +0.75 and then peaks the other way moves −0.75 on
+ *      that firing, not −1.5, and reaches its new reading on the next tie or
+ *      higher firing. The day's total therefore never leaves ±0.75 either.
  *
  * WHERE IT RUNS. In the tick, after the per-person signals are scored and
  * the story confirmation has run, and only while newsVolume.enabled is on.
@@ -93,15 +101,15 @@ export interface NewsVolumeDetail {
   balance: number;
   /** The window's signed story impact, summed. */
   signedImpact: number;
-  /** The volume multiplier before the ceiling: sigma over the threshold, at most maxMultiplier; 0 for a lull. */
+  /** The volume multiplier before the ceiling: sigma over the threshold, at most maxMultiplier; 0 for a lull or a sub-threshold firing. */
   multiplier: number;
   /** The firing's own reading, after the ceiling, before the day's state: what the day's total becomes if this is its peak. */
   reading: number;
   /** Why the reading is 0, when it is. */
-  zeroBecause: "lull" | "too_few_signed" | "dead_zone" | "at_threshold" | "not_the_peak" | null;
+  zeroBecause: "lull" | "below_threshold" | "too_few_signed" | "dead_zone" | "at_threshold" | "not_the_peak" | null;
   /** The day's state before this firing. */
   dayBefore: { peakSigma: number | null; applied: number };
-  /** What the firing contributes: the reading less what the day already had, when it reaches the day's peak; else 0. */
+  /** What the firing contributes: the reading less what the day already had, bounded to ±ceilingPoints, when it reaches the day's peak; else 0. */
   delta: number;
 }
 
@@ -152,8 +160,11 @@ export function readNewsVolume(
 
   const base: Omit<NewsVolumeDetail, "multiplier" | "reading" | "zeroBecause" | "delta"> = { sigma: input.sigma, signedStories, balance, signedImpact, dayBefore };
 
-  // A lull is not a surge: nothing to scale.
+  // A lull is not a surge: nothing to scale. Nor is anything under the
+  // firing threshold: the size factor would go negative, so it reads as
+  // nothing and leaves the day's peak alone.
   if (!(input.sigma > 0)) return { detail: { ...base, multiplier: 0, reading: 0, zeroBecause: "lull", delta: 0 }, day: before };
+  if (input.sigma < config.thresholdSigma) return { detail: { ...base, multiplier: 0, reading: 0, zeroBecause: "below_threshold", delta: 0 }, day: before };
 
   const multiplier = Math.min(config.maxMultiplier, input.sigma / config.thresholdSigma);
   let reading = 0;
@@ -171,10 +182,13 @@ export function readNewsVolume(
   if (!(input.sigma >= before.peakSigma)) {
     return { detail: { ...base, multiplier, reading, zeroBecause: zeroBecause ?? "not_the_peak", delta: 0 }, day: before };
   }
-  const delta = reading - before.applied;
+  // The move toward the reading, never more than the ceiling in one firing:
+  // a day at +0.75 that peaks the other way steps to 0 now and on to −0.75
+  // at the next tie or higher firing.
+  const delta = Math.max(-config.ceilingPoints, Math.min(config.ceilingPoints, reading - before.applied));
   return {
     detail: { ...base, multiplier, reading, zeroBecause, delta },
-    day: { day: today, peakSigma: input.sigma, applied: reading },
+    day: { day: today, peakSigma: input.sigma, applied: before.applied + delta },
   };
 }
 

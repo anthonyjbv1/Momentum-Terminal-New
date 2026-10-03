@@ -76,8 +76,9 @@ describe("the news-volume tune reproduces the 10-02 re-run's C column", () => {
     // A lull never takes the peak; a surge day ends at its largest sigma.
     if (peak.sigma > 0) expect(state.peakSigma).toBe(peak.sigma);
     else expect(state.peakSigma).toBe(Number.NEGATIVE_INFINITY);
-    // Nothing a day gives is ever past the ceiling, either way.
+    // Nothing a day gives is ever past the ceiling, either way, and neither is any single firing.
     expect(Math.abs(state.applied)).toBeLessThanOrEqual(CONFIG.ceilingPoints + 1e-9);
+    for (const detail of details) expect(Math.abs(detail.delta)).toBeLessThanOrEqual(CONFIG.ceilingPoints + 1e-9);
   });
 
   it("Kai Cenat 10-01 is negative: eight allegation stories against two, where the live metric added +6.06", () => {
@@ -164,6 +165,45 @@ describe("the rule, piece by piece", () => {
     expect(day.peakSigma).toBe(Number.NEGATIVE_INFINITY);
   });
 
+  it("under the threshold the firing contributes nothing and does not take the peak: the size factor never goes negative", () => {
+    for (const sigma of [1.99, 1.5, 0.5, 0.01]) {
+      const { detail, day } = readNewsVolume({ sigma, at: T, stories: three }, null, ON);
+      expect(detail).toMatchObject({ reading: 0, delta: 0, zeroBecause: "below_threshold", multiplier: 0 });
+      expect(day).toEqual({ day: "2026-10-02", ...EMPTY_DAY });
+    }
+    // With a peak already set, a sub-threshold firing leaves it as it stands.
+    const first = readNewsVolume({ sigma: 3, at: T, stories: three }, null, ON);
+    const under = readNewsVolume({ sigma: 1.9, at: new Date(T.getTime() + 60_000), stories: three }, first.day, ON);
+    expect(under.detail.delta).toBe(0);
+    expect(under.day).toEqual(first.day);
+    // And no reading is ever negative in size: every delta's sign is the balance's or zero.
+    for (const sigma of [-3, -2, 0, 1, 1.99, 2, 2.5, 4, 9]) {
+      const { detail } = readNewsVolume({ sigma, at: T, stories: three }, null, ON);
+      expect(detail.delta <= 0).toBe(true);
+      expect(Math.abs(detail.delta)).toBeLessThanOrEqual(CONFIG.ceilingPoints);
+    }
+  });
+
+  it("a single firing's delta is bounded by the ceiling even when the day's sign flips", () => {
+    const up = [story(3, 2, 0.9), story(2, 1.5, 0.9), story(1, 1, 0.9)];
+    const first = readNewsVolume({ sigma: 4, at: T, stories: up }, null, ON);
+    expect(first.detail.delta).toBe(0.75);
+    expect(first.day.applied).toBe(0.75);
+    // A larger peak with the coverage now strongly negative: the reading is −0.75, the move is −0.75, not −1.5.
+    const down = [story(0.5, -3, 0.9), story(0.4, -2, 0.9), story(0.3, -1.5, 0.9), ...up.map((s) => ({ ...s, confidence: 0.1 }))];
+    const flip = readNewsVolume({ sigma: 5, at: new Date(T.getTime() + 60_000), stories: down }, first.day, ON);
+    expect(flip.detail.reading).toBe(-0.75);
+    expect(flip.detail.delta).toBe(-0.75);
+    expect(flip.day).toEqual({ day: "2026-10-02", peakSigma: 5, applied: 0 });
+    // The next tie carries the day the rest of the way; every step and every total stays inside the ceiling.
+    const again = readNewsVolume({ sigma: 5, at: new Date(T.getTime() + 120_000), stories: down }, flip.day, ON);
+    expect(again.detail.delta).toBe(-0.75);
+    expect(again.day.applied).toBe(-0.75);
+    const settled = readNewsVolume({ sigma: 5, at: new Date(T.getTime() + 180_000), stories: down }, again.day, ON);
+    expect(settled.detail.delta).toBe(0);
+    expect(settled.day.applied).toBe(-0.75);
+  });
+
   it("at the threshold the surge adds nothing, and it still takes the day's peak", () => {
     const { detail, day } = readNewsVolume({ sigma: 2, at: T, stories: three }, null, ON);
     expect(detail).toMatchObject({ reading: 0, delta: 0, zeroBecause: "at_threshold", multiplier: 1 });
@@ -203,9 +243,13 @@ describe("the rule, piece by piece", () => {
     const higher = readNewsVolume({ sigma: 4, at: new Date(T.getTime() + 120_000), stories: flipped }, tie.day, ON);
     expect(higher.detail.balance).toBeCloseTo((2.7 - 1.2) / 3.9, 9);
     expect(higher.detail.reading).toBeCloseTo(Math.min(0.75, 1 * (1.5 - 1.0)), 9);
-    expect(higher.detail.delta).toBeCloseTo(0.5 - -0.5, 9);
+    // The swing from −0.5 to +0.5 is a full point; one firing moves at most the ceiling, the rest waits for the next tie.
+    expect(higher.detail.delta).toBeCloseTo(0.75, 9);
     expect(higher.day.peakSigma).toBe(4);
-    expect(higher.day.applied).toBeCloseTo(0.5, 9);
+    expect(higher.day.applied).toBeCloseTo(0.25, 9);
+    const rest = readNewsVolume({ sigma: 4, at: new Date(T.getTime() + 150_000), stories: flipped }, higher.day, ON);
+    expect(rest.detail.delta).toBeCloseTo(0.25, 9);
+    expect(rest.day.applied).toBeCloseTo(0.5, 9);
   });
 
   it("a new UTC day starts from nothing", () => {
