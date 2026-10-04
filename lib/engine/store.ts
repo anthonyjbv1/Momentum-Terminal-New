@@ -4,6 +4,7 @@ import { isFreeSignal } from "@/lib/engine/selection";
 import { LIVE_MOMENT_KIND } from "@/lib/engine/sentiment/prescored";
 import { dayStateFromSignals, type NewsVolumeContext, type WindowStory } from "@/lib/engine/news-volume";
 import { readSignalVolumeRow, type PersonSignalVolume, type PersonSignalVolumeRow } from "@/lib/engine/signal-volume";
+import { driftApplies, normalFromSums, normalWindowStart, type DriftNormal } from "@/lib/engine/target-drift";
 import { VOIDED_COLUMN_PATH } from "@/lib/signals/voided";
 import type {
   EngineSignal,
@@ -257,6 +258,23 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         );
       }
 
+      // The drift's normals (the redesign, 2026-10-04), read only while the
+      // drift is on with people listed: the Signals force's sums per listed
+      // person since the normal's window start, aggregated in the database.
+      let driftNormalByPerson: Map<string, DriftNormal> | undefined;
+      const listedIds = (people.data ?? []).filter((p) => driftApplies(config.targetDrift, p.slug)).map((p) => p.id);
+      if (listedIds.length > 0) {
+        const windowStart = normalWindowStart(config.targetDrift, now);
+        const normals = await client.rpc("drift_signal_normals", { p_person_ids: listedIds, p_since: windowStart.toISOString() });
+        if (normals.error) throw new Error(`Engine failed to load drift normals: ${normals.error.message}`);
+        driftNormalByPerson = groupDriftNormals(
+          (normals.data ?? []) as Array<{ person_id: string; gross_impact: number | string | null; signed_impact: number | string | null; events: number | string | null }>,
+          new Set(listedIds),
+          windowStart,
+          now,
+        );
+      }
+
       const engineSignals: EngineSignal[] = (signals.data ?? [])
         .filter((row) => activeIds.has(row.person_id))
         .map((row) => ({
@@ -289,6 +307,7 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         signalVolumeByPerson: new Map(((volume.data ?? []) as PersonSignalVolumeRow[]).map(readSignalVolumeRow)),
         ...(recentStoriesByPerson ? { recentStoriesByPerson } : {}),
         ...(newsVolumeByPerson ? { newsVolumeByPerson } : {}),
+        ...(driftNormalByPerson ? { driftNormalByPerson } : {}),
         tradeEvents,
         moodWindow: readMoodWindowHistory(moodEvents.data ?? [], activeIds),
         inversePairs: pairs.data ?? [],
@@ -356,6 +375,14 @@ export interface MemoryEngineSeed {
    * score_events, so a run of ticks behaves as production does.
    */
   moodWindow?: { totalImpact: number; totalByPerson: Record<string, number>; readings: number };
+  /**
+   * personId -> the drift's normal as it stood BEFORE the first tick of the
+   * test (the redesign, 2026-10-04): fixture data for a measured start.
+   * Without it the store measures the normal from the Signals rows it has
+   * itself recorded inside the window, exactly as the Supabase store reads
+   * the sums back from score_events.
+   */
+  driftNormals?: Record<string, DriftNormal>;
 }
 
 export interface MemoryEngineStore extends EngineStore {
@@ -467,6 +494,28 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
               ),
             }
           : {}),
+        // The drift's normals (the redesign): the seed's, else measured from this store's own Signals rows inside the window.
+        ...(people.some((p) => p.is_active && driftApplies(config.targetDrift, p.slug))
+          ? {
+              driftNormalByPerson: (() => {
+                const listed = new Set(people.filter((p) => p.is_active && driftApplies(config.targetDrift, p.slug)).map((p) => p.id));
+                if (seed.driftNormals) return new Map(Object.entries(seed.driftNormals).filter(([id]) => listed.has(id)));
+                const windowStart = normalWindowStart(config.targetDrift, now);
+                const sums = new Map<string, { grossImpact: number; signedImpact: number; events: number }>();
+                for (const event of scoreEvents) {
+                  if (event.force !== "signals" || !listed.has(event.personId)) continue;
+                  const at = ticks.find((tick) => tick.expectedTickNumber === event.tickNumber)?.startedAt;
+                  if (!at || at.getTime() < windowStart.getTime() || at.getTime() > now.getTime()) continue;
+                  const sum = sums.get(event.personId) ?? { grossImpact: 0, signedImpact: 0, events: 0 };
+                  sum.grossImpact += Math.abs(event.impact);
+                  sum.signedImpact += event.impact;
+                  sum.events += 1;
+                  sums.set(event.personId, sum);
+                }
+                return new Map([...sums].map(([id, sum]) => [id, normalFromSums(sum, windowStart, now)]));
+              })(),
+            }
+          : {}),
         tradeEvents: [...(seed.tradeEvents ?? [])],
         moodWindow: seed.moodWindow
           ? { totalImpact: seed.moodWindow.totalImpact, totalByPerson: new Map(Object.entries(seed.moodWindow.totalByPerson)), readings: seed.moodWindow.readings }
@@ -527,4 +576,23 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
       return { tickNumber, peopleUpdated, signalsProcessed, scoreEvents: events.length };
     },
   };
+}
+
+/** The RPC's sums per person into normals; a listed person the rows do not name has no normal (nothing in the window). */
+export function groupDriftNormals(
+  rows: Array<{ person_id: string; gross_impact: number | string | null; signed_impact: number | string | null; events: number | string | null }>,
+  listedIds: Set<string>,
+  windowStart: Date,
+  now: Date,
+): Map<string, DriftNormal> {
+  const out = new Map<string, DriftNormal>();
+  for (const row of rows) {
+    if (!listedIds.has(row.person_id)) continue;
+    const grossImpact = Number(row.gross_impact ?? 0);
+    const signedImpact = Number(row.signed_impact ?? 0);
+    const events = Number(row.events ?? 0);
+    if (!Number.isFinite(grossImpact) || !Number.isFinite(signedImpact) || !(events > 0)) continue;
+    out.set(row.person_id, normalFromSums({ grossImpact, signedImpact, events }, windowStart, now));
+  }
+  return out;
 }

@@ -1,7 +1,24 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_ENGINE_CONFIG } from "./config";
-import { DORMANT_TARGET_DRIFT, advanceTargetDrift, driftDecay, driftOffset, effectiveTarget, presumedDriftState, projectedOffset, readTargetDriftState } from "./target-drift";
+import {
+  DORMANT_TARGET_DRIFT,
+  advanceTargetDrift,
+  dormantDriftEvaluation,
+  driftApplies,
+  driftDecay,
+  driftOffset,
+  driftOffsetAt,
+  driftScale,
+  effectiveTarget,
+  evaluateTargetDrift,
+  normalFromSums,
+  normalWindowStart,
+  presumedDriftState,
+  projectedOffset,
+  readTargetDriftState,
+  startDriftState,
+} from "./target-drift";
 
 const DRIFT = DEFAULT_ENGINE_CONFIG.targetDrift;
 const TICK_HOURS = 30 / 3600;
@@ -132,5 +149,73 @@ describe("the drifting target — the row and the projection", () => {
     // The board that follows: evidence above no evidence, and the quiet keep their seeded order.
     const order = Object.keys(observed).sort((a, b) => settle(b) - settle(a));
     expect(order).toEqual(["drake", "mrbeast", "patrick-mahomes", "kai-cenat", "jensen-huang", "kendrick-lamar", "warren-buffett"]);
+  });
+});
+
+describe("the drift redesign (2026-10-04) — relative coverage, the measured start, the fallback", () => {
+  const RELATIVE = { ...DRIFT, coverageMode: "relative" as const };
+  const normal = { grossPerHour: 0.1, signedPerHour: 0.03, hours: 672, events: 120 };
+
+  it("the scale: the person's own normal in relative mode, the constant in fixed mode, the constant as a fallback when there is no normal", () => {
+    expect(driftScale(DRIFT, normal)).toEqual({ scale: DRIFT.fullCoverageImpactPerHour, normal: null, fallback: false });
+    expect(driftScale(RELATIVE, normal)).toEqual({ scale: 0.1, normal: 0.1, fallback: false });
+    expect(driftScale(RELATIVE, null)).toEqual({ scale: DRIFT.fullCoverageImpactPerHour, normal: null, fallback: true });
+    expect(driftScale(RELATIVE, { ...normal, events: 0, grossPerHour: 0 })).toEqual({ scale: DRIFT.fullCoverageImpactPerHour, normal: null, fallback: true });
+  });
+
+  it("relative offsets read coverage and lean against the normal: the person's own rate is full coverage, and the lean is their own loudness", () => {
+    // At their normal, balanced: the seed. At their normal, as positive as they are loud: the ceiling. Half their normal, balanced: halfway to the floor.
+    expect(driftOffsetAt(0.1, 0, 0.1, DRIFT)).toBe(0);
+    expect(driftOffsetAt(0.1, 0.1, 0.1, DRIFT)).toBe(DRIFT.bound);
+    expect(driftOffsetAt(0.05, 0, 0.1, DRIFT)).toBe(-DRIFT.bound / 2);
+    // The same evidence under the fixed constant reads as half coverage: the relative rule is what lets a quiet person reach their seed.
+    expect(driftOffset(0.1, 0, DRIFT)).toBe(-DRIFT.bound / 2);
+    // A lean of 0.03 on a 0.1 normal is 0.3; on the 0.2 constant it would be 0.15.
+    expect(driftOffsetAt(0.1, 0.03, 0.1, DRIFT)).toBeCloseTo(DRIFT.bound * 0.3, 4);
+    expect(driftOffset(0.2, 0.03, DRIFT)).toBeCloseTo(DRIFT.bound * 0.15, 4);
+  });
+
+  it("the start state: carried from the row, else measured at the flip when there is a normal, else presumed on the scale in force", () => {
+    expect(startDriftState({ attention: 0.07, direction: -0.01, offset: -2 }, RELATIVE, normal, 0.1)).toEqual({ attention: 0.07, direction: -0.01, started: "carried" });
+    expect(startDriftState(DORMANT_TARGET_DRIFT, RELATIVE, normal, 0.1)).toEqual({ attention: 0.1, direction: 0.03, started: "measured" });
+    expect(startDriftState(DORMANT_TARGET_DRIFT, { ...RELATIVE, measuredStart: false }, normal, 0.1)).toEqual({ attention: 0.1, direction: 0, started: "presumed" });
+    expect(startDriftState(DORMANT_TARGET_DRIFT, RELATIVE, null, DRIFT.fullCoverageImpactPerHour)).toEqual({ attention: DRIFT.fullCoverageImpactPerHour, direction: 0, started: "presumed" });
+    // A measured start puts the target exactly where the evidence says: coverage 1, the lean the person's own.
+    const flip = evaluateTargetDrift(DORMANT_TARGET_DRIFT, 0, TICK_HOURS, RELATIVE, normal);
+    expect(flip.started).toBe("measured");
+    expect(flip.offset).toBeCloseTo(DRIFT.bound * 0.3, 2);
+    expect(flip).toMatchObject({ mode: "relative", normal: 0.1, scale: 0.1, fallback: false });
+  });
+
+  it("the fallback path for a person with no normal is the Phase 14 path exactly: about −1 at 2.7 days, −2 at 5.8, −4 at 14, never an instant −8", () => {
+    const hours = (t: number) => evaluateTargetDrift(DORMANT_TARGET_DRIFT, 0, t, RELATIVE, null);
+    expect(hours(2.7 * 24).offset).toBeCloseTo(-1, 1);
+    expect(hours(5.8 * 24).offset).toBeCloseTo(-2, 1);
+    expect(hours(14 * 24).offset).toBeCloseTo(-4, 1);
+    expect(hours(TICK_HOURS).offset).toBeCloseTo(0, 3);
+    expect(hours(2.7 * 24)).toMatchObject({ mode: "relative", normal: null, scale: DRIFT.fullCoverageImpactPerHour, fallback: true, started: "presumed" });
+    // And it is the fixed path, number for number.
+    for (const t of [12, 64.8, 139.2, 336, 672]) expect(hours(t).offset).toBe(advanceTargetDrift(DORMANT_TARGET_DRIFT, 0, t, DRIFT).offset);
+  });
+
+  it("advanceTargetDrift is the fixed path whatever the config says, so the Phase 14 projection stands; the dormant evaluation is the switch off", () => {
+    const state = advanceTargetDrift({ attention: 0.1, direction: 0.03, offset: 0 }, 0, 24, RELATIVE);
+    expect(state).toEqual({ attention: expect.any(Number), direction: expect.any(Number), offset: expect.any(Number) });
+    expect(state.offset).toBe(evaluateTargetDrift({ attention: 0.1, direction: 0.03, offset: 0 }, 0, 24, DRIFT).offset);
+    expect(dormantDriftEvaluation(RELATIVE)).toEqual({ attention: null, direction: null, offset: 0, mode: "relative", normal: null, scale: DRIFT.fullCoverageImpactPerHour, fallback: false, started: "dormant" });
+  });
+
+  it("the allowlist and the window: a slug on the list with the switch on, and the later of the window's edge and the regime start", () => {
+    expect(driftApplies({ ...DRIFT, enabled: true, people: ["kai-cenat"] }, "kai-cenat")).toBe(true);
+    expect(driftApplies({ ...DRIFT, enabled: true, people: ["kai-cenat"] }, "mrbeast")).toBe(false);
+    expect(driftApplies({ ...DRIFT, enabled: false, people: ["kai-cenat"] }, "kai-cenat")).toBe(false);
+    expect(driftApplies({ ...DRIFT, enabled: true, people: [] }, "kai-cenat")).toBe(false);
+    const now = new Date("2026-10-04T12:00:00.000Z");
+    expect(normalWindowStart(DRIFT, now).toISOString()).toBe("2026-09-06T12:00:00.000Z");
+    expect(normalWindowStart({ ...DRIFT, normalSince: "2026-10-03T00:00:00.000Z" }, now).toISOString()).toBe("2026-10-03T00:00:00.000Z");
+    expect(normalWindowStart({ ...DRIFT, normalSince: "2026-01-01T00:00:00.000Z" }, now).toISOString()).toBe("2026-09-06T12:00:00.000Z");
+    // The normal from sums: per hour of the window measured, six decimals.
+    const measured = normalFromSums({ grossImpact: 67.2, signedImpact: -13.44, events: 40 }, new Date(now.getTime() - 672 * 3_600_000), now);
+    expect(measured).toEqual({ grossPerHour: 0.1, signedPerHour: -0.02, hours: 672, events: 40 });
   });
 });

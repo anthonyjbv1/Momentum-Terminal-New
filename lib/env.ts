@@ -172,6 +172,12 @@ export function getEngineSecretOrNull(): string | null {
  *                                         guard (code default 30, unchanged)
  *   ENGINE_TARGET_DRIFT_ENABLED           the drifting Gravity target (Phase
  *                                         14); exactly "true" turns it on
+ *   ENGINE_TARGET_DRIFT_PEOPLE            the drift's allowlist: comma-
+ *                                         separated slugs; unset, nobody
+ *   ENGINE_TARGET_DRIFT_COVERAGE          "relative" for the per-person
+ *                                         normal; anything else, fixed
+ *   ENGINE_TARGET_DRIFT_NORMAL_SINCE      the earliest instant the normal is
+ *                                         measured from (an ISO date)
  *   ENGINE_VOLUME_REFERENCE               the volume weight's reference rate
  *                                         (code default 4, derived from the
  *                                         roster's measured geometric mean);
@@ -186,6 +192,9 @@ export function getEngineSecretOrNull(): string | null {
 export function getEngineEnvOverrides(): {
   tradingMinPopulatedWindows: string | undefined;
   targetDriftEnabled: string | undefined;
+  targetDriftPeople: string | undefined;
+  targetDriftCoverage: string | undefined;
+  targetDriftNormalSince: string | undefined;
   volumeReference: string | undefined;
   moodWindowMinutes: string | undefined;
   moodRatePerHour: string | undefined;
@@ -195,6 +204,10 @@ export function getEngineEnvOverrides(): {
   return {
     tradingMinPopulatedWindows: process.env.ENGINE_TRADING_MIN_POPULATED_WINDOWS,
     targetDriftEnabled: process.env.ENGINE_TARGET_DRIFT_ENABLED,
+    // The drift redesign (2026-10-04): the allowlist, the coverage mode and the normal's regime start.
+    targetDriftPeople: process.env.ENGINE_TARGET_DRIFT_PEOPLE,
+    targetDriftCoverage: process.env.ENGINE_TARGET_DRIFT_COVERAGE,
+    targetDriftNormalSince: process.env.ENGINE_TARGET_DRIFT_NORMAL_SINCE,
     volumeReference: process.env.ENGINE_VOLUME_REFERENCE,
     moodWindowMinutes: process.env.ENGINE_MOOD_WINDOW_MINUTES,
     moodRatePerHour: process.env.ENGINE_MOOD_RATE_PER_HOUR,

@@ -315,7 +315,7 @@ describe("Engine tick — the drifting target", () => {
   });
 
   it("ON: the first tick moves no target (a never-measured person is presumed fully covered), and the state is persisted", async () => {
-    const config = withEngineConfig({ targetDrift: { enabled: true } });
+    const config = withEngineConfig({ targetDrift: { enabled: true, people: ["drake", "kendrick-lamar", "mrbeast"] } });
     const store = createMemoryEngineStore(seed());
     const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config });
     for (const p of summary.people) {
@@ -331,7 +331,7 @@ describe("Engine tick — the drifting target", () => {
 
   it("ON, weeks of silence: an inert person's target sinks toward their own floor and Gravity follows it; a covered person's rises", async () => {
     // Market Mood off, so the quiet person's score shows Gravity following the target and nothing else.
-    const config = withEngineConfig({ targetDrift: { enabled: true }, marketMood: { ratePerHour: 0 } });
+    const config = withEngineConfig({ targetDrift: { enabled: true, people: ["quiet", "covered"] }, marketMood: { ratePerHour: 0 } });
     const quiet = makePerson({ id: "p-quiet", slug: "quiet", display_name: "Quiet", current_score: 63, revert_target: 63 });
     const covered = makePerson({ id: "p-covered", slug: "covered", display_name: "Covered", current_score: 60, revert_target: 60 });
     const store = createMemoryEngineStore({ people: [quiet, covered] });
@@ -365,7 +365,7 @@ describe("Engine tick — the drifting target", () => {
 
   it("ON, bounded: no amount of praise takes a target past seed + bound, and the score settles there", async () => {
     // Full coverage is 0.2 points an hour; make it tiny so a daily praise saturates the drift inside the test.
-    const config = withEngineConfig({ targetDrift: { enabled: true, fullCoverageImpactPerHour: 0.001 } });
+    const config = withEngineConfig({ targetDrift: { enabled: true, people: ["star"], fullCoverageImpactPerHour: 0.001 } });
     const person = makePerson({ id: "p-star", slug: "star", display_name: "Star", current_score: 60, revert_target: 60 });
     const store = createMemoryEngineStore({ people: [person] });
     let last: Awaited<ReturnType<typeof runEngineTick>> | null = null;
@@ -379,6 +379,125 @@ describe("Engine tick — the drifting target", () => {
     expect(star.targetOffset).toBeCloseTo(8, 0);
     expect(star.revertTarget).toBeCloseTo(68, 0);
     expect(star.newScore).toBeLessThanOrEqual(68 + 1.3); // the day's praise sits on top of a target that never passes 68
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE DRIFT REDESIGN (2026-10-04): the allowlist, relative coverage, the
+// measured start, the no-history fallback, the audit block.
+// ---------------------------------------------------------------------------
+
+describe("Engine tick — the drift redesign", () => {
+  const DAY = 24 * 3_600_000;
+  const praise = (id: string, personId: string, at: Date, sourceName = "rss"): EngineSignal => ({ id, personId, headline: "crosses 100M monthly listeners on Spotify", rawPayload: { kind: "article" }, sourceName, sourceTier: 2, occurredAt: at, createdAt: at });
+
+  /** The same days of praise for Drake, under one config, as the rows and events the store ends with. */
+  async function runDays(config: ReturnType<typeof withEngineConfig>, dayCount: number) {
+    const store = createMemoryEngineStore(seed());
+    const summaries = [];
+    for (let day = 1; day <= dayCount; day += 1) {
+      const now = new Date(NOW.getTime() + day * DAY);
+      for (let s = 0; s < 3; s += 1) store.signals.push(praise(`d-${day}-${s}`, "p-drake", now, `source-${s}`));
+      summaries.push(await runEngineTick({ store, scorer: rulesBasedScorer, now, config }));
+    }
+    return { store, summaries };
+  }
+
+  it("ALLOWLIST: with the switch on, only listed people drift; everyone else is tick for tick what they are with the switch off", async () => {
+    const off = await runDays(withEngineConfig({ targetDrift: { enabled: false } }), 20);
+    const on = await runDays(withEngineConfig({ targetDrift: { enabled: true, people: ["mrbeast"] } }), 20);
+    for (let tick = 0; tick < 20; tick += 1) {
+      for (const slug of ["drake", "kendrick-lamar"]) {
+        const a = off.summaries[tick].people.find((p) => p.slug === slug)!;
+        const b = on.summaries[tick].people.find((p) => p.slug === slug)!;
+        expect([b.newScore, b.revertTarget, b.targetOffset, b.forces], `${slug} tick ${tick + 1}`).toEqual([a.newScore, a.revertTarget, a.targetOffset, a.forces]);
+      }
+    }
+    for (const id of ["p-drake", "p-kendrick"]) {
+      expect(on.store.people.find((p) => p.id === id)).toMatchObject({ target_attention: null, target_direction: null, target_offset: 0 });
+      const gravity = on.store.scoreEvents.filter((e) => e.personId === id && e.force === "gravity").at(-1)!;
+      expect(gravity.details).toMatchObject({ targetDrift: { enabled: true, listed: false, started: "dormant", offset: 0, attention: null, direction: null, fallback: false } });
+    }
+    // MrBeast, listed and silent, has sunk toward his floor; the audit block says he is listed.
+    const mr = on.summaries[19].people.find((p) => p.slug === "mrbeast")!;
+    expect(mr.targetOffset).toBeLessThan(-4);
+    expect(on.store.scoreEvents.filter((e) => e.personId === "p-mrbeast" && e.force === "gravity").at(-1)!.details).toMatchObject({ targetDrift: { enabled: true, listed: true, mode: "fixed", normal: null, fallback: false } });
+    // An empty list moves nobody.
+    const nobody = await runDays(withEngineConfig({ targetDrift: { enabled: true, people: [] } }), 3);
+    for (const p of nobody.store.people) expect(p).toMatchObject({ target_attention: null, target_direction: null, target_offset: 0 });
+  });
+
+  it("NO HISTORY (Anthony Baptiste): a listed person with no normal takes the presumed path in relative mode, about −1 at 2.7 days and −2 at 5.8, never an instant −8", async () => {
+    // Below his seed, so every tick records a gravity row (an impact of exactly zero is not written).
+    const anthony = makePerson({ id: "p-anthony", slug: "anthony-baptiste", display_name: "Anthony Baptiste", current_score: 59, revert_target: 60 });
+    const config = withEngineConfig({ targetDrift: { enabled: true, people: ["anthony-baptiste"], coverageMode: "relative", normalSince: "2026-09-01T00:00:00.000Z" }, marketMood: { ratePerHour: 0 } });
+    const store = createMemoryEngineStore({ people: [anthony] });
+    const SIX_HOURS = 6 * 3_600_000;
+    const offsets: number[] = [];
+    for (let tick = 1; tick <= 24; tick += 1) {
+      const now = new Date(NOW.getTime() + tick * SIX_HOURS);
+      const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now, config });
+      offsets.push(summary.people[0].targetOffset);
+    }
+    // The first tick spans 30 s and moves nothing; then 2^(−t/336h) decay from the presumed full coverage.
+    expect(offsets[0]).toBeCloseTo(0, 2);
+    expect(offsets[11]).toBeCloseTo(-1, 1); // 66 h = 2.75 days: −8 × (1 − 2^(−66/336)) = −1.02
+    expect(offsets[23]).toBeCloseTo(-2, 1); // 138 h = 5.75 days: −1.98
+    expect(Math.min(...offsets)).toBeGreaterThan(-2.5);
+    for (let i = 1; i < offsets.length; i += 1) expect(offsets[i]).toBeLessThanOrEqual(offsets[i - 1]);
+    const first = store.scoreEvents.find((e) => e.personId === "p-anthony" && e.force === "gravity")!;
+    expect(first.details).toMatchObject({ targetDrift: { listed: true, mode: "relative", normal: null, scale: CONFIG.targetDrift.fullCoverageImpactPerHour, fallback: true, started: "presumed" } });
+    const last = store.scoreEvents.filter((e) => e.personId === "p-anthony" && e.force === "gravity").at(-1)!;
+    expect(last.details).toMatchObject({ targetDrift: { fallback: true, started: "carried" } });
+  });
+
+  it("RELATIVE + MEASURED START on fixture data: the flip reads the person's own normal and starts the state from their measured averages", async () => {
+    // Kai's normal from the 10-03 preflight window: 0.17 gross, 0.0216 signed points an hour.
+    const kai = makePerson({ id: "p-kai", slug: "kai-cenat", display_name: "Kai Cenat", current_score: 60, revert_target: 60 });
+    const normal = { grossPerHour: 0.1701, signedPerHour: 0.0216, hours: 672, events: 241 };
+    const config = withEngineConfig({ targetDrift: { enabled: true, people: ["kai-cenat"], coverageMode: "relative" }, marketMood: { ratePerHour: 0 } });
+    const store = createMemoryEngineStore({ people: [kai], driftNormals: { "p-kai": normal } });
+    const first = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config });
+    // Coverage 1 by construction, lean = 0.0216 / 0.1701: offset = 8 × lean.
+    const lean = normal.signedPerHour / normal.grossPerHour;
+    expect(first.people[0].targetOffset).toBeCloseTo(8 * lean, 2);
+    expect(store.people[0].target_attention).toBeCloseTo(normal.grossPerHour, 4);
+    expect(store.people[0].target_direction).toBeCloseTo(normal.signedPerHour, 4);
+    expect(store.scoreEvents[0].details).toMatchObject({
+      targetDrift: { enabled: true, listed: true, mode: "relative", normal: normal.grossPerHour, scale: normal.grossPerHour, fallback: false, started: "measured" },
+    });
+    // The next tick carries the row's state; a week of silence sinks coverage below the normal, so the offset falls from where it started.
+    let last = first;
+    for (let day = 1; day <= 7; day += 1) last = await runEngineTick({ store, scorer: rulesBasedScorer, now: new Date(NOW.getTime() + day * DAY), config });
+    expect(store.scoreEvents.filter((e) => e.personId === "p-kai" && e.force === "gravity")[1].details).toMatchObject({ targetDrift: { started: "carried" } });
+    expect(last.people[0].targetOffset).toBeLessThan(8 * lean);
+    expect(last.people[0].targetOffset).toBeGreaterThan(-3);
+
+    // The same person under the presumption instead: the flip starts at the seed (offset 0) and knows nothing of the normal.
+    const presumed = createMemoryEngineStore({ people: [{ ...kai, current_score: 58 }], driftNormals: { "p-kai": normal } });
+    const summary = await runEngineTick({ store: presumed, scorer: rulesBasedScorer, now: NOW, config: withEngineConfig({ targetDrift: { ...config.targetDrift, measuredStart: false } }) });
+    expect(summary.people[0].targetOffset).toBeCloseTo(0, 3);
+    expect(presumed.scoreEvents[0].details).toMatchObject({ targetDrift: { started: "presumed", normal: normal.grossPerHour, fallback: false } });
+  });
+
+  it("RELATIVE without fixture data: the memory store measures the normal from its own Signals rows, as the Supabase store reads score_events", async () => {
+    const config = withEngineConfig({ targetDrift: { enabled: true, people: ["drake"], coverageMode: "relative" }, marketMood: { ratePerHour: 0 } });
+    const store = createMemoryEngineStore(seed());
+    // Nothing has been scored yet, so the flip is presumed and the fallback stands...
+    const first = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config });
+    expect(first.people.find((p) => p.slug === "drake")!.targetOffset).toBeCloseTo(0, 3);
+    expect(store.scoreEvents.find((e) => e.personId === "p-drake" && e.force === "gravity")!.details).toMatchObject({ targetDrift: { fallback: true, started: "presumed" } });
+    // ...and after days of praise the store's own rows give Drake a normal: the gravity row names it and the fallback lifts.
+    for (let day = 1; day <= 5; day += 1) {
+      const now = new Date(NOW.getTime() + day * DAY);
+      for (let s = 0; s < 3; s += 1) store.signals.push(praise(`r-${day}-${s}`, "p-drake", now, `source-${s}`));
+      await runEngineTick({ store, scorer: rulesBasedScorer, now, config });
+    }
+    const last = store.scoreEvents.filter((e) => e.personId === "p-drake" && e.force === "gravity").at(-1)!;
+    const block = (last.details as { targetDrift: { normal: number | null; fallback: boolean; mode: string } }).targetDrift;
+    expect(block.mode).toBe("relative");
+    expect(block.fallback).toBe(false);
+    expect(block.normal).toBeGreaterThan(0);
   });
 });
 

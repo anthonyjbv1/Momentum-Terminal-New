@@ -14,7 +14,7 @@ import { volumeWeight } from "@/lib/engine/signal-volume";
 import { confirmStories, storyOptions } from "@/lib/engine/stories";
 import { storyRecords } from "@/lib/engine/story-records";
 import { personNames } from "@/lib/ingest/stories";
-import { DORMANT_TARGET_DRIFT, advanceTargetDrift, effectiveTarget, readTargetDriftState, type TargetDriftState } from "@/lib/engine/target-drift";
+import { dormantDriftEvaluation, driftApplies, effectiveTarget, evaluateTargetDrift, readTargetDriftState, type DriftEvaluation } from "@/lib/engine/target-drift";
 import { TickCallBudget, type DeferralReason } from "@/lib/engine/sentiment/budget";
 import { isMetricSignal, metricScorer as defaultMetricScorer } from "@/lib/engine/sentiment/metric";
 import { isPrescoredSignal, prescoredScorer as defaultPrescoredScorer } from "@/lib/engine/sentiment/prescored";
@@ -202,10 +202,15 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     if (config.newsVolume.enabled) scoredSignals = tuneNewsVolume(scoredSignals, context.newsVolumeByPerson?.get(person.id), config.newsVolume);
     const signalsEntry = signalsForce(scoredSignals, config.signals, volume);
     const signals = roundForce(quality ? { ...signalsEntry, details: { ...signalsEntry.details, salienceMultipliers: quality.salienceMultipliers, storyClusters } } : signalsEntry);
-    // The target: the seed, plus the drift's offset when the drift is on.
-    // Off, the dormant state is written back so nothing accumulates unseen.
+    // The target: the seed, plus the drift's offset when the drift is on AND
+    // the person is on its list (the redesign, 2026-10-04). Off, or unlisted,
+    // the dormant state is written back so nothing accumulates unseen.
     const seedTarget = Number(person.revert_target);
-    const drift: TargetDriftState = config.targetDrift.enabled ? advanceTargetDrift(readTargetDriftState(person), signals.impact, deltaHours, config.targetDrift) : DORMANT_TARGET_DRIFT;
+    const listed = driftApplies(config.targetDrift, person.slug);
+    const driftDetail: DriftEvaluation = listed
+      ? evaluateTargetDrift(readTargetDriftState(person), signals.impact, deltaHours, config.targetDrift, context.driftNormalByPerson?.get(person.id) ?? null)
+      : dormantDriftEvaluation(config.targetDrift);
+    const drift = { attention: driftDetail.attention, direction: driftDetail.direction, offset: driftDetail.offset };
     const target = effectiveTarget(seedTarget, drift.offset);
     const gravityEntry = gravityForce(previousScore, target, deltaHours, config.gravity);
     const gravity = roundForce({
@@ -213,12 +218,25 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       details: {
         ...gravityEntry.details,
         seedTarget,
-        targetDrift: { enabled: config.targetDrift.enabled, offset: drift.offset, attention: drift.attention, direction: drift.direction, halfLifeHours: config.targetDrift.halfLifeHours, bound: config.targetDrift.bound },
+        targetDrift: {
+          enabled: config.targetDrift.enabled,
+          listed,
+          mode: driftDetail.mode,
+          normal: driftDetail.normal,
+          scale: driftDetail.scale,
+          fallback: driftDetail.fallback,
+          started: driftDetail.started,
+          offset: drift.offset,
+          attention: drift.attention,
+          direction: drift.direction,
+          halfLifeHours: config.targetDrift.halfLifeHours,
+          bound: config.targetDrift.bound,
+        },
       },
     });
     const openCapital = context.openCapitalCentsByPerson.get(person.id) ?? 0;
     const concentration = Number(person.max_allocation_cents) > 0 ? openCapital / Number(person.max_allocation_cents) : 0;
-    return { person, previousScore, deltaHours, gravity, target, drift, scoredSignals, signals, openCapital, concentration, storyClusters };
+    return { person, previousScore, deltaHours, gravity, target, drift, driftDetail, scoredSignals, signals, openCapital, concentration, storyClusters };
   });
 
   const signalsImpactByPerson = new Map(partial.map((p) => [p.person.id, p.signals.impact]));
@@ -262,6 +280,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       signalsImpact: p.signals.impact,
       target: p.target,
       drift: p.drift,
+      driftDetail: p.driftDetail,
       firstPassScore,
       inverseAdjustment: 0,
       newScore: firstPassScore,

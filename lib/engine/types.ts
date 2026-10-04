@@ -2,7 +2,7 @@ import type { MoodWindowHistory } from "@/lib/engine/forces/market-mood";
 import type { DeferralReason } from "@/lib/engine/sentiment/budget";
 import type { SentimentResult } from "@/lib/engine/sentiment/types";
 import type { PersonSignalVolume } from "@/lib/engine/signal-volume";
-import type { TargetDriftState } from "@/lib/engine/target-drift";
+import type { DriftEvaluation, DriftNormal, TargetDriftState } from "@/lib/engine/target-drift";
 import type { InversePair, Person } from "@/types";
 import type { Json } from "@/types/database";
 
@@ -129,6 +129,8 @@ export interface TickContext {
   recentStoriesByPerson?: Map<string, RecentStory[]>;
   /** The news-volume tune's inputs per person (variant C): the window's signed stories and the day's state. Loaded only while the tune is on. */
   newsVolumeByPerson?: Map<string, NewsVolumeContext>;
+  /** Each listed person's drift normal (the redesign, 2026-10-04): their trailing Signals averages over the normal's window. Loaded only while the drift is on with people listed. */
+  driftNormalByPerson?: Map<string, DriftNormal>;
   /** Trade events inside the Trading Activity history window. */
   tradeEvents: TradeEvent[];
   /**
@@ -157,8 +159,10 @@ export interface PersonTickResult {
   signalsImpact: number;
   /** The target Gravity pulled toward: the seed plus the drift's offset. */
   target: number;
-  /** The drifting target's state after this tick; dormant while the drift is off. */
+  /** The drifting target's state after this tick; dormant while the drift is off or the person unlisted. */
   drift: TargetDriftState;
+  /** The drift's evaluation this tick (the redesign): the mode, the scale, whether the fallback applied, how the state started. */
+  driftDetail: DriftEvaluation;
   /** Score after the five forces, clamped. */
   firstPassScore: number;
   /** Inverse-pair adjustment applied in the second pass. */

@@ -2959,6 +2959,17 @@ export type Database = {
         }
         Returns: string
       }
+      drift_signal_normals: {
+        Args: { p_person_ids: string[]; p_since: string }
+        Returns: {
+          events: number
+          first_at: string
+          gross_impact: number
+          last_at: string
+          person_id: string
+          signed_impact: number
+        }[]
+      }
       home_momentum: {
         Args: { p_points?: number; p_sample?: number; p_window?: string }
         Returns: {

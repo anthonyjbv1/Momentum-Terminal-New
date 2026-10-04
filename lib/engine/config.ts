@@ -133,9 +133,47 @@ export interface EngineConfig {
      * the design: it is global, so a person with more sources reaches it
      * more easily, the same weakness the volume normalisation carries and
      * with the same honest fix (each person's own trailing volume) once
-     * there is history to build it from.
+     * there is history to build it from. In "relative" mode (below) it is
+     * the fallback scale for a person with no normal of their own.
      */
     fullCoverageImpactPerHour: number;
+    /**
+     * THE ALLOWLIST (the drift redesign, 2026-10-04). With the switch on,
+     * the drift applies to these people (by slug) and to nobody else:
+     * everyone unlisted keeps the dormant state exactly as with the switch
+     * off (null evidence, a zero offset, the target their seed). Empty, the
+     * switch moves nobody. ENGINE_TARGET_DRIFT_PEOPLE sets it, and the tick
+     * logs it as an override.
+     */
+    people: readonly string[];
+    /**
+     * COVERAGE, fixed or relative. "fixed": coverage and lean divide by
+     * fullCoverageImpactPerHour, the global constant (Phase 14 as shipped).
+     * "relative": they divide by the person's own NORMAL, their mean gross
+     * Signals impact per hour over normalWindowHours (measured no earlier
+     * than normalSince, so a scoring regime change does not contaminate it),
+     * so "fully covered" means "as covered as this person usually is" and
+     * the lean is read against their own loudness too. A person with no
+     * normal (no evidence in the window at all) falls back to the fixed
+     * constant, decaying as with the switch just turned on, so their offset
+     * moves gradually rather than dropping to the floor at once; the gravity
+     * row says when the fallback applied.
+     */
+    coverageMode: "fixed" | "relative";
+    /** The window the normal is measured over, in hours. 672 is four weeks. */
+    normalWindowHours: number;
+    /** The earliest instant the normal may be measured from (ISO 8601), or null for the window alone: the regime start, e.g. the day after the volume tune shipped. */
+    normalSince: string | null;
+    /**
+     * THE START STATE. true: at a person's flip (their first tick on the
+     * list, with no state on their row) attention and direction are set to
+     * their measured trailing averages over the normal's window, so the
+     * target starts where the evidence puts it and the drift moves only on
+     * what changes from there. false: the Phase 14 presumption (full
+     * coverage, balanced), from which everything is decay. A person with no
+     * measurement takes the presumption either way.
+     */
+    measuredStart: boolean;
   };
   /** FORCE 2 — Signals (news impact). */
   signals: {
@@ -595,7 +633,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   },
   score: { floor: 35, ceiling: 100, decimals: 4 },
   gravity: { lambdaPerHour: 0.35 },
-  targetDrift: { enabled: false, halfLifeHours: 336, bound: 8, fullCoverageImpactPerHour: 0.2 },
+  targetDrift: { enabled: false, halfLifeHours: 336, bound: 8, fullCoverageImpactPerHour: 0.2, people: [], coverageMode: "fixed", normalWindowHours: 672, normalSince: null, measuredStart: true },
   signals: {
     baseImpact: 1.5,
     tierMultipliers: { 1: 1.5, 2: 1.0, 3: 0.5, 4: 0.3, 5: 0.3 },
@@ -729,6 +767,25 @@ export interface EngineEnvOverrides {
    */
   targetDriftEnabled?: string | undefined;
   /**
+   * ENGINE_TARGET_DRIFT_PEOPLE. The drift's allowlist (targetDrift.people,
+   * default none): comma-separated slugs. Blanks are dropped; nothing else
+   * is validated here, an unknown slug simply matches nobody. Unset or
+   * empty, the switch moves nobody.
+   */
+  targetDriftPeople?: string | undefined;
+  /**
+   * ENGINE_TARGET_DRIFT_COVERAGE. The coverage mode (targetDrift.coverageMode,
+   * default "fixed"): exactly "relative" selects the per-person normal;
+   * anything else leaves the fixed constant.
+   */
+  targetDriftCoverage?: string | undefined;
+  /**
+   * ENGINE_TARGET_DRIFT_NORMAL_SINCE. The earliest instant the normal is
+   * measured from (targetDrift.normalSince, default none): an ISO 8601 date
+   * or timestamp, e.g. 2026-10-03; anything that does not parse is ignored.
+   */
+  targetDriftNormalSince?: string | undefined;
+  /**
    * ENGINE_VOLUME_REFERENCE. The per-person volume weight's reference rate
    * (signals.volume.referenceSignalsPerDay, default 4, derived from the
    * roster's measured geometric mean). This one is EXPECTED to need
@@ -780,6 +837,26 @@ export function parseExactTrue(raw: string | undefined): boolean {
   return typeof raw === "string" && raw.trim() === "true";
 }
 
+/** A comma-separated list from a raw environment string: trimmed, blanks dropped, duplicates kept once, in order. Empty when unset. */
+export function parseSlugList(raw: string | undefined): string[] {
+  if (typeof raw !== "string") return [];
+  const out: string[] = [];
+  for (const part of raw.split(",")) {
+    const slug = part.trim();
+    if (slug && !out.includes(slug)) out.push(slug);
+  }
+  return out;
+}
+
+/** An ISO 8601 date or timestamp from a raw environment string, normalised to a timestamp, or null when it does not parse. */
+export function parseIsoInstant(raw: string | undefined): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!/^\d{4}-\d{2}-\d{2}(T[\d:.]+(Z|[+-]\d{2}:?\d{2})?)?$/.test(trimmed)) return null;
+  const parsed = Date.parse(trimmed);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
 /** A strictly positive finite number from a raw environment string, or null. Decimals allowed. */
 export function parsePositiveNumber(raw: string | undefined): number | null {
   if (typeof raw !== "string") return null;
@@ -794,7 +871,18 @@ export function engineConfigFromEnv(env: EngineEnvOverrides, base: EngineConfig 
   const overrides: DeepPartial<EngineConfig> = {};
   const minPopulatedWindows = parsePositiveInteger(env.tradingMinPopulatedWindows);
   if (minPopulatedWindows !== null) overrides.tradingActivity = { minPopulatedWindows };
-  if (parseExactTrue(env.targetDriftEnabled)) overrides.targetDrift = { enabled: true };
+  // The drift's switch and its three companions (the redesign, 2026-10-04): each only when given.
+  const people = parseSlugList(env.targetDriftPeople);
+  const normalSince = parseIsoInstant(env.targetDriftNormalSince);
+  const relative = typeof env.targetDriftCoverage === "string" && env.targetDriftCoverage.trim() === "relative";
+  if (parseExactTrue(env.targetDriftEnabled) || people.length > 0 || normalSince !== null || relative) {
+    overrides.targetDrift = {
+      ...(parseExactTrue(env.targetDriftEnabled) ? { enabled: true } : {}),
+      ...(people.length > 0 ? { people } : {}),
+      ...(relative ? { coverageMode: "relative" as const } : {}),
+      ...(normalSince !== null ? { normalSince } : {}),
+    };
+  }
   // Handed over whole, like the volume block below: the section carries nested tunables.
   if (parseExactTrue(env.signalQualityEnabled)) overrides.signalQuality = { ...base.signalQuality, enabled: true };
   if (parseExactTrue(env.newsVolumeTuneEnabled)) overrides.newsVolume = { ...base.newsVolume, enabled: true };
@@ -822,6 +910,15 @@ export function describeEngineOverrides(config: EngineConfig, base: EngineConfig
   }
   if (config.targetDrift.enabled !== base.targetDrift.enabled) {
     out.push(`targetDrift.enabled = ${config.targetDrift.enabled} (default ${base.targetDrift.enabled})`);
+  }
+  if (config.targetDrift.people.join(",") !== base.targetDrift.people.join(",")) {
+    out.push(`targetDrift.people = ${config.targetDrift.people.length > 0 ? config.targetDrift.people.join(",") : "none"} (default ${base.targetDrift.people.length > 0 ? base.targetDrift.people.join(",") : "none"})`);
+  }
+  if (config.targetDrift.coverageMode !== base.targetDrift.coverageMode) {
+    out.push(`targetDrift.coverageMode = ${config.targetDrift.coverageMode} (default ${base.targetDrift.coverageMode})`);
+  }
+  if (config.targetDrift.normalSince !== base.targetDrift.normalSince) {
+    out.push(`targetDrift.normalSince = ${config.targetDrift.normalSince ?? "none"} (default ${base.targetDrift.normalSince ?? "none"})`);
   }
   if (config.signals.volume.referenceSignalsPerDay !== base.signals.volume.referenceSignalsPerDay) {
     out.push(`signals.volume.referenceSignalsPerDay = ${config.signals.volume.referenceSignalsPerDay} (default ${base.signals.volume.referenceSignalsPerDay})`);

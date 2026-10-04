@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_ENGINE_CONFIG, describeEngineOverrides, engineConfigFromEnv, parseExactTrue, parsePositiveInteger, parsePositiveNumber } from "./config";
+import { DEFAULT_ENGINE_CONFIG, describeEngineOverrides, engineConfigFromEnv, parseExactTrue, parseIsoInstant, parsePositiveInteger, parsePositiveNumber, parseSlugList } from "./config";
 import { CRON_DEFAULTS } from "./cron";
 import { CALLS_PER_PERSON_PER_TICK } from "./sentiment/budget";
 import { CALL_OVERHEAD_MS } from "./sentiment/llm";
@@ -98,6 +98,31 @@ describe("Phase 14 invariants", () => {
     expect(describeEngineOverrides(engineConfigFromEnv({ targetDriftEnabled: "true" }))).toEqual(["targetDrift.enabled = true (default false)"]);
   });
 
+  it("the drift redesign: the allowlist, the coverage mode and the regime start come from their own variables, each logged as an override", () => {
+    expect(targetDrift.people).toEqual([]);
+    expect(targetDrift.coverageMode).toBe("fixed");
+    expect(targetDrift.normalWindowHours).toBe(672);
+    expect(targetDrift.normalSince).toBeNull();
+    expect(targetDrift.measuredStart).toBe(true);
+    expect(parseSlugList(" mrbeast, kai-cenat ,,kai-cenat")).toEqual(["mrbeast", "kai-cenat"]);
+    expect(parseSlugList(undefined)).toEqual([]);
+    expect(parseIsoInstant("2026-10-03")).toBe("2026-10-03T00:00:00.000Z");
+    expect(parseIsoInstant(" 2026-10-03T17:49:00Z ")).toBe("2026-10-03T17:49:00.000Z");
+    for (const bad of ["", "yesterday", "10-03", "2026-13-40"]) expect(parseIsoInstant(bad)).toBeNull();
+    const config = engineConfigFromEnv({ targetDriftEnabled: "true", targetDriftPeople: "mrbeast,kai-cenat", targetDriftCoverage: "relative", targetDriftNormalSince: "2026-10-03" });
+    expect(config.targetDrift).toMatchObject({ enabled: true, people: ["mrbeast", "kai-cenat"], coverageMode: "relative", normalSince: "2026-10-03T00:00:00.000Z", halfLifeHours: 336, bound: 8 });
+    expect(describeEngineOverrides(config)).toEqual([
+      "targetDrift.enabled = true (default false)",
+      "targetDrift.people = mrbeast,kai-cenat (default none)",
+      "targetDrift.coverageMode = relative (default fixed)",
+      "targetDrift.normalSince = 2026-10-03T00:00:00.000Z (default none)",
+    ]);
+    // Anything but exactly "relative" leaves the mode fixed; a list without the switch is logged but moves nobody (the tick checks both).
+    expect(engineConfigFromEnv({ targetDriftCoverage: "Relative" }).targetDrift.coverageMode).toBe("fixed");
+    expect(engineConfigFromEnv({ targetDriftPeople: "mrbeast" }).targetDrift).toMatchObject({ enabled: false, people: ["mrbeast"] });
+    expect(describeEngineOverrides(engineConfigFromEnv({ targetDriftPeople: "mrbeast" }))).toEqual(["targetDrift.people = mrbeast (default none)"]);
+  });
+
   /**
    * PHASE 18++. The volume reference is the one tunable that is EXPECTED to
    * need re-deriving as subjects and sources are added, so it has an override
@@ -133,7 +158,7 @@ describe("Phase 14 invariants", () => {
     // Its constants are its own: nothing in the Signals or memory sections reads as a drift constant, and the switch only lives here.
     expect(Object.keys(signals)).not.toContain("targetDrift");
     expect(Object.keys(memory)).not.toContain("targetDrift");
-    expect(Object.keys(targetDrift).sort()).toEqual(["bound", "enabled", "fullCoverageImpactPerHour", "halfLifeHours"]);
+    expect(Object.keys(targetDrift).sort()).toEqual(["bound", "coverageMode", "enabled", "fullCoverageImpactPerHour", "halfLifeHours", "measuredStart", "normalSince", "normalWindowHours", "people"]);
   });
 
   it("changed no force constant: Gravity's λ, the freshness curve and memory expiry are what they were", () => {
