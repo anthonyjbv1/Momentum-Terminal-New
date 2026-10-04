@@ -3,7 +3,7 @@ import "server-only";
 import { cache } from "react";
 
 import { getCurrentUser } from "@/lib/auth";
-import { RANGES, emptySeries, type SeriesByRange } from "@/lib/person/profile-model";
+import { RANGES, emptySeries, type RangeKey, type SeriesByRange } from "@/lib/person/profile-model";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 
 import {
@@ -43,23 +43,38 @@ export const getMyPortfolio = cache(async (): Promise<PortfolioSummary | null> =
   return toPortfolioSummary(data);
 });
 
-/** Recorded value history for every chart range, each downsampled by the database. */
-export const getMyValueSeries = cache(async (): Promise<SeriesByRange> => {
+/**
+ * The ranges the portfolio page renders on the server (the tab-switch lag
+ * fix, 2026-10-04): the two quick ones. 7D and ALL, the two slowest reads
+ * in the app (the 10-03 audit: 104 to 500 ms and 274 to 860 ms of database
+ * time), are read through /api/portfolio/series when first tapped, by the
+ * same RPC with the same arguments.
+ */
+export const SERVER_RENDERED_RANGES: readonly RangeKey[] = ["1h", "24h"];
+
+/**
+ * Recorded value history for the given chart ranges, each downsampled by the
+ * database; every other range is left empty. The since and points per range
+ * are RANGES' own, whoever asks, so a range reads the same whether the page
+ * or the series route asked for it.
+ */
+export const getMyValueSeries = cache(async (ranges: readonly RangeKey[] = SERVER_RENDERED_RANGES): Promise<SeriesByRange> => {
   const user = await getCurrentUser();
   const series = emptySeries();
   if (!user) return series;
   const supabase = await createSupabaseServerClient();
   const now = Date.now();
+  const wanted = RANGES.filter((range) => ranges.includes(range.key));
 
   const results = await Promise.all(
-    RANGES.map((range) =>
+    wanted.map((range) =>
       supabase.rpc("my_portfolio_value_series", {
         p_since: range.windowMs === null ? undefined : new Date(now - range.windowMs).toISOString(),
         p_points: range.points,
       }),
     ),
   );
-  RANGES.forEach((range, index) => {
+  wanted.forEach((range, index) => {
     const result = results[index];
     if (result.error) {
       // The chart is an enhancement: a failed range reads as empty, the page still renders.

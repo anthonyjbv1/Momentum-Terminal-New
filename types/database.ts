@@ -3168,6 +3168,16 @@ export type Database = {
           score: number
         }[]
       }
+      person_score_series_many: {
+        Args: { p_person_ids: string[]; p_points?: number; p_since: string }
+        Returns: {
+          bucket_at: string
+          open: number
+          person_id: string
+          samples: number
+          score: number
+        }[]
+      }
       person_signal_volume: {
         Args: { p_days?: number }
         Returns: {

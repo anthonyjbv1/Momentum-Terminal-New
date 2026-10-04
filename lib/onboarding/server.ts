@@ -46,12 +46,16 @@ export const getTourPersonSlug = cache(async (): Promise<string | null> => {
   return pickTourPerson((data ?? []).map((row) => ({ slug: row.slug, tradingMode: row.trading_mode ?? null })));
 });
 
-/** The signed-in person's follows, as person ids. Empty when signed out or on any failure. */
+/**
+ * The signed-in person's follows, as person ids. Empty when signed out or on
+ * any failure. One read (the tab-switch lag fix, 2026-10-04): the follows
+ * policy is `user_id = auth.uid()`, so the row set is the viewer's own
+ * without naming them, and nothing here waits on the profile row or the
+ * identity check; signed out, the policy returns nothing.
+ */
 export const getMyFollowIds = cache(async (): Promise<string[]> => {
-  const profile = await getCurrentProfile().catch(() => null);
-  if (!profile) return [];
   const supabase = await createSupabaseServerClient();
-  const { data, error } = await supabase.from("follows").select("person_id").eq("user_id", profile.id);
+  const { data, error } = await supabase.from("follows").select("person_id");
   if (error) {
     console.warn("[follows] read failed:", error.message);
     return [];

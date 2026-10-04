@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 import { requireUser } from "@/lib/auth";
 import { getFeedRoster } from "@/lib/feed/feed";
-import { getFirstTradeHistoryPage, getMyPortfolio, getMyValueSeries } from "@/lib/portfolio/server";
+import { SERVER_RENDERED_RANGES, getFirstTradeHistoryPage, getMyPortfolio, getMyValueSeries } from "@/lib/portfolio/server";
 import { getRenderedAt } from "@/lib/render-time";
 import { getPlatformSettings } from "@/lib/trading/settings";
 import { PortfolioView } from "@/components/portfolio/portfolio-view";
@@ -22,6 +22,11 @@ import { PageHeader } from "@/components/ui/page-header";
  * a value sits below the raw score by the spread, and the page says so.
  * With the Engine dormant the value line has only the points orders
  * recorded, or none, and says that too.
+ *
+ * WHAT RENDERS WHEN (the tab-switch lag fix, 2026-10-04). The value line's
+ * 1H and 24H ranges are read here; 7D and ALL, the two slowest reads in the
+ * app, are read by the same RPC through /api/portfolio/series when the range
+ * is first tapped, so the tab no longer waits on them.
  */
 
 // Live money; never serve a stale page.
@@ -34,7 +39,7 @@ export default async function PortfolioPage() {
 
   const [summary, series, history, settings, roster] = await Promise.all([
     getMyPortfolio(),
-    getMyValueSeries(),
+    getMyValueSeries(SERVER_RENDERED_RANGES),
     getFirstTradeHistoryPage().catch((error: unknown) => {
       console.warn("[portfolio] history read failed:", error instanceof Error ? error.message : error);
       return { entries: [], nextCursor: null };
@@ -51,6 +56,7 @@ export default async function PortfolioPage() {
         <PortfolioView
           initialSummary={summary}
           initialSeries={series}
+          initialRanges={SERVER_RENDERED_RANGES}
           initialHistory={history}
           roster={roster}
           shortingEnabled={settings.shortingEnabled}

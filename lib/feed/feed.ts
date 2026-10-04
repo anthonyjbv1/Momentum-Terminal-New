@@ -1,5 +1,6 @@
 import "server-only";
 
+import { unstable_cache } from "next/cache";
 import { cache } from "react";
 
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
@@ -47,8 +48,22 @@ function seriesSince(rows: FeedRow[]): Date {
   return new Date(oldest - SPARK_HOURS_BEFORE * 3_600_000);
 }
 
-/** The first page, memoised per request. */
-export const getFirstFeedPage = cache(async (): Promise<FeedPage> => getFeedPage(null));
+/** How long one rendering of the first page serves every visitor: one Engine tick. */
+export const FIRST_PAGE_CACHE_SECONDS = 30;
+
+/**
+ * The first page, shared by every visitor for one tick (the tab-switch lag
+ * fix, 2026-10-04). It is the same for everyone (a public read with no
+ * per-user data: `getFeedPage` never touches the cookies), and every number
+ * on it is a historical tick fact (the move an entry recorded, the scores
+ * before and after it, the sparkline's recorded ticks), never a live score
+ * or a position; the one staleness is that a new entry can appear up to 30
+ * seconds late. The cursor pages (`/api/feed`) stay uncached. Still
+ * memoised per request on top, so the page and the rail share one call.
+ */
+const cachedFirstPage = unstable_cache(async (): Promise<FeedPage> => getFeedPage(null), ["feed-first-page"], { revalidate: FIRST_PAGE_CACHE_SECONDS });
+
+export const getFirstFeedPage = cache(async (): Promise<FeedPage> => cachedFirstPage());
 
 export interface RosterPerson {
   id: string;

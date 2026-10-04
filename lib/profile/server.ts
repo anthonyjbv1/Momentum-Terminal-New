@@ -33,18 +33,27 @@ export interface ProfileView {
   following: RosterEntry[];
 }
 
+/**
+ * Two waves of reads (the tab-switch lag fix, 2026-10-04): the identity
+ * check, then everything else at once. The profile row no longer sits
+ * between them: the counts key on the auth user's id, which is the users
+ * row's id (one and the same, by the account trigger), and the row itself
+ * is read beside them.
+ */
 export const getMyProfileView = cache(async (): Promise<ProfileView | null> => {
-  const [user, profile] = await Promise.all([getCurrentUser(), getCurrentProfile()]);
-  if (!user || !profile) return null;
+  const user = await getCurrentUser();
+  if (!user) return null;
   const supabase = await createSupabaseServerClient();
 
-  const [open, trades, forecasts, roster, followIds] = await Promise.all([
-    supabase.from("positions").select("person_id").eq("user_id", profile.id).eq("is_open", true),
-    supabase.from("trade_orders").select("id", { count: "exact", head: true }).eq("user_id", profile.id),
-    supabase.from("forecast_votes").select("id", { count: "exact", head: true }).eq("user_id", profile.id).is("superseded_at", null),
+  const [profile, open, trades, forecasts, roster, followIds] = await Promise.all([
+    getCurrentProfile(),
+    supabase.from("positions").select("person_id").eq("user_id", user.id).eq("is_open", true),
+    supabase.from("trade_orders").select("id", { count: "exact", head: true }).eq("user_id", user.id),
+    supabase.from("forecast_votes").select("id", { count: "exact", head: true }).eq("user_id", user.id).is("superseded_at", null),
     getFollowRoster(),
     getMyFollowIds(),
   ]);
+  if (!profile) return null;
   for (const result of [open, trades, forecasts]) if (result.error) console.warn("[profile] count failed:", result.error.message);
 
   const followed = new Set(followIds);

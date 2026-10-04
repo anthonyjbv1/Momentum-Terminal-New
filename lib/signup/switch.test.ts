@@ -56,7 +56,7 @@ describe("every way in is closed while the switch is off", () => {
     { path: "app/(app)/profile/page.tsx", why: "the old profile renders", pattern: /if \(isBetaSignupEnabled\(\)\) \{[\s\S]*return <MemberProfile/ },
     { path: "app/(app)/profile/actions.ts", why: "profile actions do nothing", pattern: /if \(!isBetaSignupEnabled\(\)\) redirect\("\/profile"\)/ },
     { path: "app/(app)/profile/delete/page.tsx", why: "deletion 404s", pattern: /if \(!isBetaSignupEnabled\(\)\) notFound\(\)/ },
-    { path: "app/(app)/(home)/page.tsx", why: "no Following filter", pattern: /user && isBetaSignupEnabled\(\) \? await getMyFollowIds\(\) : undefined/ },
+    { path: "app/(app)/(home)/page.tsx", why: "no Following filter", pattern: /const beta = isBetaSignupEnabled\(\);[\s\S]*beta \? getMyFollowIds\(\) : Promise\.resolve[\s\S]*user && beta \? follows : undefined/ },
     { path: "app/(auth)/login/page.tsx", why: "no sign-in link or Google on the login page", pattern: /const open = isBetaSignupEnabled\(\)/ },
     { path: "app/(auth)/actions.ts", why: "no sign-in links or Google", pattern: /if \(!isBetaSignupEnabled\(\)\) return \{ error:[\s\S]*if \(!isGoogleAuthEnabled\(\)\) redirect\("\/login"\)/ },
     { path: "app/admin/invite-actions.ts", why: "no invites are sent", pattern: /const betaSignup = isBetaSignupEnabled\(\);[\s\S]*if \(!betaSignup\) return 'Sending is off/ },

@@ -1,17 +1,18 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { cn } from "@/lib/cn";
 import type { RosterPerson } from "@/lib/feed/feed";
-import { RANGES, defaultRange, rangeAvailable, tradingAvailability, type RangeKey, type SeriesByRange } from "@/lib/person/profile-model";
+import { RANGES, RANGE_KEYS, defaultRange, rangeAvailable, tradingAvailability, type RangeKey, type SeriesByRange } from "@/lib/person/profile-model";
 import { portfolioState, toPositionSummary, type PortfolioPosition, type PortfolioSummary, type TradeHistoryEntry, type TradeHistoryPage } from "@/lib/portfolio/model";
 import { cents, type Cents } from "@/lib/trading/model";
 import { RangeToggle } from "@/components/person/range-toggle";
 import { TradeSheet } from "@/components/trade/trade-sheet";
 import { Card } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useNow } from "@/components/ui/use-now";
 
 import { PortfolioEmpty } from "./portfolio-empty";
@@ -36,6 +37,8 @@ import { ValueChart } from "./value-chart";
 export interface PortfolioViewProps {
   initialSummary: PortfolioSummary;
   initialSeries: SeriesByRange;
+  /** The ranges the server rendered into initialSeries; the others are read when tapped (2026-10-04). Defaults to all of them. */
+  initialRanges?: readonly RangeKey[];
   initialHistory: TradeHistoryPage;
   roster: RosterPerson[];
   shortingEnabled: boolean;
@@ -52,22 +55,30 @@ export interface PortfolioViewProps {
   className?: string;
 }
 
-export function PortfolioView({ initialSummary, initialSeries, initialHistory, roster, shortingEnabled, toleranceCents, minOrderCents, renderedAt, loggingEnabled, live, historyEndpoint, className }: PortfolioViewProps) {
+export function PortfolioView({ initialSummary, initialSeries, initialRanges = RANGE_KEYS, initialHistory, roster, shortingEnabled, toleranceCents, minOrderCents, renderedAt, loggingEnabled, live, historyEndpoint, className }: PortfolioViewProps) {
   const router = useRouter();
-  const { summary, series, version, refresh } = useLivePortfolio(initialSummary, initialSeries, live);
+  const { summary, series, version, refresh, loaded, loading, loadRange } = useLivePortfolio(initialSummary, initialSeries, live, initialRanges);
   const state = portfolioState(summary);
   const now = useNow(renderedAt);
 
   usePortfolioLogging(loggingEnabled, { positions: initialSummary.positionCount, orders: initialSummary.orders });
 
-  // The chart range, exactly as on the profile: the chosen one, or the shortest drawable.
+  // The chart range, exactly as on the profile: the chosen one, or the
+  // shortest drawable. A range not read yet counts as available (it is read
+  // when tapped); once read, its own points decide.
   const available = useMemo(
-    () => Object.fromEntries(RANGES.map((range) => [range.key, rangeAvailable(series[range.key])])) as Record<RangeKey, boolean>,
-    [series],
+    () => Object.fromEntries(RANGES.map((range) => [range.key, loaded.includes(range.key) ? rangeAvailable(series[range.key]) : true])) as Record<RangeKey, boolean>,
+    [series, loaded],
   );
   const [chosen, setChosen] = useState<RangeKey | null>(() => defaultRange(initialSeries));
   const range = chosen !== null && available[chosen] ? chosen : defaultRange(series);
   const points = useMemo(() => (range ? series[range] : []), [range, series]);
+  const rangeLoading = range !== null && !loaded.includes(range);
+
+  // A chosen range that has not been read yet is read now.
+  useEffect(() => {
+    if (range !== null && !loaded.includes(range) && loading !== range) void loadRange(range);
+  }, [range, loaded, loading, loadRange]);
 
   const onRange = (next: RangeKey) => {
     setChosen(next);
@@ -111,7 +122,11 @@ export function PortfolioView({ initialSummary, initialSeries, initialHistory, r
             <p className="shrink-0 whitespace-nowrap text-label text-fg-muted">Paper value</p>
             <RangeToggle value={range} available={available} onChange={onRange} />
           </div>
-          <ValueChart points={points} range={range ?? "1h"} paperCreditCents={summary.paperCreditCents} state={state} version={version} cadenceMs={live?.cadenceMs} />
+          {rangeLoading ? (
+            <Skeleton className="h-56 w-full bg-surface-raised sm:h-72" aria-label="Loading this range" />
+          ) : (
+            <ValueChart points={points} range={range ?? "1h"} paperCreditCents={summary.paperCreditCents} state={state} version={version} cadenceMs={live?.cadenceMs} />
+          )}
           <p className="text-xs text-fg-faint">
             Recorded at every Engine tick while you hold a position and after every trade, at the Sell quote. Nothing in between is invented.
           </p>
