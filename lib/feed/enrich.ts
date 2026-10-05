@@ -47,11 +47,25 @@ export async function loadSignalDetails(ids: readonly string[]): Promise<Map<str
 const SERIES_MINUTES_PER_POINT = 5;
 const SERIES_MAX_POINTS = 1000;
 
+type SeriesRow = { person_id?: string; bucket_at: string; score: number | string };
+
+function pushPoint(out: Map<string, SparkPoint[]>, personId: string, row: SeriesRow): void {
+  const score = typeof row.score === "number" ? row.score : Number(row.score);
+  if (!row.bucket_at || !Number.isFinite(score)) return;
+  const series = out.get(personId);
+  if (series) series.push({ at: row.bucket_at, score });
+  else out.set(personId, [{ at: row.bucket_at, score }]);
+}
+
 /**
- * Each person's score series from `since` to now (Phase 34), through
- * `person_score_series`, one bounded read per person on the page. The card
- * takes the hours around its own move out of it. A person the read fails
- * for simply has no sparkline; the card renders without one.
+ * Each person's score series from `since` to now (Phase 34): ONE read for
+ * everyone on the page through `person_score_series_many` (the tab-switch
+ * lag fix, 2026-10-04: the same bucketing as `person_score_series`, for a
+ * set of people, in one statement, instead of one request per person). The
+ * card takes the hours around its own move out of it. If the batched read
+ * fails (a database without the function yet, or any error) the read falls
+ * back to one `person_score_series` call per person, as before, so a card
+ * still gets its sparkline; a person neither read returns has none.
  */
 export async function loadScoreSeries(personIds: readonly string[], since: Date): Promise<Map<string, SparkPoint[]>> {
   const unique = [...new Set(personIds.filter((id) => typeof id === "string" && id.length > 0))];
@@ -61,6 +75,15 @@ export async function loadScoreSeries(personIds: readonly string[], since: Date)
   const spanMinutes = Math.max(1, (Date.now() - since.getTime()) / 60_000);
   const points = Math.min(SERIES_MAX_POINTS, Math.max(2, Math.ceil(spanMinutes / SERIES_MINUTES_PER_POINT)));
   const supabase = createSupabaseAdminClient();
+
+  const batched = await supabase.rpc("person_score_series_many", { p_person_ids: unique, p_since: since.toISOString(), p_points: points });
+  if (!batched.error) {
+    for (const id of unique) out.set(id, []);
+    for (const row of (batched.data ?? []) as SeriesRow[]) if (row.person_id) pushPoint(out, row.person_id, row);
+    return out;
+  }
+  console.warn("[feed] batched score series read failed, reading per person:", batched.error.message);
+
   await Promise.all(
     unique.map(async (personId) => {
       const { data, error } = await supabase.rpc("person_score_series", { p_person_id: personId, p_since: since.toISOString(), p_points: points });
@@ -68,12 +91,8 @@ export async function loadScoreSeries(personIds: readonly string[], since: Date)
         console.warn("[feed] score series read failed:", error.message);
         return;
       }
-      const series: SparkPoint[] = [];
-      for (const row of (data ?? []) as Array<{ bucket_at: string; score: number | string }>) {
-        const score = typeof row.score === "number" ? row.score : Number(row.score);
-        if (row.bucket_at && Number.isFinite(score)) series.push({ at: row.bucket_at, score });
-      }
-      out.set(personId, series);
+      out.set(personId, []);
+      for (const row of (data ?? []) as SeriesRow[]) pushPoint(out, personId, row);
     }),
   );
   return out;
