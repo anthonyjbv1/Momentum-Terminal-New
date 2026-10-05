@@ -252,15 +252,15 @@ describe("a voided signal (2026-09-28)", () => {
     await record([{ slug: "larry-page", text: "Larry Page has died.", source: "llm", after: 49.1, signals: [{ signal_id: struck }, { signal_id: kept }] }]);
     const [{ id: narrativeId }] = await database.rows<{ id: string }>("select id from public.narratives where text = 'Larry Page has died.'");
 
-    await expect(database.rows("update public.signals set voided_at = now() where id = $1", [struck])).rejects.toThrow(/signals_void_reason_with_time/);
-    await database.rows("update public.signals set voided_at = now(), void_reason = 'obvious error: a namesake' where id = $1", [struck]);
+    await expect(database.operator("update public.signals set voided_at = now() where id = $1", [struck])).rejects.toThrow(/signals_void_reason_with_time/);
+    await database.operator("update public.signals set voided_at = now(), void_reason = 'obvious error: a namesake' where id = $1", [struck]);
 
     const before = await feed(null, null, 100);
     const narrative = before.find((row) => row.id === narrativeId)!;
     expect(narrative.evidence.map((e: { id: string }) => e.id)).toEqual([kept]);
     expect(before.some((row) => row.id === struck)).toBe(false);
 
-    await database.rows("update public.narratives set voided_at = now(), void_reason = 'asserts a death that did not happen' where id = $1", [narrativeId]);
+    await database.operator("update public.narratives set voided_at = now(), void_reason = 'asserts a death that did not happen' where id = $1", [narrativeId]);
     const after = await feed(null, null, 100);
     expect(after.some((row) => row.id === narrativeId)).toBe(false);
     // The kept signal is still linked directly to a narrative, voided or not, so it is not a card of its own either.

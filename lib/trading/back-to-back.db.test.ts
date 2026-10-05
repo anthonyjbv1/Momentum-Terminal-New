@@ -100,10 +100,10 @@ beforeAll(async () => {
   database = await createTestDatabase();
   const [row] = await database.rows<{ id: string }>("select id from public.people where slug = 'mrbeast'");
   mrbeast = row.id;
-  await database.rows("update public.people set current_score = 68.6, spread = 0.5, depth_units_override = $2 where id = $1", [mrbeast, DEPTH]);
+  await database.operator("update public.people set current_score = 68.6, spread = 0.5, depth_units_override = $2 where id = $1", [mrbeast, DEPTH]);
   // The refusals under test are the price's; every other lever is kept out of the way.
   await database.rows("update public.platform_settings set close_cooldown_seconds = 0, price_tolerance_cents = $1 where id", [TOLERANCE]);
-  await database.rows("update public.market_tier_settings set min_hold_seconds = 0, breaker_premium_cents = 1000000 where tier = 'public_figure'");
+  await database.operator("update public.market_tier_settings set min_hold_seconds = 0, breaker_premium_cents = 1000000 where tier = 'public_figure'");
 }, 120_000);
 
 afterAll(async () => {

@@ -94,7 +94,7 @@ async function tier(tierName: string, patch: Record<string, unknown>): Promise<v
   const sets = Object.keys(patch)
     .map((key, index) => `${key} = $${index + 2}`)
     .join(", ");
-  await database.rows(`update public.market_tier_settings set ${sets}, updated_at = now() where tier = $1`, [tierName, ...Object.values(patch)]);
+  await database.operator(`update public.market_tier_settings set ${sets}, updated_at = now() where tier = $1`, [tierName, ...Object.values(patch)]);
 }
 
 async function settings(patch: Record<string, unknown>): Promise<void> {
@@ -595,7 +595,7 @@ describe("the guards", () => {
 
   it("a private individual's halt raises an admin alert, and the total-price breaker reads score moves too", async () => {
     // Make Warren Buffett a private individual for this case.
-    await database.rows("update public.people set tier = 'private_individual' where slug = 'warren-buffett'");
+    await database.operator("update public.people set tier = 'private_individual' where slug = 'warren-buffett'");
     await setQuote("warren-buffett", 60, 0.5);
     await setInventory("warren-buffett", 0);
     await tier("private_individual", { max_order_share_of_depth: 1.0 });
@@ -622,7 +622,7 @@ describe("the guards", () => {
     const [none] = await database.rows<{ n: string }>("select public.evaluate_price_breakers(now(), 3)::text as n");
     expect(none.n).toBe("0");
 
-    await database.rows("update public.people set tier = 'public_figure', halted_until = null, halt_reason = null where slug = 'warren-buffett'");
+    await database.operator("update public.people set tier = 'public_figure', halted_until = null, halt_reason = null where slug = 'warren-buffett'");
     await database.rows("delete from public.positions where user_id = $1 and person_id = $2", [fay, people.get("warren-buffett")]);
     await setInventory("warren-buffett", 0);
     await tier("private_individual", { max_order_share_of_depth: 0.1 });
@@ -657,9 +657,9 @@ describe("modes and accounts", () => {
     expect(refused.message).toContain("display-only");
     expect(refused.quote).toMatchObject({ trading_mode: "display_only", tier: "private_individual" });
     // A holding from before the mode was set.
-    await database.rows("update public.people set trading_mode = 'tradeable' where slug = 'anthony-baptiste'");
+    await database.operator("update public.people set trading_mode = 'tradeable' where slug = 'anthony-baptiste'");
     fill(await orderUnits(gus, "anthony-baptiste", "BUY", 1 * SHARE));
-    await database.rows("update public.people set trading_mode = 'display_only' where slug = 'anthony-baptiste'");
+    await database.operator("update public.people set trading_mode = 'display_only' where slug = 'anthony-baptiste'");
     const closed = fill(await orderUnits(gus, "anthony-baptiste", "SELL", 1 * SHARE));
     expect(closed.order.closed_units).toBe(1 * SHARE);
     const nothing = rejection(await orderUnits(gus, "anthony-baptiste", "SELL", 1 * SHARE));
@@ -668,9 +668,9 @@ describe("modes and accounts", () => {
   });
 
   it("paused refuses everything; frozen, excluded and identity-required refuse before pricing", async () => {
-    await database.rows("update public.people set trading_mode = 'paused' where slug = 'jeff-bezos'");
+    await database.operator("update public.people set trading_mode = 'paused' where slug = 'jeff-bezos'");
     expect(rejection(await orderUnits(gus, "jeff-bezos", "BUY", 1 * SHARE)).code).toBe("paused");
-    await database.rows("update public.people set trading_mode = 'tradeable' where slug = 'jeff-bezos'");
+    await database.operator("update public.people set trading_mode = 'tradeable' where slug = 'jeff-bezos'");
 
     await database.rows("update public.users set frozen_at = now(), frozen_reason = 'review' where id = $1", [gus]);
     const frozen = rejection(await orderUnits(gus, "jeff-bezos", "BUY", 1 * SHARE));
@@ -697,15 +697,15 @@ describe("modes and accounts", () => {
 
   it("shorting is never on for a private individual without an explicit override, even with the platform flag up", async () => {
     await settings({ shorting_enabled: true });
-    await database.rows("update public.people set tier = 'private_individual' where slug = 'larry-ellison'");
+    await database.operator("update public.people set tier = 'private_individual' where slug = 'larry-ellison'");
     await setQuote("larry-ellison", 58, 0.5);
     const refused = rejection(await orderUnits(gus, "larry-ellison", "SELL", 1 * SHARE));
     expect(refused.code).toBe("exceeds_position");
-    await database.rows("update public.people set shorting_override = true where slug = 'larry-ellison'");
+    await database.operator("update public.people set shorting_override = true where slug = 'larry-ellison'");
     const opened = fill(await orderUnits(gus, "larry-ellison", "SELL", 1 * SHARE));
     expect(opened.order.opened_direction).toBe("LOW");
     fill(await orderUnits(gus, "larry-ellison", "BUY", 1 * SHARE));
-    await database.rows("update public.people set tier = 'public_figure', shorting_override = null where slug = 'larry-ellison'");
+    await database.operator("update public.people set tier = 'public_figure', shorting_override = null where slug = 'larry-ellison'");
     await settings({ shorting_enabled: false });
     await setInventory("larry-ellison", 0);
   });

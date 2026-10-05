@@ -203,7 +203,7 @@ describe("the Phase 29 rollback", () => {
     // Phase 29 and 29b go on; the market is run flat (the soft rollback) and traded on.
     await migrate(database, PHASE29);
     await migrate(database, PHASE29B);
-    await database.exec("update public.market_tier_settings set pricing_mode = 'flat', min_hold_seconds = 0");
+    await database.operator("update public.market_tier_settings set pricing_mode = 'flat', min_hold_seconds = 0");
     const bob = await user(database, "bob@example.com");
     expect((await order7(database, bob, mrbeast, "BUY", 5 * SHARE)).ok).toBe(true);
     expect((await order7(database, alice, drake, "SELL", 1 * SHARE)).ok).toBe(true);
@@ -232,7 +232,7 @@ describe("the Phase 29 rollback", () => {
   it("leaves the schema the Phase 27 rollback was written for, so that file applies again after this one", async () => {
     const database = await open(THROUGH_29B);
     await database.exec("update public.platform_settings set close_cooldown_seconds = 0 where id");
-    await database.exec("update public.market_tier_settings set pricing_mode = 'flat', min_hold_seconds = 0");
+    await database.operator("update public.market_tier_settings set pricing_mode = 'flat', min_hold_seconds = 0");
     const alice = await user(database, "alice@example.com");
     const drake = await personId(database, "drake");
     expect((await order7(database, alice, drake, "BUY", 3 * SHARE)).ok).toBe(true);
@@ -254,7 +254,7 @@ describe("the Phase 29 rollback", () => {
 
   it("refuses while a premium stands, then the named flat mode and one decay step clear the way", async () => {
     const database = await open(THROUGH_29B);
-    await database.exec("update public.market_tier_settings set min_hold_seconds = 0");
+    await database.operator("update public.market_tier_settings set min_hold_seconds = 0");
     const alice = await user(database, "alice@example.com");
     const drake = await personId(database, "drake");
     await database.actAs(alice);
@@ -265,7 +265,7 @@ describe("the Phase 29 rollback", () => {
     await expect(runDown(database)).rejects.toThrow(/1 people still carry a premium or dealer inventory/);
     expect(await snapshot(database)).toEqual(schema);
 
-    await database.exec("update public.market_tier_settings set pricing_mode = 'flat'");
+    await database.operator("update public.market_tier_settings set pricing_mode = 'flat'");
     await database.rows("select public.apply_market_decay(now(), 1)");
     const [row] = await database.rows<{ premium: string; inventory: string }>("select premium_cents::text as premium, market_inventory_units::text as inventory from public.people where id = $1", [drake]);
     expect(row).toEqual({ premium: "0", inventory: "0" });
@@ -273,7 +273,7 @@ describe("the Phase 29 rollback", () => {
 
   it("refuses curve-filled rows by count, and with not_valid keeps them and checks every row after", async () => {
     const database = await open(THROUGH_29B);
-    await database.exec("update public.market_tier_settings set min_hold_seconds = 0");
+    await database.operator("update public.market_tier_settings set min_hold_seconds = 0");
     await database.exec("update public.platform_settings set close_cooldown_seconds = 0 where id");
     const alice = await user(database, "alice@example.com");
     const drake = await personId(database, "drake");
@@ -287,7 +287,7 @@ describe("the Phase 29 rollback", () => {
     await database.actAs(null);
     expect(curve.r.ok).toBe(true);
     expect(curve.r.order.gross_cents).not.toBe(curve.r.order.fill_price_cents * 10);
-    await database.exec("update public.market_tier_settings set pricing_mode = 'flat'");
+    await database.operator("update public.market_tier_settings set pricing_mode = 'flat'");
     await database.rows("select public.apply_market_decay(now(), 1)");
     await database.exec("set momentum.phase29_down_data_exported = 'yes'");
     const schema = await snapshot(database);

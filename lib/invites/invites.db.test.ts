@@ -98,7 +98,7 @@ beforeAll(async () => {
   // From here on, every new auth user must come through an invite.
   await database.exec("select set_config('momentum.signup_without_invite', 'off', false)");
   await database.rows("update public.platform_settings set close_cooldown_seconds = 0, updated_at = now() where id");
-  await database.exec("update public.market_tier_settings set pricing_mode = 'flat', min_hold_seconds = 0");
+  await database.operator("update public.market_tier_settings set pricing_mode = 'flat', min_hold_seconds = 0");
 }, 120_000);
 
 afterAll(async () => {

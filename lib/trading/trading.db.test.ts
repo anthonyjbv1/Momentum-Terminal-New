@@ -124,7 +124,7 @@ beforeAll(async () => {
   // A FLAT MARKET for this suite (Phase 29b: the named 'flat' pricing mode),
   // so every price here is exactly Phase 27's and the cases keep
   // their literal cents. The curve has its own suite, market.db.test.ts.
-  await database.exec("update public.market_tier_settings set pricing_mode = 'flat', min_hold_seconds = 0");
+  await database.operator("update public.market_tier_settings set pricing_mode = 'flat', min_hold_seconds = 0");
 }, 60_000);
 
 afterAll(async () => {

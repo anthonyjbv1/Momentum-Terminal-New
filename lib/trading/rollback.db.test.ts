@@ -42,7 +42,7 @@ async function seed(): Promise<{ userId: string; drake: string }> {
   const [user] = await database.rows<{ id: string }>("insert into auth.users (email) values ('rollback@example.com') returning id");
   const [drake] = await database.rows<{ id: string }>("select id from public.people where slug = 'drake'");
   await database.exec("update public.platform_settings set close_cooldown_seconds = 0 where id");
-  await database.exec("update public.market_tier_settings set min_hold_seconds = 0");
+  await database.operator("update public.market_tier_settings set min_hold_seconds = 0");
   await database.rows("update public.people set current_score = 50, spread = 0.5 where id = $1", [drake.id]);
   await database.actAs(user.id);
   return { userId: user.id, drake: drake.id };
