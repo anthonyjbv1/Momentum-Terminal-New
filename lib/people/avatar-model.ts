@@ -80,6 +80,11 @@ export const APISPORTS_AVATAR_CATEGORIES: ReadonlySet<string> = new Set(["athlet
  * A pin outranks a platform channel (decided 2026-10-06, for Drake): a
  * musician or creator on this list shows the Commons portrait, not their
  * channel avatar, so the operator can choose a portrait over a logo.
+ *
+ * A pin may name a Commons file directly ("File:…") instead of an article,
+ * when the article's lead image is the wrong framing for a circle; the file
+ * is then read from Commons with no Wikipedia step, under the same licence
+ * rule and the same credit.
  */
 export const COMMONS_PORTRAITS: Readonly<Record<string, string>> = {
   drake: "Drake (musician)",
@@ -96,6 +101,11 @@ export const COMMONS_PORTRAITS: Readonly<Record<string, string>> = {
 
 /** The licences a portrait may carry, as Commons names them in LicenseShortName. Anything else is refused. */
 export const COMMONS_ALLOWED_LICENSES = /^(CC0(?: 1\.0)?|Public domain|CC BY(?:-SA)? [1-4]\.0(?: [A-Za-z]+)?|CC-BY(?:-SA)?-[1-4]\.0)$/i;
+
+/** Whether a pin names a Commons file itself rather than a Wikipedia article. */
+export function isCommonsFilePin(title: string): boolean {
+  return /^File:/i.test(title.trim());
+}
 
 export function isAvatarUrl(url: string, source: AvatarSource): boolean {
   return AVATAR_HOSTS[source].test(url);

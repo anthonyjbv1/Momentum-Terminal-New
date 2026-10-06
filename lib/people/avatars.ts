@@ -14,6 +14,7 @@ import {
   commonsAvatarFrom,
   type CommonsImageInfo,
   isAvatarStale,
+  isCommonsFilePin,
   readAvatarRecord,
   twitchAvatarFrom,
   youtubeAvatarFrom,
@@ -113,14 +114,7 @@ async function readApiSportsAvatar(channel: AvatarChannel, sourceConfig: Json | 
  */
 async function readCommonsAvatar(channel: AvatarChannel, fetchImpl: typeof fetch, now: Date): Promise<AvatarRecord | null> {
   const headers = { "user-agent": WIKIMEDIA_UA, accept: "application/json" };
-  const page = await fetchImpl(`https://en.wikipedia.org/w/api.php?action=query&format=json&formatversion=2&redirects=1&prop=pageimages&piprop=name&titles=${encodeURIComponent(channel.identifier)}`, { headers });
-  if (!page.ok) throw new Error(`Wikipedia responded ${page.status} for ${channel.identifier}`);
-  const pageBody = (await page.json()) as { query?: { pages?: Array<{ title?: string; missing?: boolean; pageimage?: string }> } };
-  const article = pageBody.query?.pages?.[0];
-  // Each refusal says which step refused, so the reason can be read back from the mapping.
-  if (!article || article.missing) throw new AvatarRefused(`no Wikipedia article for "${channel.identifier}"`);
-  if (!article.pageimage) throw new AvatarRefused(`the article "${article.title ?? channel.identifier}" has no lead image`);
-  const fileTitle = `File:${article.pageimage}`;
+  const fileTitle = isCommonsFilePin(channel.identifier) ? channel.identifier.trim() : await commonsLeadImage(channel.identifier, fetchImpl, headers);
   const info = await fetchImpl(
     `https://commons.wikimedia.org/w/api.php?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=${COMMONS_THUMB_WIDTH}&iiextmetadatafilter=Artist|LicenseShortName|LicenseUrl|Credit&titles=${encodeURIComponent(fileTitle)}`,
     { headers },
@@ -136,6 +130,18 @@ async function readCommonsAvatar(channel: AvatarChannel, fetchImpl: typeof fetch
     throw new AvatarRefused(`${fileTitle} refused: licence "${license.replace(/<[^>]+>/g, "").trim()}", url ${imageinfo?.thumburl ?? imageinfo?.url ?? "none"}`);
   }
   return record;
+}
+
+/** The file title of an English Wikipedia article's lead image (pageimages). */
+async function commonsLeadImage(articleTitle: string, fetchImpl: typeof fetch, headers: Record<string, string>): Promise<string> {
+  const page = await fetchImpl(`https://en.wikipedia.org/w/api.php?action=query&format=json&formatversion=2&redirects=1&prop=pageimages&piprop=name&titles=${encodeURIComponent(articleTitle)}`, { headers });
+  if (!page.ok) throw new Error(`Wikipedia responded ${page.status} for ${articleTitle}`);
+  const pageBody = (await page.json()) as { query?: { pages?: Array<{ title?: string; missing?: boolean; pageimage?: string }> } };
+  const article = pageBody.query?.pages?.[0];
+  // Each refusal says which step refused, so the reason can be read back from the mapping.
+  if (!article || article.missing) throw new AvatarRefused(`no Wikipedia article for "${articleTitle}"`);
+  if (!article.pageimage) throw new AvatarRefused(`the article "${article.title ?? articleTitle}" has no lead image`);
+  return `File:${article.pageimage}`;
 }
 
 /** A source answered, and what it answered is not a picture the rules accept: not an outage, and worth recording on the mapping. */

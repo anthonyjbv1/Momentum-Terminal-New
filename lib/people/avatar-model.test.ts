@@ -9,6 +9,7 @@ import {
   COMMONS_PORTRAITS,
   commonsAvatarFrom,
   avatarChannelFor,
+  isCommonsFilePin,
   avatarCredit,
   avatarRecordJson,
   isAvatarStale,
@@ -56,6 +57,11 @@ describe("which channel a person's avatar comes from", () => {
     expect(avatarChannelFor({ category: "creator", slug: "mrbeast" }, [rss, { source: "youtube", externalIdentifier: "UCX6OQ3DkcsbYNE6H8uQQuVA", config: null }])?.source).toBe("youtube");
     // The nine executives and Drake, and nobody else, are pinned.
     expect(Object.keys(COMMONS_PORTRAITS).sort()).toEqual(["drake", "elon-musk", "jeff-bezos", "jensen-huang", "larry-ellison", "larry-page", "mark-zuckerberg", "michael-dell", "sergey-brin", "warren-buffett"]);
+  });
+
+  it("tells a file pin from an article pin", () => {
+    expect(isCommonsFilePin("File:Drake at The Carter Effect 2017 (36818935200).jpg")).toBe(true);
+    expect(isCommonsFilePin("Drake (musician)")).toBe(false);
   });
 
   it("lets a pinned portrait outrank a musician's channel (decided 2026-10-06, for Drake)", () => {
