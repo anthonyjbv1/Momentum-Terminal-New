@@ -52,10 +52,18 @@ describe("which channel a person's avatar comes from", () => {
     expect(avatarChannelFor({ category: "executive", slug: "elon-musk" }, [{ source: "publisher_rss", externalIdentifier: "musk", config: null }])).toEqual({ source: "commons", identifier: "Elon Musk", mappingSource: "publisher_rss" });
     // No news mapping to keep the record on: no portrait.
     expect(avatarChannelFor({ category: "executive", slug: "elon-musk" }, [trending])).toBeNull();
-    // A creator's own channel wins over a portrait.
+    // A creator with no pin keeps their own channel.
     expect(avatarChannelFor({ category: "creator", slug: "mrbeast" }, [rss, { source: "youtube", externalIdentifier: "UCX6OQ3DkcsbYNE6H8uQQuVA", config: null }])?.source).toBe("youtube");
-    // The nine executives, and nobody else, are pinned.
-    expect(Object.keys(COMMONS_PORTRAITS).sort()).toEqual(["elon-musk", "jeff-bezos", "jensen-huang", "larry-ellison", "larry-page", "mark-zuckerberg", "michael-dell", "sergey-brin", "warren-buffett"]);
+    // The nine executives and Drake, and nobody else, are pinned.
+    expect(Object.keys(COMMONS_PORTRAITS).sort()).toEqual(["drake", "elon-musk", "jeff-bezos", "jensen-huang", "larry-ellison", "larry-page", "mark-zuckerberg", "michael-dell", "sergey-brin", "warren-buffett"]);
+  });
+
+  it("lets a pinned portrait outrank a musician's channel (decided 2026-10-06, for Drake)", () => {
+    const rss = { source: "rss", externalIdentifier: '"Drake"', config: null };
+    const drakeTrending = { source: "youtube_trending", externalIdentifier: "Drake", config: { channel_ids: ["UCByOQJjav0CUDwxCk-jVNRQ"] } };
+    expect(avatarChannelFor({ category: "musician", slug: "drake" }, [drakeTrending, rss])).toEqual({ source: "commons", identifier: "Drake (musician)", mappingSource: "rss" });
+    // Without a news mapping to keep the record on, the channel stands.
+    expect(avatarChannelFor({ category: "musician", slug: "drake" }, [drakeTrending])).toEqual({ source: "youtube", identifier: "UCByOQJjav0CUDwxCk-jVNRQ", mappingSource: "youtube_trending" });
   });
 });
 

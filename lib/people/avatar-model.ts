@@ -76,8 +76,13 @@ export const APISPORTS_AVATAR_CATEGORIES: ReadonlySet<string> = new Set(["athlet
  * title so the choice of picture is a reviewed constant, not a search
  * result; a title that no longer resolves, or resolves to a file that is
  * not free, yields no picture and the initials stay.
+ *
+ * A pin outranks a platform channel (decided 2026-10-06, for Drake): a
+ * musician or creator on this list shows the Commons portrait, not their
+ * channel avatar, so the operator can choose a portrait over a logo.
  */
 export const COMMONS_PORTRAITS: Readonly<Record<string, string>> = {
+  drake: "Drake (musician)",
   "elon-musk": "Elon Musk",
   "jeff-bezos": "Jeff Bezos",
   "mark-zuckerberg": "Mark Zuckerberg",
@@ -116,24 +121,27 @@ export interface AvatarChannel {
 }
 
 /**
- * The channel a person's avatar comes from: their YouTube channel mapping
- * first (the channel id), else their Twitch mapping (the login), else the
- * first channel pinned on their YouTube Trending mapping. Null for anyone
- * outside the creator and musician categories, and for anyone with no
- * channel of their own.
+ * The channel a person's avatar comes from: a pinned Commons portrait
+ * first (COMMONS_PORTRAITS, kept on the person's news mapping, which every
+ * tracked person has), else their YouTube channel mapping (the channel
+ * id), else their Twitch mapping (the login), else the first channel
+ * pinned on their YouTube Trending mapping, else an athlete's API-Sports
+ * player. Null for anyone outside the creator and musician categories
+ * with no pin and no player, and for anyone with no channel of their own.
  */
 export function avatarChannelFor(person: { category: string; slug?: string }, mappings: readonly AvatarMapping[]): AvatarChannel | null {
+  const title = person.slug ? COMMONS_PORTRAITS[person.slug] : undefined;
+  if (title) {
+    const home = mappings.find((mapping) => mapping.source === "rss") ?? mappings.find((mapping) => mapping.source === "publisher_rss");
+    if (home) return { source: "commons", identifier: title, mappingSource: home.source };
+  }
   const platform = platformChannelFor(person, mappings);
   if (platform) return platform;
   if (APISPORTS_AVATAR_CATEGORIES.has(person.category)) {
     const player = mappings.find((mapping) => mapping.source === "apisports" && /^\d+$/.test(mapping.externalIdentifier.trim()));
     if (player) return { source: "apisports", identifier: player.externalIdentifier.trim(), mappingSource: "apisports" };
   }
-  // A pinned Commons portrait, kept on the person's news mapping (every tracked person has one).
-  const title = person.slug ? COMMONS_PORTRAITS[person.slug] : undefined;
-  if (!title) return null;
-  const home = mappings.find((mapping) => mapping.source === "rss") ?? mappings.find((mapping) => mapping.source === "publisher_rss");
-  return home ? { source: "commons", identifier: title, mappingSource: home.source } : null;
+  return null;
 }
 
 function platformChannelFor(person: { category: string }, mappings: readonly AvatarMapping[]): AvatarChannel | null {
