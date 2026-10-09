@@ -5,6 +5,7 @@ import { buildRegistry } from "@/lib/connectors/registry";
 import type { DataConnector, LiveStream } from "@/lib/connectors/types";
 import type { Json } from "@/types/database";
 
+import { fixtureSamples, KAI_0926, KAI_1001_RECORD } from "./__fixtures__/sessions";
 import { LIVE_QUALITY_DEFAULTS, type LiveQualityRules, type LiveSession } from "./rules";
 import { runLiveMode, type LiveLogLine, viewerGate } from "./runner";
 import { createMemoryLiveStore, type MemoryLiveStore } from "./store";
@@ -298,7 +299,7 @@ describe("live mode — the quality rules (Phase 31 switch)", () => {
     // The step read at 108, ten minutes against the ten before, held by 112's own reading; the spike at 72 is long out of both windows.
     expect(moments[0].headline).toMatch(/^Kai Cenat's live audience stepped up 20%: 48,\d{3} viewers over 10 minutes against 40,\d{3} in the 10 before, and holding, 1h 52m into the stream\.$/);
     expect(store.sessions[0].lastSurgeAt).toEqual(at(112));
-    expect(await store.countSessionMoments({ personId: kai.id, dataSourceId: "src-twitch", sourceName: "twitch", streamId: "s-1" })).toEqual({ audience_surge: 1, audience_drop: 0, clip_burst: 0 });
+    expect(await store.countSessionMoments({ personId: kai.id, dataSourceId: "src-twitch", sourceName: "twitch", streamId: "s-1" })).toEqual({ audience_surge: 1, audience_drop: 0, clip_burst: 0, ramp_up: 0 });
     // Every sample past the first hour logged what the rules read: the counts, and no shape (there are no past sessions).
     const judged = lines.filter((line) => line.event === "sample" && line.quality);
     expect(judged.length).toBeGreaterThan(20);
@@ -330,7 +331,7 @@ describe("live mode — the store's reads for the quality rules", () => {
       { personId: kai.id, dataSourceId: "src-twitch", headline: "b", rawPayload: { kind: "live_moment", moment: "clip_burst" }, occurredAt: at(2), dedupeKey: "twitch:live:s-1:clip_burst:2", tier: null },
       { personId: kai.id, dataSourceId: "src-twitch", headline: "c", rawPayload: { kind: "live_moment", moment: "audience_surge" }, occurredAt: at(3), dedupeKey: "twitch:live:s-2:audience_surge:3", tier: null },
     ]);
-    expect(await store.countSessionMoments({ personId: kai.id, dataSourceId: "src-twitch", sourceName: "twitch", streamId: "s-1" })).toEqual({ audience_surge: 1, audience_drop: 0, clip_burst: 1 });
+    expect(await store.countSessionMoments({ personId: kai.id, dataSourceId: "src-twitch", sourceName: "twitch", streamId: "s-1" })).toEqual({ audience_surge: 1, audience_drop: 0, clip_burst: 1, ramp_up: 0 });
     expect(await store.listShapeViewers({ personId: kai.id, dataSourceId: "src-twitch", excludeSessionId: "current", fromMinutes: 100, toMinutes: 110, sessions: 10 })).toEqual([
       [40_100, 40_106],
       [30_100, 30_104, 30_108],
@@ -457,5 +458,45 @@ describe("live mode — the neutral go-live's viewer gate (GO_LIVE_NEUTRAL_ENABL
     expect(off.session.largestDropFraction).toBe(-1);
     expect(on.session.largestDropFraction).toBeNull();
     expect(on.moments).toEqual([]);
+  });
+});
+
+describe("the ramp-up through the runner (TWITCH_RAMP_UP_ENABLED, 2026-10-09)", () => {
+  /** Kai Cenat's record stream, replayed through the runner at the ledger's own timestamps, with the 09-26 session's peak on the record. */
+  async function replayRecord(rampUp: boolean) {
+    const started = new Date(KAI_1001_RECORD.startedAt);
+    const w = world({ streams: new Map() });
+    const store: MemoryLiveStore = createMemoryLiveStore({
+      sources: [twitch],
+      mappings: { "src-twitch": [{ person: kai, externalIdentifier: "kaicenat" }] },
+      snapshots: [{ personId: kai.id, dataSourceId: "src-twitch", metricKey: "session_peak_viewers", value: KAI_0926.viewerPeak, recordedAt: new Date(KAI_0926.endedAt) }],
+    });
+    const connector = liveConnector(w);
+    const registry = buildRegistry([connector]);
+    const lines: LiveLogLine[] = [];
+    for (const sample of fixtureSamples(KAI_1001_RECORD)) {
+      w.streams.set("kaicenat", stream({ id: KAI_1001_RECORD.streamId, startedAt: started, viewerCount: sample.viewerCount }));
+      await runLiveMode({ store, registry, now: sample.sampledAt, log: (line) => lines.push(line), rampUp });
+    }
+    return { signals: store.ingest.signals.map((s) => ({ headline: s.headline, dedupeKey: s.dedupeKey, payload: s.rawPayload, at: s.occurredAt })), lines };
+  }
+
+  it("fires once on the record stream at 03:11:38, and off it is byte-identical to today", async () => {
+    const on = await replayRecord(true);
+    const off = await replayRecord(false);
+    const ramps = on.signals.filter((s) => s.payload.moment === "ramp_up");
+    expect(ramps).toHaveLength(1);
+    expect(ramps[0].at.toISOString()).toBe("2026-10-01T03:11:38.000Z");
+    expect(ramps[0].headline).toBe("Kai Cenat's stream is already 8.2× their usual peak: 398,044 viewers against a typical session peak of 48,370, 9m into the stream.");
+    expect(ramps[0].payload).toMatchObject({ kind: "live_moment", moment: "ramp_up", direction: 1, confidence: 1, magnitude: 8.229, from: 48_370, to: 398_044, rule: "ramp", stream_id: KAI_1001_RECORD.streamId });
+    // Every other signal of the session is the same on and off: the switch adds the one moment and changes nothing else.
+    expect(on.signals.filter((s) => s.payload.moment !== "ramp_up")).toEqual(off.signals);
+    expect(off.signals.some((s) => s.payload.moment === "ramp_up")).toBe(false);
+    // The sample log says what the rule read, on positive readings only, and nothing with the switch off.
+    const judged = on.lines.filter((line) => line.event === "sample" && line.rampUp !== undefined);
+    expect(judged.map((line) => (line.rampUp as { fired: boolean }).fired).filter(Boolean)).toHaveLength(1);
+    expect(judged[0]).toMatchObject({ viewerCount: 62_192, rampUp: { typicalPeak: 48_370, rampsSoFar: 0, fired: false } });
+    expect(on.lines.filter((line) => line.event === "sample" && line.viewerCount === 0).every((line) => line.rampUp === undefined)).toBe(true);
+    expect(off.lines.filter((line) => line.event === "sample").every((line) => line.rampUp === undefined)).toBe(true);
   });
 });

@@ -403,6 +403,8 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       freshness: Math.round(s.freshness * 1000) / 1000,
       volumeWeight: s.volumeWeight,
       scorer: s.sentiment.scorer,
+      ...(s.sentiment.model ? { model: s.sentiment.model } : {}),
+      ...(s.sentiment.promptVersion !== undefined ? { promptVersion: s.sentiment.promptVersion } : {}),
       rationale: s.sentiment.rationale,
       anomaly: s.sentiment.anomaly,
       ...(s.sentiment.salience ? { salience: s.sentiment.salience } : {}),

@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { authorizeSharedSecret } from "@/lib/api-auth";
 import { apiSportsWarnings } from "@/lib/connectors/apisports";
-import { getEngineSecretOrNull, getIngestSecretOrNull, getScorerName, isEngineCronEnabled, isGoogleNewsFreshEnabled } from "@/lib/env";
+import { getEngineSecretOrNull, getIngestSecretOrNull, getScorerName, isEngineCronEnabled, isGoogleNewsFreshEnabled, isTwitchRampUpEnabled, isYouTubePaceAgeMatchedEnabled } from "@/lib/env";
 import { DEFAULT_MIN_SAMPLES_AFTER_CUT, REBASELINE_HOLD_DAYS, rebaselineStatus } from "@/lib/ingest/rebaseline";
 import { resolveRoute } from "@/lib/llm/routing";
 import { ANTHROPIC_DEFAULT_MODEL } from "@/lib/llm/providers/anthropic";
@@ -124,6 +124,9 @@ export async function GET(request: NextRequest) {
       warnings,
       apisports,
       googleNewsFresh: isGoogleNewsFreshEnabled(),
+      // The scoring batch's two switches (2026-10-09), both shipped off.
+      youtubePaceAgeMatched: isYouTubePaceAgeMatchedEnabled(),
+      twitchRampUp: isTwitchRampUpEnabled(),
       rebaseline: { holdDays: REBASELINE_HOLD_DAYS, minSamplesAfterHold: DEFAULT_MIN_SAMPLES_AFTER_CUT, metrics: rebaseline.metrics },
       llm,
       sources: sources.data ?? [],

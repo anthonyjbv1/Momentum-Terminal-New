@@ -7,7 +7,7 @@ import { admitEvents, recentSince } from "./events";
 import { deriveMetric, metricSignal, observeMetric, readMetricConfigs, type MetricConfigs, type MetricObservation, type PreviousObservation, type SnapshotPoint, seriesReadFrom } from "./metrics";
 import { buildPublisherPolicy } from "./publishers";
 import { withProposedTiers } from "./publishers-proposed";
-import type { FeedHealthRow, IngestStore, IngestTrigger, ObservationRow, PollRow, PollStatus, SignalRow, SnapshotRow } from "./store";
+import type { FeedHealthRow, IngestStore, IngestTrigger, ObservationRow, PollRow, PollStatus, SignalRow, SnapshotRow, VideoViewRow } from "./store";
 import { STORY_DEDUP_LOOKBACK_HOURS } from "./stories";
 
 /**
@@ -52,7 +52,7 @@ import { STORY_DEDUP_LOOKBACK_HOURS } from "./stories";
  */
 
 export interface IngestLogLine {
-  event: "run" | "source" | "poll" | "observation" | "signal" | "drop" | "collapse" | "upgrade" | "exclude" | "feed" | "note" | "detail" | "observe_only" | "feed_markers_kept";
+  event: "run" | "source" | "poll" | "observation" | "signal" | "drop" | "collapse" | "upgrade" | "exclude" | "feed" | "note" | "detail" | "observe_only" | "feed_markers_kept" | "video_views";
   [key: string]: unknown;
 }
 
@@ -466,6 +466,8 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         record: (metricKey, value, recordedAt = now) =>
           pendingSnapshots.push({ personId: person.id, dataSourceId: source.id, metricKey, value, recordedAt }),
       };
+      // The per-video view ledger (2026-10-09): queued by the connector, persisted with the snapshots once the poll succeeds.
+      const pendingVideoViews: VideoViewRow[] = [];
       // Items the connector refuses as being about somebody else. Queued here,
       // counted and logged below, exactly as blocked domains are.
       const excluded: ExcludedItem[] = [];
@@ -490,6 +492,10 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         },
         remainingBudgetMs: () => (budgetMs === undefined ? null : Math.max(0, budgetMs - elapsedMs())),
         quality,
+        videoViews: {
+          aroundAge: (fromHours, toHours) => store.listVideoViewsAroundAge(person.id, source.id, fromHours, toHours),
+          record: (rows) => pendingVideoViews.push(...rows.map((row) => ({ ...row, personId: person.id, dataSourceId: source.id }))),
+        },
       };
       const poll: Omit<PollRow, "status" | "reason" | "latencyMs" | "finishedAt"> = {
         runId,
@@ -520,11 +526,13 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         let metricsError: string | null = null;
         if (connector.fetchMetrics) {
           const queuedBefore = pendingSnapshots.length;
+          const viewsQueuedBefore = pendingVideoViews.length;
           try {
             readings = await connector.fetchMetrics(person, externalIdentifier, context);
           } catch (error) {
             metricsError = errorMessage(error);
             pendingSnapshots.length = queuedBefore;
+            pendingVideoViews.length = viewsQueuedBefore;
           }
         }
 
@@ -687,6 +695,10 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         ];
         poll.snapshotsRecorded = await store.insertSnapshots(snapshotRows);
         summary.snapshotsRecorded += poll.snapshotsRecorded;
+        if (pendingVideoViews.length > 0) {
+          const videoViewsStored = await store.insertVideoViews(pendingVideoViews);
+          log({ event: "video_views", run: runId, source: source.name, person: person.slug, rows: pendingVideoViews.length, stored: videoViewsStored });
+        }
 
         poll.observations = await store.recordObservations(
           observations.map(({ observation, signal }) => observationRow(runId, person.id, source, observation, signal?.dedupeKey ? (idByDedupeKey.get(signal.dedupeKey) ?? null) : null)),

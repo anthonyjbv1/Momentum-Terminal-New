@@ -511,3 +511,22 @@ describe("the allegation label (2026-10-09, version 2)", () => {
     expect(scored(await v1.scorer.scoreSignal(signal("k1", "p-drake", "Reggie Accuses Drake of Grooming in Streaming Feud", { kind: "article" }))).allegation).toBeUndefined();
   });
 });
+
+describe("the audit fields (scoring batch, 2026-10-09)", () => {
+  it("records the model that answered and the prompt version on every model-scored signal, and a fallback carries neither", async () => {
+    const complete = fakeComplete();
+    const v1 = scored(await makeScorer(complete).scorer.scoreSignal(signal("s1", "p-drake", "Drake drops surprise album")));
+    expect(v1).toMatchObject({ scorer: "llm", model: "fake-model", promptVersion: 1 });
+    const v2 = scored(await makeScorer(fakeComplete(), { promptVersion: 2 }).scorer.scoreSignal(signal("s2", "p-drake", "Drake announces world tour")));
+    expect(v2).toMatchObject({ scorer: "llm", model: "fake-model", promptVersion: 2 });
+    // The fields change no score: the same answer reads the same with or without them.
+    expect(v1).toMatchObject({ label: "positive", direction: 1, confidence: 0.9 });
+    const failing = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const fallback = scored(await makeScorer(failing as unknown as ReturnType<typeof fakeComplete>).scorer.scoreSignal(signal("s3", "p-drake", "Drake drops surprise album")));
+    expect(fallback.scorer).toBe("rules-fallback");
+    expect(fallback.model).toBeUndefined();
+    expect(fallback.promptVersion).toBeUndefined();
+  });
+});

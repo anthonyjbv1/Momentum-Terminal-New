@@ -3,6 +3,8 @@ import type { PublisherPolicy } from "@/lib/ingest/publishers";
 import type { DataSource, Person } from "@/types";
 import type { Json } from "@/types/database";
 
+import type { VideoViewSample } from "./youtube-pace";
+
 /**
  * A single standardized data point produced by a connector.
  *
@@ -148,6 +150,24 @@ export interface ConnectorContext {
    * of it runs and the connector behaves exactly as before.
    */
   quality?: ConnectorQuality;
+  /**
+   * The per-video view ledger (2026-10-09), scoped to this person and
+   * source, for the YouTube age-matched pace: the connector queues this
+   * poll's rows and reads the history; the runner persists the queue once
+   * the poll succeeds, as it does the snapshots. Absent where no ledger is
+   * kept (the live runner, a test without one): the connector records
+   * nothing and reads nothing.
+   */
+  videoViews?: VideoViewLedger;
+  /** The YouTube age-matched pace (YOUTUBE_PACE_AGE_MATCHED_ENABLED) for this poll; defaults to the switch. Tests set it. */
+  paceAgeMatched?: boolean;
+}
+
+export interface VideoViewLedger {
+  /** The ledger's rows whose video was between `fromHours` and `toHours` old when sampled, oldest first: every upload at about one age. */
+  aroundAge(fromHours: number, toHours: number): Promise<VideoViewSample[]>;
+  /** Queue this poll's rows. */
+  record(rows: VideoViewSample[]): void;
 }
 
 export interface ConnectorQuality {

@@ -407,12 +407,12 @@ export class LLMScorer implements SentimentScorer {
       if (zeroed) {
         this.log("signal zeroed: grave claim without a reputable or second source", { personId, tickNumber, signalId: item.signal.id, headline: item.signal.headline, term: zeroed, sources, rationale: assessment.rationale });
       }
-      item.resolve(this.toResult(assessment, { ...parsed, narrative: guarded.narrative }, zeroed));
+      item.resolve(this.toResult(assessment, { ...parsed, narrative: guarded.narrative }, zeroed, response.model));
     }
     if (unmatched.length > 0) await this.fallbackFor(unmatched, "LLM omitted the signal from its response");
   }
 
-  private toResult(assessment: ParsedSignalAssessment, parsed: Pick<ParsedResponse, "narrative" | "narrativeDirection">, zeroed: string | null = null): SentimentResult {
+  private toResult(assessment: ParsedSignalAssessment, parsed: Pick<ParsedResponse, "narrative" | "narrativeDirection">, zeroed: string | null = null, model?: string): SentimentResult {
     const multiplier = {
       routine: this.config.routineConfidenceMultiplier,
       notable: this.config.notableConfidenceMultiplier,
@@ -433,6 +433,9 @@ export class LLMScorer implements SentimentScorer {
       rationale,
       narrative: parsed.narrative?.trim() || undefined,
       scorer: this.name,
+      // The audit fields (2026-10-09): which model answered, which prompt it was asked with. They change no score.
+      ...(model ? { model } : {}),
+      promptVersion: this.promptVersion,
       // Version 2 fields only. A version-2 answer that leaves salience out is
       // read as relevant: the absence of a label must never zero a signal.
       ...(this.promptVersion === 2 ? { salience: assessment.salience ?? "relevant" } : {}),

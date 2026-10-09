@@ -1,7 +1,7 @@
 import { connectorRegistry, type ConnectorRegistry } from "@/lib/connectors/registry";
 import type { ConnectorContext, LiveCapability, LiveStatus, LiveStream, RawSignal } from "@/lib/connectors/types";
 import type { DataSource } from "@/types";
-import { isGoLiveNeutralEnabled } from "@/lib/env";
+import { isGoLiveNeutralEnabled, isTwitchRampUpEnabled } from "@/lib/env";
 import type { Json } from "@/types/database";
 
 import { metricSignal, observeMetric, readMetricConfigs, seriesReadFrom, type MetricConfigs } from "../metrics";
@@ -20,13 +20,16 @@ import {
   openSession,
   qualityClipMoment,
   qualitySurgeMoment,
+  rampUpMoment,
   readLiveConfig,
   sampleDue,
+  SESSION_PEAK_VIEWERS_METRIC,
   sessionAggregates,
   sessionMetricReadings,
   sessionShape,
   shapeBucket,
   streamSummarySignal,
+  typicalSessionPeak,
   usualClipsPerHour,
   withLiveQuality,
   type LiveConfig,
@@ -107,6 +110,12 @@ export interface LiveRunOptions {
    * is sampled and judged exactly as before.
    */
   quality?: LiveQualityRules;
+  /**
+   * The ramp-up moment (TWITCH_RAMP_UP_ENABLED, 2026-10-09): judged on every
+   * sample while on. Defaults to the switch; off, no ramp-up is judged and
+   * nothing else changes.
+   */
+  rampUp?: boolean;
 }
 
 export interface LivePersonSummary {
@@ -160,6 +169,8 @@ export interface LiveRunSummary {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const HOUR_MS = 3_600_000;
+/** How far back the ramp-up reads the channel's session peaks: ninety days, then the newest rampSessions of them. */
+const RAMP_PEAKS_WINDOW_HOURS = 24 * 90;
 const MINUTE_MS = 60_000;
 
 function asConfigObject(config: Json | null): Record<string, Json | undefined> {
@@ -183,7 +194,7 @@ function emptySummary(source: DataSource): LiveSourceSummary {
 }
 
 export async function runLiveMode(options: LiveRunOptions): Promise<LiveRunSummary> {
-  const { store, registry = connectorRegistry, now = new Date(), fetch: baseFetch = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS, budgetMs, clock = Date.now, log = defaultLog, quality } = options;
+  const { store, registry = connectorRegistry, now = new Date(), fetch: baseFetch = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS, budgetMs, clock = Date.now, log = defaultLog, quality, rampUp = isTwitchRampUpEnabled() } = options;
   const wallClockStart = clock();
   const elapsedMs = () => clock() - wallClockStart;
   let budgetExhausted = false;
@@ -310,7 +321,7 @@ export async function runLiveMode(options: LiveRunOptions): Promise<LiveRunSumma
             log({ event: "sample", source: source.name, person: mapping.person.slug, sessionId: session.id, status: "skipped", reason: budgetReason() });
             await store.updateSession({ ...session, lastSeenAt: now, missedChecks: 0 });
           } else {
-            const result = await sampleSession({ session, mapping, stream, cfg, source, capability, context, store, clock, log, now });
+            const result = await sampleSession({ session, mapping, stream, cfg, source, capability, context, store, clock, log, now, rampUp });
             personSummary.sampled = true;
             summary.samples += 1;
             summary.signalsCreated += result.signalsCreated;
@@ -411,6 +422,7 @@ interface SampleInput {
   clock: () => number;
   log: (line: LiveLogLine) => void;
   now: Date;
+  rampUp: boolean;
 }
 
 /** One sample of one session: the clip window, the moments, the row, the session's aggregates. */
@@ -438,7 +450,7 @@ export function viewerGate<S extends { viewerCount: number | null }>(
 }
 
 async function sampleSession(input: SampleInput): Promise<{ signalsCreated: number; requests: number; error: string | null }> {
-  const { session, mapping, stream, cfg, source, capability, context, store, clock, log, now } = input;
+  const { session, mapping, stream, cfg, source, capability, context, store, clock, log, now, rampUp } = input;
   const started = clock();
   const window = clipWindow(session, now, cfg);
   let clips: { from: Date; to: Date; count: number } | null = null;
@@ -483,6 +495,22 @@ async function sampleSession(input: SampleInput): Promise<{ signalsCreated: numb
   }
   if (audience) signals.push(liveMomentSignal(mapping.person, session, audience, now, source.name));
   if (burst) signals.push(liveMomentSignal(mapping.person, session, burst, now, source.name));
+  // THE RAMP-UP (TWITCH_RAMP_UP_ENABLED): against the channel's typical
+  // session peak, once a session, on two consecutive positive readings. The
+  // reads happen only on a positive reading (a 0 is never judged) and only
+  // while the switch is on; off, nothing here runs.
+  let rampLog: Record<string, unknown> | null = null;
+  if (rampUp && (current.viewerCount ?? 0) > 0) {
+    const counts = await store.countSessionMoments({ personId: mapping.person.id, dataSourceId: source.id, sourceName: source.name, streamId: session.streamId });
+    let typicalPeak: number | null = null;
+    if (counts.ramp_up === 0) {
+      const peaks = (await store.listSnapshots(mapping.person.id, source.id, SESSION_PEAK_VIEWERS_METRIC, new Date(now.getTime() - RAMP_PEAKS_WINDOW_HOURS * HOUR_MS))).map((snapshot) => snapshot.value);
+      typicalPeak = typicalSessionPeak(peaks, cfg);
+    }
+    const ramp = rampUpMoment(session, prior, current, { typicalPeak, rampsSoFar: counts.ramp_up }, cfg);
+    if (ramp) signals.push(liveMomentSignal(mapping.person, session, ramp, now, source.name));
+    rampLog = { typicalPeak: typicalPeak === null ? null : Math.round(typicalPeak), rampsSoFar: counts.ramp_up, fired: ramp !== null };
+  }
 
   let next = applySample(session, { now, stream, clips }, cfg);
   const delta = gate.ready ? audienceDelta(gate.samples, current, cfg) : null;
@@ -530,6 +558,7 @@ async function sampleSession(input: SampleInput): Promise<{ signalsCreated: numb
     signals: stored.length,
     complete: next.complete,
     ...(qualityLog ? { quality: qualityLog } : {}),
+    ...(rampLog ? { rampUp: rampLog } : {}),
   });
   for (const signal of signals) {
     const payload = signal.rawPayload as { moment?: string; direction?: number; confidence?: number; rationale?: string };
@@ -565,7 +594,7 @@ async function judgeWithQuality(input: {
   const elapsed = minutesBetween(session.startedAt, now);
   const surgesPossible = elapsed >= quality.judgeFromMinutes;
   const burstsPossible = clips !== null && elapsed >= quality.burstMinSessionMinutes;
-  const counts = surgesPossible || burstsPossible ? await store.countSessionMoments({ personId: mapping.person.id, dataSourceId: source.id, sourceName: source.name, streamId: session.streamId }) : { audience_surge: 0, audience_drop: 0, clip_burst: 0 };
+  const counts = surgesPossible || burstsPossible ? await store.countSessionMoments({ personId: mapping.person.id, dataSourceId: source.id, sourceName: source.name, streamId: session.streamId }) : { audience_surge: 0, audience_drop: 0, clip_burst: 0, ramp_up: 0 };
 
   let shape: SessionShape | null = null;
   if (surgesPossible && counts.audience_surge < quality.maxSurgesPerSession) {

@@ -285,6 +285,9 @@ export interface TickSummary {
     volumeWeight?: number;
     /** Which scorer produced the assessment ("rules", "llm", "prefilter", "rules-fallback", "expired"). */
     scorer?: string;
+    /** The audit fields (2026-10-09): the model that answered and the prompt version, on a model-scored signal only. */
+    model?: string;
+    promptVersion?: number;
     rationale?: string;
     anomaly?: SentimentResult["anomaly"];
     /** What the story says about this person (Phase 31, version-2 prompt only). */

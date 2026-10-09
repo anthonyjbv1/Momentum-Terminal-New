@@ -1,4 +1,5 @@
 import type { FeedCatalogEntry, FeedHealthReport, SnapshotValue } from "@/lib/connectors/types";
+import type { VideoViewSample } from "@/lib/connectors/youtube-pace";
 import type { DataSource, Person, TypedSupabaseClient } from "@/types";
 import type { Json } from "@/types/database";
 
@@ -67,6 +68,12 @@ export interface SnapshotRow {
   metricKey: string;
   value: number;
   recordedAt: Date;
+}
+
+/** One row of the per-video view ledger (2026-10-09): a recent upload's views as one poll read them. */
+export interface VideoViewRow extends VideoViewSample {
+  personId: string;
+  dataSourceId: string;
 }
 
 /** What opened a run: the manual endpoint, the scheduled ingestion, or live mode closing a session (Phase 16). */
@@ -178,6 +185,10 @@ export interface IngestStore {
   upgradeSignal(id: string, upgrade: SignalUpgrade): Promise<boolean>;
   /** Insert snapshots. Exact duplicates (same person/source/metric/time) are skipped. Returns the number stored. */
   insertSnapshots(rows: SnapshotRow[]): Promise<number>;
+  /** The per-video view ledger (2026-10-09): rows of a (person, source) whose video was between `fromHours` and `toHours` old when sampled, oldest first. */
+  listVideoViewsAroundAge(personId: string, dataSourceId: string, fromHours: number, toHours: number): Promise<VideoViewSample[]>;
+  /** Insert ledger rows. Exact duplicates (same person/source/video/time) are skipped. Returns the number stored. */
+  insertVideoViews(rows: VideoViewRow[]): Promise<number>;
   /** Opens an ingest_runs row and returns its id. */
   beginRun(meta: RunMeta): Promise<string>;
   /** Closes the run with its summary. */
@@ -443,6 +454,40 @@ export function createSupabaseIngestStore(client: TypedSupabaseClient): IngestSt
       return data.length;
     },
 
+    async listVideoViewsAroundAge(personId, dataSourceId, fromHours, toHours) {
+      const { data, error } = await client
+        .from("raw_video_view_samples")
+        .select("video_id, published_at, views, recorded_at")
+        .eq("person_id", personId)
+        .eq("data_source_id", dataSourceId)
+        .gte("age_hours", fromHours)
+        .lte("age_hours", toHours)
+        .order("recorded_at", { ascending: true })
+        .limit(5_000);
+      if (error) throw new Error(`Failed to load the video view ledger: ${error.message}`);
+      return data.map((row) => ({ videoId: row.video_id, publishedAt: row.published_at ? new Date(row.published_at) : null, views: Number(row.views), recordedAt: new Date(row.recorded_at) }));
+    },
+
+    async insertVideoViews(rows) {
+      if (rows.length === 0) return 0;
+      const { data, error } = await client
+        .from("raw_video_view_samples")
+        .upsert(
+          rows.map((row) => ({
+            person_id: row.personId,
+            data_source_id: row.dataSourceId,
+            video_id: row.videoId,
+            published_at: row.publishedAt ? row.publishedAt.toISOString() : null,
+            views: row.views,
+            recorded_at: row.recordedAt.toISOString(),
+          })),
+          { onConflict: "person_id,data_source_id,video_id,recorded_at", ignoreDuplicates: true },
+        )
+        .select("id");
+      if (error) throw new Error(`Failed to insert video view samples: ${error.message}`);
+      return data.length;
+    },
+
     async beginRun(meta) {
       const { data, error } = await client
         .from("ingest_runs")
@@ -587,6 +632,8 @@ export interface MemoryIngestStoreSeed {
   /** dataSourceId -> mappings */
   mappings?: Record<string, PersonMapping[]>;
   snapshots?: SnapshotRow[];
+  /** The per-video view ledger (2026-10-09). */
+  videoViews?: VideoViewRow[];
   /** Pre-existing polls, e.g. to test the poll interval. */
   polls?: PollRow[];
   /** The publisher allowlist. Empty = every domain unknown, nothing blocked. */
@@ -598,6 +645,7 @@ export interface MemoryIngestStoreSeed {
 export interface MemoryIngestStore extends IngestStore {
   readonly signals: Array<SignalRow & { id: string; tier: number | null; processed: boolean }>;
   readonly snapshots: SnapshotRow[];
+  readonly videoViews: VideoViewRow[];
   readonly runs: Array<RunMeta & { id: string; result: RunResult | null }>;
   readonly polls: PollRow[];
   readonly observations: ObservationRow[];
@@ -611,6 +659,7 @@ export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): Memor
   const mappings = { ...(seed.mappings ?? {}) };
   const signals: MemoryIngestStore["signals"] = [];
   const snapshots: SnapshotRow[] = [...(seed.snapshots ?? [])];
+  const videoViews: VideoViewRow[] = [...(seed.videoViews ?? [])];
   const runs: MemoryIngestStore["runs"] = [];
   const polls: PollRow[] = [...(seed.polls ?? [])];
   const observations: ObservationRow[] = [];
@@ -626,6 +675,7 @@ export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): Memor
   return {
     signals,
     snapshots,
+    videoViews,
     runs,
     polls,
     observations,
@@ -730,6 +780,28 @@ export function createMemoryIngestStore(seed: MemoryIngestStoreSeed = {}): Memor
         );
         if (duplicate) continue;
         snapshots.push(row);
+        stored += 1;
+      }
+      return stored;
+    },
+
+    async listVideoViewsAroundAge(personId, dataSourceId, fromHours, toHours) {
+      return videoViews
+        .filter((row) => row.personId === personId && row.dataSourceId === dataSourceId && row.publishedAt !== null)
+        .filter((row) => {
+          const age = (row.recordedAt.getTime() - (row.publishedAt as Date).getTime()) / 3_600_000;
+          return age >= fromHours && age <= toHours;
+        })
+        .sort((a, b) => a.recordedAt.getTime() - b.recordedAt.getTime())
+        .map(({ videoId, publishedAt, views, recordedAt }) => ({ videoId, publishedAt, views, recordedAt }));
+    },
+
+    async insertVideoViews(rows) {
+      let stored = 0;
+      for (const row of rows) {
+        const duplicate = videoViews.some((v) => v.personId === row.personId && v.dataSourceId === row.dataSourceId && v.videoId === row.videoId && v.recordedAt.getTime() === row.recordedAt.getTime());
+        if (duplicate) continue;
+        videoViews.push(row);
         stored += 1;
       }
       return stored;

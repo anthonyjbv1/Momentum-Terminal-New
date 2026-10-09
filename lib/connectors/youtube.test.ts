@@ -144,3 +144,86 @@ describe("youtubeConnector", () => {
     await expect(youtubeConnector.fetchMetrics!(person, "   ", context(fetch))).rejects.toThrow(/No YouTube channel ID/);
   });
 });
+
+describe("the age-matched pace (YOUTUBE_PACE_AGE_MATCHED_ENABLED, 2026-10-09)", () => {
+  const previousKey = process.env.YOUTUBE_API_KEY;
+  beforeEach(() => {
+    process.env.YOUTUBE_API_KEY = "test-key";
+  });
+  afterEach(() => {
+    if (previousKey === undefined) delete process.env.YOUTUBE_API_KEY;
+    else process.env.YOUTUBE_API_KEY = previousKey;
+  });
+  const HOUR = 3_600_000;
+  const DAY = 24 * HOUR;
+  const iso = (daysAgo: number) => new Date(NOW.getTime() - daysAgo * DAY).toISOString();
+  /** Four uploads: the newest three days old, three peers a week apart. */
+  const playlist = youtubePlaylistItemsResponse([
+    { id: "a", title: "A", publishedAt: iso(3) },
+    { id: "b", title: "B", publishedAt: iso(10) },
+    { id: "c", title: "C", publishedAt: iso(17) },
+    { id: "d", title: "D", publishedAt: iso(24) },
+  ]);
+  const routes = () =>
+    fakeFetchRoutes([
+      { match: "/youtube/v3/channels?", body: youtubeChannelsResponse({}) },
+      { match: "/youtube/v3/playlistItems?", body: playlist },
+      { match: "/youtube/v3/videos?", body: youtubeVideosResponse({ a: "1000000", b: "2500000", c: "2600000", d: "2400000" }) },
+      { match: "/youtube/v3/search?", body: searchResponse(7, { own: 2 }) },
+    ]);
+  /** The peers' ledger at two and four days old: every peer at 1,000,000 views at three days, so the newest reads 0. */
+  const history = ["b", "c", "d"].flatMap((videoId, i) => {
+    const publishedAt = new Date(NOW.getTime() - (10 + 7 * i) * DAY);
+    return [48, 96].map((age) => ({ videoId, publishedAt, views: age === 48 ? 800_000 : 1_200_000, recordedAt: new Date(publishedAt.getTime() + age * HOUR) }));
+  });
+  function ledger(rows = history) {
+    const recorded: Array<{ videoId: string; publishedAt: Date | null; views: number; recordedAt: Date }> = [];
+    const asked: Array<[number, number]> = [];
+    return {
+      recorded,
+      asked,
+      ledger: {
+        aroundAge: async (from: number, to: number) => {
+          asked.push([from, to]);
+          return rows;
+        },
+        record: (batch: typeof recorded) => recorded.push(...batch),
+      },
+    };
+  }
+
+  it("off: the readings are byte-identical to today, and the ledger is recorded either way", async () => {
+    const plain = await youtubeConnector.fetchMetrics!(person, CHANNEL, context(routes()));
+    const { ledger: videoViews, recorded, asked } = ledger();
+    const withLedger = await youtubeConnector.fetchMetrics!(person, CHANNEL, { ...context(routes()), videoViews, paceAgeMatched: false });
+    expect(withLedger).toEqual(plain);
+    expect(plain.map((r) => r.metricKey)).toEqual(["subscriber_count", "view_count", "video_count", "recent_video_views", "commentary_volume_24h"]);
+    expect(plain.find((r) => r.metricKey === "recent_video_views")).toEqual({ metricKey: "recent_video_views", value: 8_500_000 });
+    // Four rows, one per upload, this poll's views and the publication time; the ledger is not read while the switch is off.
+    expect(recorded).toEqual([
+      { videoId: "a", publishedAt: new Date(iso(3)), views: 1_000_000, recordedAt: NOW },
+      { videoId: "b", publishedAt: new Date(iso(10)), views: 2_500_000, recordedAt: NOW },
+      { videoId: "c", publishedAt: new Date(iso(17)), views: 2_600_000, recordedAt: NOW },
+      { videoId: "d", publishedAt: new Date(iso(24)), views: 2_400_000, recordedAt: NOW },
+    ]);
+    expect(asked).toEqual([]);
+  });
+
+  it("on: the newest upload at its own age replaces the summed basket, read from the ledger around that age, and is silent when the ledger cannot judge it", async () => {
+    const { ledger: videoViews, asked } = ledger();
+    const details: Record<string, unknown> = {};
+    const readings = await youtubeConnector.fetchMetrics!(person, CHANNEL, { ...context(routes()), videoViews, paceAgeMatched: true, detail: (key, value) => (details[key] = value) });
+    expect(readings.map((r) => r.metricKey)).toEqual(["subscriber_count", "view_count", "video_count", "video_pace_age_matched", "commentary_volume_24h"]);
+    expect(readings.find((r) => r.metricKey === "video_pace_age_matched")).toEqual({ metricKey: "video_pace_age_matched", value: 0 });
+    expect(asked).toEqual([[24, 120]]);
+    expect(details.video_pace).toEqual({ video_id: "a", age_hours: 72, peers: 3, reading: 0 });
+    // No history yet (the day the switch is flipped, for a channel whose peers have not reached the age): no pace reading, and no basket reading either.
+    const empty = ledger([]);
+    const silent = await youtubeConnector.fetchMetrics!(person, CHANNEL, { ...context(routes()), videoViews: empty.ledger, paceAgeMatched: true, detail: (key, value) => (details[key] = value) });
+    expect(silent.map((r) => r.metricKey)).toEqual(["subscriber_count", "view_count", "video_count", "commentary_volume_24h"]);
+    expect(details.video_pace).toEqual({ reading: null });
+    // On, but no ledger in the context (the live runner's, a test's): the basket reading stands.
+    const noLedger = await youtubeConnector.fetchMetrics!(person, CHANNEL, { ...context(routes()), paceAgeMatched: true });
+    expect(noLedger.map((r) => r.metricKey)).toContain("recent_video_views");
+  });
+});

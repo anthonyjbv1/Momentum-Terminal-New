@@ -268,6 +268,37 @@ export function isGoogleNewsFreshEnabled(): boolean {
 }
 
 /**
+ * YOUTUBE_PACE_AGE_MATCHED_ENABLED (scoring batch, 2026-10-09; ships off).
+ * The YouTube pace metric compared the summed views of the newest ten
+ * uploads with the sum an hour earlier, so a new upload entering the basket
+ * with a few hours of views, or an old one leaving it, read as a collapse:
+ * MrBeast fired −1.50 four times in thirty days on nothing. On: the newest
+ * upload's views are judged at its own age against the channel's other
+ * recent uploads at the same age (lib/connectors/youtube-pace.ts), and that
+ * reading replaces recent_video_views. Exactly "true" turns it on; off,
+ * the connector reads exactly as before. The per-video ledger is recorded
+ * either way, so the replacement has history on the day it is flipped.
+ */
+export function isYouTubePaceAgeMatchedEnabled(): boolean {
+  return process.env.YOUTUBE_PACE_AGE_MATCHED_ENABLED?.trim() === "true";
+}
+
+/**
+ * TWITCH_RAMP_UP_ENABLED (scoring batch, 2026-10-09; ships off). A stream
+ * whose audience is already a multiple of the channel's typical session
+ * peak minutes after it opens is news the within-session rules cannot see
+ * until the warm-up and the judging window have passed (Kai Cenat's record
+ * stream was at 398,000 nine minutes in; the surge fired at minute 21). On:
+ * the ramp-up moment (lib/ingest/live/rules.ts) fires once a session after
+ * two consecutive positive readings exceed the multiple of the typical
+ * peak; a 0 or missing reading is never scored or counted (the neutral
+ * go-live rule). Exactly "true" turns it on; off, no ramp-up is judged.
+ */
+export function isTwitchRampUpEnabled(): boolean {
+  return process.env.TWITCH_RAMP_UP_ENABLED?.trim() === "true";
+}
+
+/**
  * The switch of the drifting Gravity target, as the operator console reports
  * it. The Engine reads it through getEngineEnvOverrides(); this is the same
  * rule (exactly "true") in one place for display.

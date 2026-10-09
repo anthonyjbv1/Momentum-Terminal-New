@@ -588,3 +588,25 @@ describe("Inverse pairs", () => {
     expect(both.get("drake")?.[0].impact).toBeCloseTo(0.2);
   });
 });
+
+describe("Signals — the audit fields (2026-10-09)", () => {
+  it("carry the model and prompt version into the per-signal details when the scorer set them, and nothing when it did not", () => {
+    const now = new Date("2026-10-09T12:00:00.000Z");
+    const signals = [
+      { id: "a", personId: "p", headline: "a", rawPayload: null, sourceName: "rss", sourceTier: 3, occurredAt: now },
+      { id: "b", personId: "p", headline: "b", rawPayload: null, sourceName: "rss", sourceTier: 3, occurredAt: now },
+    ] as unknown as EngineSignal[];
+    const sentiments = new Map<string, SentimentResult>([
+      ["a", { label: "positive", direction: 1, confidence: 0.8, scorer: "llm", model: "claude-haiku-4-5-20251001", promptVersion: 2 }],
+      ["b", { label: "negative", direction: -1, confidence: 0.4, scorer: "rules" }],
+    ]);
+    const force = signalsForce(scoreSignals(signals, sentiments, CONFIG.signals, now), CONFIG.signals);
+    const details = force.details.signals as Array<{ id: string; model?: string; promptVersion?: number; impact: number }>;
+    expect(details.find((s) => s.id === "a")).toMatchObject({ model: "claude-haiku-4-5-20251001", promptVersion: 2 });
+    expect(details.find((s) => s.id === "b")).not.toHaveProperty("model");
+    expect(details.find((s) => s.id === "b")).not.toHaveProperty("promptVersion");
+    // The fields are audit only: the impact is the same with them stripped.
+    const stripped = new Map<string, SentimentResult>([["a", { label: "positive", direction: 1, confidence: 0.8, scorer: "llm" }], ["b", sentiments.get("b")!]]);
+    expect(signalsForce(scoreSignals(signals, stripped, CONFIG.signals, now), CONFIG.signals).impact).toBe(force.impact);
+  });
+});

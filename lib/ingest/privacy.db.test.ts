@@ -34,6 +34,8 @@ const INTERNAL_RELATIONS = [
   // Phase 16. The live ledger: raw viewer counts and what each sample produced.
   "live_sessions",
   "live_samples",
+  // 2026-10-09. The per-video view ledger behind the age-matched pace: raw view counts.
+  "raw_video_view_samples",
   // Phase 17. The view onto figures a source records and never scores. It is
   // the one place a raw level is deliberately readable, and it is readable by
   // the service role alone, on the same terms as the table underneath it.

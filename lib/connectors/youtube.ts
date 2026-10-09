@@ -1,7 +1,8 @@
-import { getYouTubeApiKeyOrNull } from "@/lib/env";
+import { getYouTubeApiKeyOrNull, isYouTubePaceAgeMatchedEnabled } from "@/lib/env";
 import type { Json } from "@/types/database";
 
-import { ConnectorError, type ConnectorAvailability, type DataConnector, type MetricReading } from "./types";
+import { ConnectorError, type ConnectorAvailability, type ConnectorContext, type DataConnector, type MetricReading } from "./types";
+import { ageMatchedPace, DEFAULT_PACE_OPTIONS, VIDEO_PACE_METRIC, type AgeMatchedPace, type AgeMatchedPaceOptions, type VideoViewSample } from "./youtube-pace";
 
 /**
  * YouTube connector — metrics from the YouTube Data API v3.
@@ -247,6 +248,26 @@ export async function fetchCommentaryVolume(
   return { count, saturated: true };
 }
 
+/**
+ * The age-matched reading from the ledger: the peers' samples within two
+ * days either side of the newest upload's age (an index range, not the whole
+ * ledger), plus this poll's own rows, which carry the newest upload's views
+ * and its publication time.
+ */
+export async function ageMatchedPaceFromLedger(current: VideoViewSample[], context: Pick<ConnectorContext, "now" | "videoViews">, options: AgeMatchedPaceOptions = DEFAULT_PACE_OPTIONS): Promise<AgeMatchedPace | null> {
+  if (!context.videoViews) return null;
+  const dated = current.filter((row) => row.publishedAt !== null);
+  if (dated.length === 0) return null;
+  const newest = dated.reduce((best, row) => ((row.publishedAt as Date).getTime() > (best.publishedAt as Date).getTime() ? row : best));
+  const ageHours = (context.now.getTime() - (newest.publishedAt as Date).getTime()) / 3_600_000;
+  if (ageHours < options.minAgeHours || ageHours > options.maxAgeDays * 24) return null;
+  const history = await context.videoViews.aroundAge(Math.max(0, ageHours - PACE_BRACKET_HOURS), ageHours + PACE_BRACKET_HOURS);
+  return ageMatchedPace([...history, ...current], context.now, options);
+}
+
+/** How far either side of the newest upload's age the peers' samples are read: two days covers a weekend of missed polls. */
+const PACE_BRACKET_HOURS = 48;
+
 function availability(): ConnectorAvailability {
   return getYouTubeApiKeyOrNull() ? { ok: true } : { ok: false, reason: "YOUTUBE_API_KEY is not set" };
 }
@@ -275,6 +296,7 @@ export const youtubeConnector: DataConnector = {
     // on), which is the one hundred-unit search.list a poll it would cost.
     const personCommentary = context.personConfig?.commentary;
     const config = readYouTubeConfig(personCommentary === undefined ? context.config : { ...context.config, commentary: personCommentary });
+    const paceAgeMatched = context.paceAgeMatched ?? isYouTubePaceAgeMatchedEnabled();
     const channel = await fetchYouTubeChannelStats(identifier, apiKey, context.fetch);
 
     const readings: MetricReading[] = [];
@@ -287,7 +309,27 @@ export const youtubeConnector: DataConnector = {
       if (uploads.length > 0) {
         const views = await fetchVideoViews(uploads.map((u) => u.videoId), apiKey, context.fetch);
         if (views.size > 0) {
-          readings.push({ metricKey: "recent_video_views", value: [...views.values()].reduce((sum, v) => sum + v, 0) });
+          // The per-video ledger (2026-10-09), recorded on every poll whether
+          // or not the age-matched pace is on, from the same videos.list read.
+          const rows: VideoViewSample[] = uploads.flatMap((upload) => {
+            const count = views.get(upload.videoId);
+            return count === undefined ? [] : [{ videoId: upload.videoId, publishedAt: upload.publishedAt ? new Date(upload.publishedAt) : null, views: count, recordedAt: context.now }];
+          });
+          context.videoViews?.record(rows);
+          if (paceAgeMatched && context.videoViews) {
+            // YOUTUBE_PACE_AGE_MATCHED_ENABLED: the newest upload at its own
+            // age against the others at the same age, in place of the summed
+            // basket. Silent (no reading) while there is nothing to judge.
+            const pace = await ageMatchedPaceFromLedger(rows, context);
+            if (pace) {
+              readings.push({ metricKey: VIDEO_PACE_METRIC, value: pace.reading });
+              context.detail?.("video_pace", { video_id: pace.videoId, age_hours: pace.ageHours, peers: pace.peers, reading: pace.reading });
+            } else {
+              context.detail?.("video_pace", { reading: null });
+            }
+          } else {
+            readings.push({ metricKey: "recent_video_views", value: [...views.values()].reduce((sum, v) => sum + v, 0) });
+          }
         }
       }
     }

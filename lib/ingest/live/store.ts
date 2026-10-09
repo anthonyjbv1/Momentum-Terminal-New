@@ -1,7 +1,7 @@
 import type { TypedSupabaseClient } from "@/types";
 
 import { createMemoryIngestStore, createSupabaseIngestStore, type IngestStore, type MemoryIngestStore, type MemoryIngestStoreSeed } from "../store";
-import type { LiveMomentKind, LiveSample, LiveSession } from "./rules";
+import { LIVE_MOMENT_KINDS, type LiveMomentKind, type LiveSample, type LiveSession } from "./rules";
 
 /**
  * Persistence for live mode (Phase 16). Sessions and samples are the live
@@ -40,11 +40,15 @@ export interface LiveStore extends LiveIngestStore {
   listShapeViewers(query: { personId: string; dataSourceId: string; excludeSessionId: string; fromMinutes: number; toMinutes: number; sessions: number }): Promise<number[][]>;
 }
 
-const NO_MOMENTS: Record<LiveMomentKind, number> = { audience_surge: 0, audience_drop: 0, clip_burst: 0 };
+const NO_MOMENTS: Record<LiveMomentKind, number> = { audience_surge: 0, audience_drop: 0, clip_burst: 0, ramp_up: 0 };
+
+function isMomentKind(value: unknown): value is LiveMomentKind {
+  return typeof value === "string" && (LIVE_MOMENT_KINDS as readonly string[]).includes(value);
+}
 
 function momentCounts(moments: Array<unknown>): Record<LiveMomentKind, number> {
   const counts = { ...NO_MOMENTS };
-  for (const moment of moments) if (moment === "audience_surge" || moment === "audience_drop" || moment === "clip_burst") counts[moment] += 1;
+  for (const moment of moments) if (isMomentKind(moment)) counts[moment] += 1;
   return counts;
 }
 

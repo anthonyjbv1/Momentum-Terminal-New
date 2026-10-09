@@ -100,6 +100,19 @@ export interface LiveConfig {
   maxGapMinutes: number;
   /** Pages of clips read per window before the count is a floor. */
   clipMaxPages: number;
+  /**
+   * THE RAMP-UP (TWITCH_RAMP_UP_ENABLED, 2026-10-09). A session whose audience
+   * is already rampMultiple times the channel's typical session peak fires
+   * once, after two consecutive positive readings clear it; rampFullMultiple
+   * is where it reads at confidence 1. The typical peak is the median of the
+   * channel's newest rampSessions complete sessions' peaks (the
+   * session_peak_viewers ledger), and nothing fires until rampMinSessions
+   * of them exist. Judged only while the switch is on.
+   */
+  rampMultiple: number;
+  rampFullMultiple: number;
+  rampMinSessions: number;
+  rampSessions: number;
   /** The Phase 31 quality rules, present only while SIGNAL_QUALITY_ENABLED is on (see withLiveQuality). */
   quality?: LiveQualityRules;
 }
@@ -123,6 +136,10 @@ export const DEFAULT_LIVE_CONFIG: Omit<LiveConfig, "enabled"> = {
   startGraceMinutes: 5,
   maxGapMinutes: 6,
   clipMaxPages: 3,
+  rampMultiple: 1.5,
+  rampFullMultiple: 4,
+  rampMinSessions: 1,
+  rampSessions: 10,
 };
 
 export const MIN_SAMPLE_INTERVAL_MINUTES = 1;
@@ -323,6 +340,10 @@ export function readLiveConfig(sourceConfig: Config | undefined, personConfig?: 
     startGraceMinutes: number(pick("start_grace_minutes"), d.startGraceMinutes),
     maxGapMinutes: number(pick("max_gap_minutes"), d.maxGapMinutes, 1),
     clipMaxPages: integer(pick("clip_max_pages"), d.clipMaxPages, 1),
+    rampMultiple: number(pick("ramp_multiple"), d.rampMultiple, 1),
+    rampFullMultiple: number(pick("ramp_full_multiple"), d.rampFullMultiple, 1.01),
+    rampMinSessions: integer(pick("ramp_min_sessions"), d.rampMinSessions, 1),
+    rampSessions: integer(pick("ramp_sessions"), d.rampSessions, 1),
   };
 }
 
@@ -474,22 +495,24 @@ export function applySample(session: LiveSession, sample: { now: Date; stream: L
 // The moments
 // ---------------------------------------------------------------------------
 
-export type LiveMomentKind = "audience_surge" | "audience_drop" | "clip_burst";
+export type LiveMomentKind = "audience_surge" | "audience_drop" | "clip_burst" | "ramp_up";
+
+export const LIVE_MOMENT_KINDS: readonly LiveMomentKind[] = ["audience_surge", "audience_drop", "clip_burst", "ramp_up"];
 
 export interface LiveMoment {
   moment: LiveMomentKind;
   direction: 1 | -1;
   confidence: number;
-  /** The fraction (surge, drop) or the multiple (burst). */
+  /** The fraction (surge, drop) or the multiple (burst, ramp-up). */
   magnitude: number;
   /** Minutes the comparison spans. */
   windowMinutes: number;
-  /** Surge / drop: the two audiences. Burst: clips in the window and the session's rate. */
+  /** Surge / drop: the two audiences. Burst: clips in the window and the session's rate. Ramp-up: the typical peak and the audience. */
   from: number;
   to: number;
   rationale: string;
-  /** "quality" when the Phase 31 rules judged it; absent for the Phase 16 rules. */
-  rule?: "quality";
+  /** "quality" when the Phase 31 rules judged it; "ramp" for the ramp-up; absent for the Phase 16 rules. */
+  rule?: "quality" | "ramp";
 }
 
 function past(at: Date | null, now: Date, minutes: number): boolean {
@@ -789,6 +812,64 @@ export function qualityClipMoment(
 }
 
 // ---------------------------------------------------------------------------
+// The ramp-up (TWITCH_RAMP_UP_ENABLED, 2026-10-09)
+// ---------------------------------------------------------------------------
+
+/**
+ * THE RAMP-UP. Kai Cenat's record stream of 2026-10-01 was at 398,000
+ * viewers nine minutes after it opened, eight times his previous session's
+ * peak of 48,370; the within-session rules, which wait out the warm-up and
+ * then compare the stream with itself, fired their surge at minute 21. A
+ * stream that is a multiple of the channel's own typical peak while it is
+ * still ramping is news about the person now, and the session's own
+ * history cannot see it.
+ *
+ * The rule: the typical peak is the median of the channel's newest complete
+ * sessions' peaks (the session_peak_viewers ledger, which only a complete
+ * session of at least the warm-up writes), once rampMinSessions exist. The
+ * moment fires ONCE a session, at the second of two consecutive positive
+ * readings that both exceed rampMultiple times the typical peak. A 0 or a
+ * missing reading is never a reading here (the neutral go-live rule): it
+ * neither counts toward the two nor breaks the run. Confidence reads from
+ * the threshold: rampMultiple is 0, rampFullMultiple is 1, on the smaller of
+ * the two readings. There is no warm-up test, on purpose: the ramp is what
+ * it judges. A normal-sized session never clears the multiple.
+ */
+export function typicalSessionPeak(peaks: readonly number[], config: Pick<LiveConfig, "rampMinSessions" | "rampSessions">): number | null {
+  const values = peaks.filter((value) => Number.isFinite(value) && value > 0).slice(-config.rampSessions);
+  return values.length >= config.rampMinSessions ? median(values) : null;
+}
+
+export function rampUpMoment(
+  session: Pick<LiveSession, "startedAt">,
+  samples: Array<Pick<LiveSample, "sampledAt" | "viewerCount">>,
+  current: { sampledAt: Date; viewerCount: number | null },
+  context: { typicalPeak: number | null; rampsSoFar: number },
+  config: LiveConfig,
+): LiveMoment | null {
+  if (context.typicalPeak === null || !(context.typicalPeak > 0) || context.rampsSoFar > 0) return null;
+  if (current.viewerCount === null || current.viewerCount <= 0) return null;
+  const positive = samples.filter((sample) => sample.sampledAt.getTime() < current.sampledAt.getTime() && sample.viewerCount !== null && sample.viewerCount > 0).sort((a, b) => a.sampledAt.getTime() - b.sampledAt.getTime());
+  const previous = positive.at(-1);
+  if (!previous || previous.viewerCount === null) return null;
+  const threshold = config.rampMultiple * context.typicalPeak;
+  if (previous.viewerCount <= threshold || current.viewerCount <= threshold) return null;
+  const lower = Math.min(previous.viewerCount, current.viewerCount);
+  const multiple = lower / context.typicalPeak;
+  return {
+    moment: "ramp_up",
+    direction: 1,
+    confidence: confidenceAboveThreshold(multiple, config.rampMultiple, config.rampFullMultiple),
+    magnitude: round3(multiple),
+    windowMinutes: Math.round(minutesBetween(previous.sampledAt, current.sampledAt)),
+    from: Math.round(context.typicalPeak),
+    to: current.viewerCount,
+    rule: "ramp",
+    rationale: `audience ${fmtCount(previous.viewerCount)} then ${fmtCount(current.viewerCount)} (${Math.round(minutesBetween(session.startedAt, current.sampledAt))} min in) against a typical session peak of ${fmtCount(context.typicalPeak)}: ${multiple.toFixed(1)}×, threshold ${config.rampMultiple}×`,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The signals
 // ---------------------------------------------------------------------------
 
@@ -811,7 +892,9 @@ export function liveMomentSignal(person: { display_name: string }, session: Live
   const possessive = person.display_name.endsWith("s") ? `${person.display_name}'` : `${person.display_name}'s`;
   const quality = moment.rule === "quality";
   const headline =
-    moment.moment === "audience_surge"
+    moment.moment === "ramp_up"
+      ? `${possessive} stream is already ${moment.magnitude.toFixed(1)}× their usual peak: ${fmt(moment.to)} viewers against a typical session peak of ${fmt(moment.from)}, ${elapsed} into the stream.`
+      : moment.moment === "audience_surge"
       ? quality
         ? `${possessive} live audience stepped up ${Math.round(moment.magnitude * 100)}%: ${fmt(moment.to)} viewers over ${moment.windowMinutes / 2} minutes against ${fmt(moment.from)} in the ${moment.windowMinutes / 2} before, and holding, ${elapsed} into the stream.`
         : `${possessive} live audience is up ${Math.round(moment.magnitude * 100)}% in the last ${moment.windowMinutes} minutes, ${fmt(moment.from)} to ${fmt(moment.to)} viewers, ${elapsed} into the stream.`
@@ -838,7 +921,7 @@ export function liveMomentSignal(person: { display_name: string }, session: Live
       channel: session.channel,
       minutes_into_stream: Math.round(minutesBetween(session.startedAt, now)),
       rationale: moment.rationale,
-      ...(quality ? { rule: "quality" } : {}),
+      ...(moment.rule ? { rule: moment.rule } : {}),
     },
   };
 }

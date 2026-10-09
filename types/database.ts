@@ -2012,6 +2012,61 @@ export type Database = {
           },
         ]
       }
+      raw_video_view_samples: {
+        Row: {
+          age_hours: number | null
+          data_source_id: string
+          id: number
+          person_id: string
+          published_at: string | null
+          recorded_at: string
+          video_id: string
+          views: number
+        }
+        Insert: {
+          age_hours?: never
+          data_source_id: string
+          id?: never
+          person_id: string
+          published_at?: string | null
+          recorded_at: string
+          video_id: string
+          views: number
+        }
+        Update: {
+          age_hours?: never
+          data_source_id?: string
+          id?: never
+          person_id?: string
+          published_at?: string | null
+          recorded_at?: string
+          video_id?: string
+          views?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "raw_video_view_samples_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "data_sources"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "raw_video_view_samples_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "source_health"
+            referencedColumns: ["data_source_id"]
+          },
+          {
+            foreignKeyName: "raw_video_view_samples_person_id_fkey"
+            columns: ["person_id"]
+            isOneToOne: false
+            referencedRelation: "people"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       score_events: {
         Row: {
           created_at: string

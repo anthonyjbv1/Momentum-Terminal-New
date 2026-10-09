@@ -49,6 +49,15 @@ export interface SentimentResult {
   allegation?: "none" | "sexual_abuse" | "violence" | "minors";
   /** Which scorer produced the result: "rules", "llm", "prefilter", "rules-fallback". */
   scorer?: string;
+  /**
+   * THE AUDIT FIELDS (scoring batch, 2026-10-09): the model that scored the
+   * signal, as the provider reported it, and the prompt version it was
+   * asked with. Set by the LLM scorer alone; a rules, metric or prescored
+   * result has neither. Carried into score_events.details and the tick
+   * summary per signal; they change no score.
+   */
+  model?: string;
+  promptVersion?: number;
 }
 
 export type SentimentAnomaly = "routine" | "notable" | "anomalous";

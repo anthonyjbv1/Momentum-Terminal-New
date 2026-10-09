@@ -427,6 +427,16 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
     elevated: ["{their} newest uploads are moving faster than usual", "{their} latest videos are outpacing their usual"],
     quiet: ["{their} newest uploads are moving more slowly than usual", "{their} latest videos are under their usual pace"],
   },
+  video_pace_age_matched: {
+    // The age-matched pace (2026-10-09): the newest upload at its own age
+    // against the channel's other recent uploads at the same age. The same
+    // voice as the pace metric it replaces, said of the one video.
+    audience: "creator",
+    spiking: ["{their} newest upload is taking off", "{their} latest video is moving fast for its age"],
+    concrete: ["{their} newest upload is moving {running}", "Views on {their} latest video are running {running} for its age"],
+    elevated: ["{their} newest upload is ahead of their usual pace", "{their} latest video is outpacing their recent uploads at this age"],
+    quiet: ["{their} newest upload is behind their usual pace", "{their} latest video is under their recent uploads at this age"],
+  },
   commentary_volume_24h: {
     unit: { one: "video", many: "videos" },
     spiking: ["YouTube cannot stop talking about {name}", "{name} is the subject of the day on YouTube"],
