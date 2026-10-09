@@ -1,4 +1,5 @@
 import { apisportsConnector } from "./apisports";
+import { apisportsNbaConnector } from "./apisports-nba";
 import { billboardConnector } from "./billboard";
 import { finnhubConnector } from "./finnhub";
 import { forbesConnector } from "./forbes";
@@ -33,6 +34,7 @@ const ALL_CONNECTORS: readonly DataConnector[] = [
   newsdataConnector,
   billboardConnector,
   apisportsConnector,
+  apisportsNbaConnector,
   rssConnector,
   publisherRssConnector,
 ];

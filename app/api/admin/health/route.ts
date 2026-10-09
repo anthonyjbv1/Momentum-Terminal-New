@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const admin = createSupabaseAdminClient();
-    const [sources, recentRuns, llmCost, apisportsPoll, sourceConfigs, ledgerFirst, recentTicks] = await Promise.all([
+    const [sources, recentRuns, llmCost, apisportsPoll, sourceConfigs, ledgerFirst, recentTicks, apisportsNbaPoll] = await Promise.all([
       admin.from("source_health").select("*").order("name"),
       admin.from("ingest_runs").select("*").order("started_at", { ascending: false }).limit(runs),
       admin.from("llm_cost_per_tick").select("*").order("tick_number", { ascending: false, nullsFirst: false }).limit(ticks),
@@ -62,8 +62,10 @@ export async function GET(request: NextRequest) {
       admin.from("raw_video_view_samples").select("recorded_at").order("recorded_at", { ascending: true }).limit(1).maybeSingle(),
       // The recent ticks' scoring accounts, for the fallback warning (2026-10-09): a tick that scored by the rules instead of the model.
       admin.from("engine_ticks").select("tick_number, started_at, scoring:summary->scoring").order("tick_number", { ascending: false }).limit(ticks),
+      // The newest API-NBA poll's account of ITS subscription (a separate plan on the same key, 2026-10-09).
+      admin.from("source_polls").select("started_at, detail, data_sources!inner(name)").eq("data_sources.name", "apisports_nba").not("detail->apisports_nba", "is", null).order("started_at", { ascending: false }).limit(1).maybeSingle(),
     ]);
-    for (const [label, result] of Object.entries({ sources, recentRuns, llmCost, apisportsPoll, sourceConfigs, ledgerFirst, recentTicks })) {
+    for (const [label, result] of Object.entries({ sources, recentRuns, llmCost, apisportsPoll, sourceConfigs, ledgerFirst, recentTicks, apisportsNbaPoll })) {
       if (result.error) throw new Error(`${label}: ${result.error.message}`);
     }
     // The daily subscription check: the plan and its end as the last poll read them, and
@@ -86,6 +88,25 @@ export async function GET(request: NextRequest) {
     const warnings = [...apisports.warnings];
     const lastRead = apisports.readAt ? Date.parse(apisports.readAt) : Number.NaN;
     if (Number.isFinite(lastRead) && Date.now() - lastRead > 24 * 3_600_000) warnings.push(`API-Sports subscription last read ${apisports.readAt}: more than a day ago`);
+    // The NBA plan, the same daily check; silent until the source has a mapping that polls.
+    const nbaDetail = ((apisportsNbaPoll.data?.detail as { apisports_nba?: Record<string, unknown> } | null)?.apisports_nba ?? null) as Record<string, unknown> | null;
+    const apisportsNba = nbaDetail
+      ? {
+          readAt: apisportsNbaPoll.data?.started_at ?? null,
+          ...nbaDetail,
+          warnings: apiSportsWarnings(
+            {
+              plan: typeof nbaDetail.plan === "string" ? nbaDetail.plan : null,
+              subscriptionEnd: typeof nbaDetail.subscription_end === "string" ? nbaDetail.subscription_end : null,
+              subscriptionActive: typeof nbaDetail.subscription_active === "boolean" ? nbaDetail.subscription_active : null,
+            },
+            new Date(),
+          ).map((warning) => `API-NBA: ${warning}`),
+        }
+      : { readAt: null, warnings: [] as string[] };
+    warnings.push(...apisportsNba.warnings);
+    const nbaLastRead = apisportsNba.readAt ? Date.parse(apisportsNba.readAt) : Number.NaN;
+    if (Number.isFinite(nbaLastRead) && Date.now() - nbaLastRead > 24 * 3_600_000) warnings.push(`API-NBA subscription last read ${apisportsNba.readAt}: more than a day ago`);
     // The baseline cuts in force, and the date each metric's min_samples is
     // due back to its everyday value, so the hold is not forgotten.
     const rebaseline = rebaselineStatus((sourceConfigs.data ?? []).map((row) => ({ name: row.name, config: row.config })), new Date());
@@ -139,6 +160,7 @@ export async function GET(request: NextRequest) {
       cronEnabled: isEngineCronEnabled(),
       warnings,
       apisports,
+      apisportsNba,
       googleNewsFresh: isGoogleNewsFreshEnabled(),
       // The scoring batch's two switches (2026-10-09), both shipped off.
       youtubePaceAgeMatched: isYouTubePaceAgeMatchedEnabled(),

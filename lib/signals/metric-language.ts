@@ -528,6 +528,29 @@ export const METRIC_VOICE: Record<string, MetricVoice> = {
     elevated: ["{name} is throwing more interceptions than usual", "Looser with the ball than usual for {name}"],
     quiet: ["{name} is protecting the ball better than usual", "Fewer giveaways than usual from {name}"],
   },
+
+  // --- Basketball (API-NBA, 2026-10-09) -------------------------------------
+  game_points: {
+    unit: { one: "point", many: "points" },
+    spiking: ["{name} put up a huge scoring night", "{name} could not miss"],
+    concrete: ["{count} for {name} — {comparison}", "{name} is scoring {running}"],
+    elevated: ["{name} scored more than usual", "Bigger scoring night than usual for {name}"],
+    quiet: ["{name} scored less than usual", "Quiet scoring night by {their} standards"],
+  },
+  game_rebounds: {
+    unit: { one: "rebound", many: "rebounds" },
+    spiking: ["{name} owned the glass", "{name} pulled down everything"],
+    concrete: ["{count} pulled down by {name} — {comparison}", "{name} is rebounding {running}"],
+    elevated: ["{name} rebounded more than usual", "Bigger night on the boards than usual for {name}"],
+    quiet: ["{name} rebounded less than usual", "Quiet night on the boards by {their} standards"],
+  },
+  game_assists: {
+    unit: { one: "assist", many: "assists" },
+    spiking: ["{name} ran the whole offence", "{name} set up everyone"],
+    concrete: ["{count} dished by {name} — {comparison}", "{name} is creating {running}"],
+    elevated: ["{name} created more than usual", "Bigger playmaking night than usual for {name}"],
+    quiet: ["{name} created less than usual", "Quiet playmaking night by {their} standards"],
+  },
 };
 
 /**

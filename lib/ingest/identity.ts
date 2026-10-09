@@ -127,7 +127,7 @@ async function resolveApiSports(host: string, playerSearch: string, teamSearch: 
   const trim = (entry: unknown): Json => {
     const row = record(entry as Json);
     const out: Record<string, Json> = {};
-    for (const field of ["id", "name", "position", "group", "number", "age", "team", "college"]) {
+    for (const field of ["id", "name", "firstname", "lastname", "nickname", "code", "position", "group", "number", "age", "team", "college"]) {
       const value = row[field];
       if (value !== undefined && value !== null) out[field] = typeof value === "object" ? (JSON.stringify(value).slice(0, 200) as Json) : (value as Json);
     }

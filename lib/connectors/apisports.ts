@@ -416,18 +416,23 @@ export function readRateHeaders(headers: Headers, now = apiSportsPacing.now()): 
   if (minuteLimit !== null || dayLimit !== null) usage.readAt = new Date(now).toISOString();
 }
 
-async function call<T>(path: string, config: ApiSportsConnectorConfig, key: string, fetchImpl: typeof fetch): Promise<ApiSportsEnvelope<T>> {
+/**
+ * One paced, backed-off request against an API-Sports host (shared with the
+ * NBA connector, 2026-10-09: one key, one pacing ledger, every host). The
+ * envelope is validated and an errors payload raises.
+ */
+export async function apiSportsRequest<T>(path: string, host: string, key: string, fetchImpl: typeof fetch): Promise<ApiSportsEnvelope<T>> {
   let response: Response | null = null;
   for (let attempt = 0; ; attempt += 1) {
     await pace();
-    response = await fetchImpl(`https://${config.host}${path}`, { headers: { "x-apisports-key": key, accept: "application/json" } });
+    response = await fetchImpl(`https://${host}${path}`, { headers: { "x-apisports-key": key, accept: "application/json" } });
     readRateHeaders(response.headers);
     if (response.status !== 429 || attempt >= BACKOFF_RETRIES) break;
     const retryAfter = Number(response.headers.get("retry-after"));
     await apiSportsPacing.sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000 * 2 ** attempt);
   }
   if (!response.ok) {
-    throw new ConnectorError(`API-Sports responded ${response.status} for ${path} on ${config.host}`, {
+    throw new ConnectorError(`API-Sports responded ${response.status} for ${path} on ${host}`, {
       status: response.status,
       retryable: response.status === 429 || response.status >= 500,
     });
@@ -438,9 +443,13 @@ async function call<T>(path: string, config: ApiSportsConnectorConfig, key: stri
     // API-Sports answers 200 with an errors payload for a wrong token, an
     // unsubscribed sport or a malformed parameter. Reading that as success is
     // how a connector goes quiet, so it raises here.
-    throw new ConnectorError(`API-Sports refused ${path} on ${config.host}: ${errors.join("; ")}`, { status: 200 });
+    throw new ConnectorError(`API-Sports refused ${path} on ${host}: ${errors.join("; ")}`, { status: 200 });
   }
   return body;
+}
+
+function call<T>(path: string, config: ApiSportsConnectorConfig, key: string, fetchImpl: typeof fetch): Promise<ApiSportsEnvelope<T>> {
+  return apiSportsRequest<T>(path, config.host, key, fetchImpl);
 }
 
 // ---------------------------------------------------------------------------
@@ -456,7 +465,8 @@ export interface ApiSportsStatus {
   dailyLimit: number | null;
 }
 
-let cachedStatus: { at: number; host: string; status: ApiSportsStatus } | null = null;
+/** Per host (2026-10-09): the NFL and NBA hosts are separate subscriptions, each with its own /status. */
+const cachedStatus = new Map<string, { at: number; status: ApiSportsStatus }>();
 /** The games list, fetched once per poll and shared by the event and metric reads. */
 const gamesCache = new Map<string, Promise<ApiSportsGame[]>>();
 /**
@@ -469,7 +479,7 @@ const gameStatsCache = new Map<string, Promise<unknown[]>>();
 
 /** For tests. */
 export function resetApiSportsStatusCache(): void {
-  cachedStatus = null;
+  cachedStatus.clear();
   gamesCache.clear();
   gameStatsCache.clear();
 }
@@ -481,13 +491,14 @@ export function resetApiSportsStatusCache(): void {
  * endpoint. Cached per process so it does not spend the daily quota every poll.
  */
 export async function fetchApiSportsStatus(
-  config: ApiSportsConnectorConfig,
+  config: Pick<ApiSportsConnectorConfig, "host">,
   key: string,
   fetchImpl: typeof fetch,
   now = Date.now(),
 ): Promise<ApiSportsStatus> {
-  if (cachedStatus && cachedStatus.host === config.host && now - cachedStatus.at < STATUS_CACHE_MS) return cachedStatus.status;
-  const body = await call<unknown>("/status", config, key, fetchImpl);
+  const cached = cachedStatus.get(config.host);
+  if (cached && now - cached.at < STATUS_CACHE_MS) return cached.status;
+  const body = await apiSportsRequest<unknown>("/status", config.host, key, fetchImpl);
   const first = (Array.isArray(body.response) ? body.response[0] : body.response) as
     | { subscription?: { plan?: string; end?: string; active?: boolean }; requests?: { current?: number; limit_day?: number } }
     | undefined;
@@ -498,7 +509,7 @@ export async function fetchApiSportsStatus(
     requestsToday: numberOrNull(first?.requests?.current),
     dailyLimit: numberOrNull(first?.requests?.limit_day),
   };
-  cachedStatus = { at: now, host: config.host, status };
+  cachedStatus.set(config.host, { at: now, status });
   return status;
 }
 
@@ -1010,10 +1021,10 @@ export function apiSportsWarnings(status: Pick<ApiSportsStatus, "plan" | "subscr
   return warnings;
 }
 
-/** The poll's account of the subscription and the day's usage, onto source_polls.detail. */
-function recordUsage(context: { detail?: (key: string, value: Json) => void; now: Date }, status: ApiSportsStatus, requestsBefore: number): void {
+/** The poll's account of the subscription and the day's usage, onto source_polls.detail. Shared with the NBA connector. */
+export function recordApiSportsUsage(context: { detail?: (key: string, value: Json) => void; now: Date }, status: ApiSportsStatus, requestsBefore: number, detailKey = "apisports"): void {
   const current = apiSportsUsage();
-  context.detail?.("apisports", {
+  context.detail?.(detailKey, {
     plan: status.plan,
     subscription_end: status.subscriptionEnd,
     subscription_active: status.subscriptionActive,
@@ -1098,7 +1109,7 @@ export const apisportsConnector: DataConnector = {
       }
     }
 
-    recordUsage(context, status, requestsBefore);
+    recordApiSportsUsage(context, status, requestsBefore);
     return finished
       .slice(0, config.recent_games)
       .map((game) => gameSignal(person, game, APISPORTS_SOURCE_NAME, { observedAt: context.now, config, line: game === newest ? line : null }))
@@ -1255,7 +1266,7 @@ export const apisportsConnector: DataConnector = {
       const newest = list.at(-1);
       if (newest) out.push({ metricKey, value: newest.value, recordedAt: newest.game.date });
     }
-    recordUsage(context, status, requestsBefore);
+    recordApiSportsUsage(context, status, requestsBefore);
     return out;
   },
 };
