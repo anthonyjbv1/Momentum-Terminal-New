@@ -72,9 +72,11 @@ function field(payload: Json | null, key: string): string | null {
 
 export async function GET(request: NextRequest) {
   const auth = authorize(request.headers);
+  let runBy: string | null = null;
   if (!auth.ok) {
     const admin = await getAdminUser().catch(() => null);
     if (!admin) return NextResponse.json({ error: auth.message }, { status: auth.status });
+    runBy = admin.id;
   }
   const days = Math.min(60, Math.max(1, Number(request.nextUrl.searchParams.get("days") ?? 30) || 30));
   const limit = Math.min(2000, Math.max(1, Number(request.nextUrl.searchParams.get("limit") ?? 400) || 400));
@@ -129,14 +131,24 @@ export async function GET(request: NextRequest) {
     const flaggedByTerms = items.filter((i) => i.terms !== "none");
     const flaggedByModel = items.filter((i) => i.model !== "none" && i.model !== "unscored");
     const disagreements = items.filter((i) => (i.terms !== "none") !== (i.model !== "none" && i.model !== "unscored") || (i.terms !== "none" && i.model !== "none" && i.model !== "unscored" && i.terms !== i.model));
-    return NextResponse.json({
+    const result = {
       generatedAt: new Date().toISOString(),
       window: { days, person, stories: rows.length, limit },
       llmCalls: calls,
       counts: { terms: flaggedByTerms.length, model: flaggedByModel.length, both: items.filter((i) => i.terms !== "none" && i.model !== "none" && i.model !== "unscored").length, disagreements: disagreements.length, wouldHold: items.filter((i) => i.wouldHold).length },
       flagged: items.filter((i) => i.terms !== "none" || (i.model !== "none" && i.model !== "unscored")),
       disagreements,
-    });
+    };
+    // Stored, so the console reads every run back (2026-10-09); a failure to store is reported with the result, never hidden.
+    const stored = await admin.from("allegation_scans").insert({
+      run_by: runBy,
+      params: result.window as unknown as Json,
+      counts: result.counts as unknown as Json,
+      flagged: result.flagged as unknown as Json,
+      disagreements: result.disagreements as unknown as Json,
+      llm_calls: calls,
+    }).select("id, run_at").single();
+    return NextResponse.json({ ...result, stored: stored.error ? { error: stored.error.message } : stored.data });
   } catch (error) {
     console.error("[admin/allegation-scan] failed:", error);
     return NextResponse.json({ error: "Scan failed", detail: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });

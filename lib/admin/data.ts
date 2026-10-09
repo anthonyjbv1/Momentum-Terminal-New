@@ -945,6 +945,17 @@ export interface AllegationReviewRow {
   voided: boolean;
 }
 
+export interface AllegationScanRow {
+  id: string;
+  runAt: string;
+  runBy: string | null;
+  params: Record<string, unknown>;
+  counts: Record<string, unknown>;
+  llmCalls: number;
+  disagreements: Array<Record<string, unknown>>;
+  flagged: number;
+}
+
 export interface MarketReport {
   open: AlertRow[];
   closed: AlertRow[];
@@ -957,6 +968,8 @@ export interface MarketReport {
   engineParameters: Array<{ key: string; value: string; updatedAt: string }>;
   /** The allegation hold's review list (2026-10-09): every held, lifted or hidden item, newest first. */
   allegations: AllegationReviewRow[];
+  /** The detection scans (2026-10-09): label vs terms over the backlog, newest first, with their disagreements. */
+  scans: AllegationScanRow[];
   /** The detectors' thresholds, from platform_settings, name → value. */
   thresholds: Array<{ name: string; value: string; note: string }>;
   /** The house book, summed by category, all time and the trailing day. Integer cents; positive is a house gain. */
@@ -975,7 +988,7 @@ const HOUSE_ROW_CAP = 20_000;
 export async function readMarket(): Promise<MarketReport> {
   const client = await adminClient();
   const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const [open, closed, events, excluded, frozen, people, tiers, settings, house, audit, engineParameters, allegations] = await Promise.all([
+  const [open, closed, events, excluded, frozen, people, tiers, settings, house, audit, engineParameters, allegations, scans] = await Promise.all([
     client.from("alerts").select("*").in("status", ["open", "reviewing"]).order("created_at", { ascending: false }).limit(ALERT_LIMIT),
     client.from("alerts").select("*").in("status", ["resolved", "dismissed"]).order("updated_at", { ascending: false }).limit(RECENT_LIMIT),
     client.from("surveillance_events").select("*").order("recorded_at", { ascending: false }).order("id", { ascending: false }).limit(RECENT_LIMIT),
@@ -992,8 +1005,9 @@ export async function readMarket(): Promise<MarketReport> {
     client.from("admin_audit_log").select("*").order("performed_at", { ascending: false }).order("id", { ascending: false }).limit(RECENT_LIMIT),
     client.from("engine_parameters").select("key, value, updated_at").order("key"),
     client.from("allegation_review").select("*").order("occurred_at", { ascending: false }).limit(200),
+    client.from("allegation_scans").select("id, run_at, run_by, params, counts, flagged, disagreements, llm_calls").order("run_at", { ascending: false }).limit(10),
   ]);
-  for (const [label, result] of Object.entries({ open, closed, events, excluded, frozen, people, tiers, settings, house, audit, engineParameters, allegations })) {
+  for (const [label, result] of Object.entries({ open, closed, events, excluded, frozen, people, tiers, settings, house, audit, engineParameters, allegations, scans })) {
     if (result.error) throw new Error(`${label}: ${result.error.message}`);
   }
 
@@ -1092,6 +1106,16 @@ export async function readMarket(): Promise<MarketReport> {
       },
     })),
     engineParameters: (engineParameters.data ?? []).map((row) => ({ key: row.key, value: JSON.stringify(row.value), updatedAt: row.updated_at })),
+    scans: (scans.data ?? []).map((row) => ({
+      id: row.id,
+      runAt: row.run_at,
+      runBy: row.run_by,
+      params: toRecord(row.params),
+      counts: toRecord(row.counts),
+      llmCalls: row.llm_calls,
+      disagreements: Array.isArray(row.disagreements) ? (row.disagreements as Array<Record<string, unknown>>) : [],
+      flagged: Array.isArray(row.flagged) ? row.flagged.length : 0,
+    })),
     allegations: (allegations.data ?? []).map((row) => ({
       signalId: row.signal_id ?? "",
       personSlug: row.person_slug ?? "",

@@ -2131,6 +2131,42 @@ export type Database = {
         }
         Relationships: []
       }
+      allegation_scans: {
+        Row: {
+          counts: Json
+          created_at: string
+          disagreements: Json
+          flagged: Json
+          id: string
+          llm_calls: number
+          params: Json
+          run_at: string
+          run_by: string | null
+        }
+        Insert: {
+          counts: Json
+          created_at?: string
+          disagreements?: Json
+          flagged?: Json
+          id?: string
+          llm_calls?: number
+          params: Json
+          run_at?: string
+          run_by?: string | null
+        }
+        Update: {
+          counts?: Json
+          created_at?: string
+          disagreements?: Json
+          flagged?: Json
+          id?: string
+          llm_calls?: number
+          params?: Json
+          run_at?: string
+          run_by?: string | null
+        }
+        Relationships: []
+      }
       signals: {
         Row: {
           voided_at: string | null

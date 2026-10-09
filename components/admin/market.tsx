@@ -266,6 +266,55 @@ export function MarketSection({ report, now, notice }: { report: MarketReport; n
               </table>
             </Scroll>
           )}
+          <p className="adm-sub" style={{ marginTop: 12 }}>Detection scans</p>
+          {report.scans.length === 0 ? (
+            <Empty>
+              None stored yet. <a href="/api/admin/allegation-scan?days=30">Run a scan</a> (every person, 30 days) or add <code>&amp;person=slug</code>; the result is stored and listed here.
+            </Empty>
+          ) : (
+            <Scroll>
+              <table className="adm-t">
+                <thead>
+                  <tr>
+                    <th>Ran</th>
+                    <th>Window</th>
+                    <th>Stories</th>
+                    <th>Terms</th>
+                    <th>Label</th>
+                    <th>Both</th>
+                    <th>Would hold</th>
+                    <th>Calls</th>
+                    <th className="wrap">Disagreements</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.scans.map((scan) => (
+                    <tr key={scan.id}>
+                      <td>{age(scan.runAt, now)}</td>
+                      <td>
+                        {String(scan.params.days ?? "?")}d{scan.params.person ? ` · ${String(scan.params.person)}` : ""}
+                      </td>
+                      <td>{String(scan.params.stories ?? "?")}</td>
+                      <td>{String(scan.counts.terms ?? "?")}</td>
+                      <td>{String(scan.counts.model ?? "?")}</td>
+                      <td>{String(scan.counts.both ?? "?")}</td>
+                      <td>{String(scan.counts.wouldHold ?? "?")}</td>
+                      <td>{scan.llmCalls}</td>
+                      <td className="wrap">
+                        {scan.disagreements.length === 0
+                          ? "none"
+                          : scan.disagreements
+                              .slice(0, 12)
+                              .map((d) => `${String(d.person ?? "?")}: terms ${String(d.terms)}, label ${String(d.model)} (tier ${String(d.publisherTier)}): ${String(d.headline ?? "").slice(0, 90)}`)
+                              .join(" · ")}
+                        {scan.disagreements.length > 12 ? ` · and ${scan.disagreements.length - 12} more` : ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Scroll>
+          )}
           <form action={marketAction} className="adm-form" style={{ marginTop: 8 }}>
             <input type="hidden" name="action" value="hide_signal" />
             <input name="signal_id" placeholder="signal id (uuid)" aria-label="Signal id to hide" required style={{ width: 300 }} />
