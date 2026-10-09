@@ -186,6 +186,36 @@ describe("buildNarrativesDetailed (Phase 31)", () => {
   });
 });
 
+describe("the interim grave-claim guard (2026-10-09)", () => {
+  const withNote = (text: string, direction: "up" | "down" | "flat" = "up") => ({ ...summary, signals: [{ ...summary.signals[0], narrative: text, narrativeDirection: direction }] });
+
+  it("stores the neutral line in place of a model sentence that carries a grave term, with the switch on or off, and logs the original with the term", () => {
+    const text = "Kai Cenat streamed to zero viewers on Just Chatting amid ongoing grooming allegations, legal threats, and feud fallout.";
+    for (const quality of [undefined, { ...DEFAULT_ENGINE_CONFIG.signalQuality, enabled: true }]) {
+      const built = buildNarrativesDetailed(withNote(text), DEFAULT_ENGINE_CONFIG.narratives, quality);
+      const drake = built.rows.find((row) => row.personId === "d")!;
+      expect(drake.text).toBe("Drake's momentum climbed on fresh signals.");
+      expect(drake.source).toBe("template");
+      expect(built.replaced).toContainEqual({ personId: "d", reason: "grave_claim", text, term: "grooming" });
+    }
+  });
+
+  it("covers the template too: a quoted headline with a grave term is not stored either", () => {
+    const headline = "Streamer accuses brother of sexual abuse in tearful video";
+    const templated = { ...summary, signals: [{ ...summary.signals[0], headline, narrative: undefined }] };
+    const built = buildNarrativesDetailed(templated, DEFAULT_ENGINE_CONFIG.narratives);
+    const drake = built.rows.find((row) => row.personId === "d")!;
+    expect(drake.text).toBe("Drake's momentum climbed on fresh signals.");
+    expect(built.replaced).toContainEqual({ personId: "d", reason: "grave_claim", text: `Drake's momentum climbed on "${headline}".`, term: "sexual abuse" });
+  });
+
+  it("leaves a sentence with no grave term exactly as written", () => {
+    const built = buildNarrativesDetailed(withNote("Drake's surprise album arrived to a muted first day."), DEFAULT_ENGINE_CONFIG.narratives);
+    expect(built.rows.find((row) => row.personId === "d")!.text).toBe("Drake's surprise album arrived to a muted first day.");
+    expect(built.replaced).toEqual([]);
+  });
+});
+
 describe("the direction check judges the salience-weighted Signals force (2026-09-28)", () => {
   const on = { ...DEFAULT_ENGINE_CONFIG.signalQuality, enabled: true };
 

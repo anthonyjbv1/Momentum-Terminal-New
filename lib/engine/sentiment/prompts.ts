@@ -2,6 +2,7 @@ import type { PersonMemory } from "@/lib/engine/memory/types";
 import type { LLMJsonSchema } from "@/lib/llm/types";
 import type { Json } from "@/types/database";
 
+import { graveClaimTerm } from "./grave-claims";
 import type { SentimentInput } from "./types";
 
 /**
@@ -177,10 +178,16 @@ export function buildPersonBlock(person: PersonPromptContext): string {
     const time = Date.parse(at);
     return Number.isFinite(time) ? (today.getTime() - time) / 86_400_000 : null;
   };
+  // THE INTERIM GRAVE-CLAIM GUARD (2026-10-09): the writer's context never
+  // carries story text that matches the grave-claim list. A remembered
+  // headline that matches is left out of the block, and a context summary
+  // that matches is replaced by a line that says so, so the model cannot
+  // restate an allegation from memory that no story in the batch carries.
   const current = recentContext.notable_events.filter((e) => {
     const age = ageDays(e.at);
-    return age === null || person.eventMaxAgeDays === undefined || age <= person.eventMaxAgeDays;
+    return (age === null || person.eventMaxAgeDays === undefined || age <= person.eventMaxAgeDays) && graveClaimTerm(e.headline) === null;
   });
+  const summary = graveClaimTerm(recentContext.summary) === null ? recentContext.summary : "withheld: it carries an allegation under review.";
   const events = current.slice(0, 5).map((e) => {
     const age = ageDays(e.at);
     const when = age === null ? e.at.slice(0, 10) : `${e.at.slice(0, 10)} (${age < 1 ? "today" : `${Math.round(age)} days ago`})`;
@@ -198,7 +205,7 @@ export function buildPersonBlock(person: PersonPromptContext): string {
     `Routine for this person: ${list(baselinePatterns.routine)}`,
     `Notable for this person: ${list(baselinePatterns.notable)}`,
     `Noise note: ${baselinePatterns.noise_note ?? "n/a"}`,
-    `Recent context: ${recentContext.summary}`,
+    `Recent context: ${summary}`,
     ...(events.length > 0 ? [`Recent notable events${person.eventMaxAgeDays !== undefined ? ` (last ${person.eventMaxAgeDays} days)` : ""}:`, ...events] : []),
   ].join("\n");
 }

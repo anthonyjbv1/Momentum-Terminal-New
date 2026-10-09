@@ -65,7 +65,9 @@ export async function runPostTick(summary: TickSummary, deps: PostTickDeps): Pro
   try {
     const { rows, replaced } = buildNarrativesDetailed(summary, config.narratives, config.signalQuality);
     // Phase 31: a replaced sentence is a finding about the prompt, not an error; it is logged and the template is published.
-    for (const entry of replaced) log(`narrative replaced by the template for ${entry.personId} (${entry.reason}): ${entry.text}`);
+    for (const entry of replaced) {
+      log(entry.reason === "grave_claim" ? `narrative withheld for review (grave-claim guard, term "${entry.term}") for ${entry.personId}: ${entry.text}` : `narrative replaced by the template for ${entry.personId} (${entry.reason}): ${entry.text}`);
+    }
     result.narratives = await deps.narrativeStore.insert(rows);
   } catch (error) {
     const message = `narratives failed: ${error instanceof Error ? error.message : String(error)}`;

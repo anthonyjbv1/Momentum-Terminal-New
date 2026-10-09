@@ -90,6 +90,25 @@ describe("the person block and today's date (Phase 12+)", () => {
     },
   };
 
+  it("never carries story text from the grave-claim list into the writer's context (interim guard, 2026-10-09)", () => {
+    const tainted: PersonMemory = {
+      ...withEvents,
+      recentContext: {
+        summary: "Kai Cenat faces renewed grooming allegations from a former friend while touring.",
+        notable_events: [
+          { at: "2026-09-15T08:00:00Z", headline: "Reggie accuses Kai Cenat of grooming in streaming feud", label: "negative", impact: -0.4, anomaly: "notable" },
+          { at: "2026-09-14T08:00:00Z", headline: "Kai Cenat announces Seven Wonders tour", label: "positive", impact: 0.6 },
+        ],
+      },
+    };
+    const block = buildPersonBlock({ ...person, memory: tainted, today, eventMaxAgeDays: 30 });
+    expect(block).not.toMatch(/groom/i);
+    expect(block).toContain("Recent context: withheld: it carries an allegation under review.");
+    expect(block).toContain("Kai Cenat announces Seven Wonders tour");
+    // A clean memory is shown as before.
+    expect(buildPersonBlock({ ...person, memory: withEvents, today, eventMaxAgeDays: 30 })).toContain("Recent context: ");
+  });
+
   it("opens with today's date and shows each recent event with its age; an event past the horizon is not shown verbatim", () => {
     const block = buildPersonBlock({ ...person, memory: withEvents, today, eventMaxAgeDays: 30 });
     expect(block).toContain("Today: 2026-09-16");

@@ -1,4 +1,5 @@
 import type { EngineConfig } from "@/lib/engine/config";
+import { graveClaimTerm } from "@/lib/engine/sentiment/grave-claims";
 import type { ForceName, PersonSummary, TickSummary } from "@/lib/engine/types";
 import type { TypedSupabaseClient } from "@/types";
 import type { Json } from "@/types/database";
@@ -76,6 +77,15 @@ function pairedPartner(person: PersonSummary, summary: TickSummary, inverseImpac
   return summary.people
     .filter((p) => p.slug !== person.slug && (p.forces.signals ?? 0) !== 0 && Math.sign(p.forces.signals ?? 0) === -Math.sign(inverseImpact))
     .sort((a, b) => Math.abs(b.forces.signals ?? 0) - Math.abs(a.forces.signals ?? 0) || a.id.localeCompare(b.id))[0];
+}
+
+/**
+ * THE NEUTRAL LINE (interim guard, 2026-10-09): the template's own wording
+ * for a Signals move with nothing quoted, used when a sentence, the model's
+ * or the template's (which quotes a headline), carries a grave-claim term.
+ */
+export function neutralNarrative(person: PersonSummary): string {
+  return `${possessive(person.displayName)} momentum ${person.change > 0 ? "climbed" : "slipped"} on fresh signals.`;
 }
 
 export function templateNarrative(person: PersonSummary, summary: TickSummary): string {
@@ -190,8 +200,14 @@ export function checkNarrative(text: string, direction: TickSummary["signals"][n
 
 export interface NarrativeBuild {
   rows: NarrativeRow[];
-  /** LLM sentences the check replaced with the template, and why (Phase 31, only while the quality rules are on). */
-  replaced: Array<{ personId: string; reason: "direction" | "voice"; text: string }>;
+  /**
+   * Sentences replaced before storing, and why: the Phase 31 direction and
+   * voice checks (LLM sentences, only while the quality rules are on), and
+   * the interim grave-claim guard (2026-10-09; any sentence, always on):
+   * a sentence carrying a term of the grave-claim list is stored as the
+   * neutral line and the original is logged here for review.
+   */
+  replaced: Array<{ personId: string; reason: "direction" | "voice" | "grave_claim"; text: string; term?: string }>;
 }
 
 export function buildNarrativesDetailed(summary: TickSummary, config: EngineConfig["narratives"], quality?: EngineConfig["signalQuality"]): NarrativeBuild {
@@ -212,11 +228,23 @@ export function buildNarrativesDetailed(summary: TickSummary, config: EngineConf
         llmNarrative = null;
       }
     }
-    const useLlm = Boolean(llmNarrative) && signalsImpact !== 0;
+    let useLlm = Boolean(llmNarrative) && signalsImpact !== 0;
+    let text = useLlm ? (llmNarrative as string) : templateNarrative(person, summary);
+    // THE INTERIM GRAVE-CLAIM GUARD (2026-10-09, until the allegation hold
+    // ships): every sentence, the model's or the template's, is run through
+    // the grave-claim list before it is stored. On a match the neutral line
+    // is stored instead and the original goes to the log for review. The
+    // score moves exactly as published; only what the platform says changes.
+    const term = graveClaimTerm(text);
+    if (term) {
+      replaced.push({ personId: person.id, reason: "grave_claim", text, term });
+      text = neutralNarrative(person);
+      useLlm = false;
+    }
     return {
       personId: person.id,
       tickNumber: summary.tickNumber,
-      text: useLlm ? (llmNarrative as string) : templateNarrative(person, summary),
+      text,
       scoreBefore: person.previousScore,
       scoreAfter: person.newScore,
       source: useLlm ? ("llm" as const) : ("template" as const),
