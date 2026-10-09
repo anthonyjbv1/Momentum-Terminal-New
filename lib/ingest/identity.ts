@@ -107,7 +107,6 @@ async function resolveApiSports(host: string, playerSearch: string, teamSearch: 
   if (!key) throw new Error("APISPORTS_API_KEY is not set");
   const headers = { "x-apisports-key": key, accept: "application/json" };
   const get = async (path: string) => json<{ errors?: unknown; response?: unknown[] }>(await fetchImpl(`https://${host}${path}`, { headers }), `API-Sports ${path}`);
-  const players = await get(`/players?search=${encodeURIComponent(playerSearch)}&season=${season}`);
   const trim = (entry: unknown): Json => {
     const row = record(entry as Json);
     const out: Record<string, Json> = {};
@@ -117,15 +116,27 @@ async function resolveApiSports(host: string, playerSearch: string, teamSearch: 
     }
     return out;
   };
-  const result: Record<string, Json> = {
-    season,
-    players: (players.response ?? []).slice(0, 8).map(trim),
-    player_errors: players.errors && typeof players.errors === "object" && !Array.isArray(players.errors) ? (JSON.stringify(players.errors) as Json) : null,
-  };
+  const errorsOf = (body: { errors?: unknown }): Json =>
+    body.errors && typeof body.errors === "object" && !Array.isArray(body.errors) && Object.keys(body.errors).length > 0 ? (JSON.stringify(body.errors) as Json) : null;
+  // /players needs a team, so the team is looked up first; the franchise
+  // (the lowest id: college programmes sort after the league's teams) is
+  // the one the search is scoped to. The search field admits only letters,
+  // digits and spaces, so a hyphenated surname is sent with a space.
+  const result: Record<string, Json> = { season };
+  let teamId: number | null = null;
   if (teamSearch) {
     const teams = await get(`/teams?search=${encodeURIComponent(teamSearch)}`);
-    result.teams = (teams.response ?? []).slice(0, 8).map(trim);
+    const trimmed = (teams.response ?? []).slice(0, 8).map(trim);
+    result.teams = trimmed;
+    result.team_errors = errorsOf(teams);
+    const ids = trimmed.map((team) => (team as Record<string, Json>).id).filter((id): id is number => typeof id === "number");
+    teamId = ids.length > 0 ? Math.min(...ids) : null;
+    result.team_id = teamId;
   }
+  const search = playerSearch.replace(/[^A-Za-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  const players = await get(`/players?search=${encodeURIComponent(search)}&season=${season}${teamId === null ? "" : `&team=${teamId}`}`);
+  result.players = (players.response ?? []).slice(0, 8).map(trim);
+  result.player_errors = errorsOf(players);
   return result;
 }
 
@@ -183,26 +194,49 @@ export async function resolveIdentities(options: { client: TypedSupabaseClient; 
       // The keys of the resolve block say which platforms to ask, whatever
       // source the mapping belongs to: a Twitch mapping may carry the
       // person's YouTube handles too, so one row resolves both.
+      // Each platform, and each handle, on its own: one that fails is
+      // recorded as an error beside the ones that answered.
       const block: Record<string, Json> = {};
+      const errors: string[] = [];
+      const attempt = async (what: string, run: () => Promise<Json>): Promise<Json | undefined> => {
+        try {
+          return await run();
+        } catch (error) {
+          errors.push(`${what}: ${error instanceof Error ? error.message : String(error)}`);
+          return undefined;
+        }
+      };
       const login = text(resolve.login);
       const handles = [text(resolve.handle), ...(Array.isArray(resolve.handles) ? resolve.handles.map(text) : [])].filter((h): h is string => h !== null);
       const playerSearch = text(resolve.player_search);
       const probeUrl = text(resolve.probe_url);
-      if (login) block.twitch = await resolveTwitch(login, fetchImpl);
+      if (!login && handles.length === 0 && !playerSearch && !probeUrl) throw new Error(`nothing to resolve for ${source}: the resolve block names no login, handle(s), player_search or probe_url`);
+      if (login) {
+        const twitch = await attempt("twitch", () => resolveTwitch(login, fetchImpl));
+        if (twitch !== undefined) block.twitch = twitch;
+      }
       if (handles.length > 0) {
         const channels: Json[] = [];
-        for (const handle of handles) channels.push(await resolveYouTube(handle, fetchImpl));
+        for (const handle of handles) {
+          const channel = await attempt(`youtube ${handle}`, () => resolveYouTube(handle, fetchImpl));
+          channels.push(channel === undefined ? { handle, error: errors[errors.length - 1] ?? "failed" } : channel);
+        }
         block.youtube = channels.length === 1 ? channels[0] : channels;
       }
       if (playerSearch) {
         const host = text(record(row.data_sources?.config).host) ?? "v1.american-football.api-sports.io";
         const season = typeof resolve.season === "number" ? resolve.season : now.getUTCFullYear();
-        block.apisports = await resolveApiSports(host, playerSearch, text(resolve.team_search), season, fetchImpl);
+        const apisports = await attempt("apisports", () => resolveApiSports(host, playerSearch, text(resolve.team_search), season, fetchImpl));
+        if (apisports !== undefined) block.apisports = apisports;
       }
-      if (probeUrl) block.feed = await probeFeed(probeUrl, fetchImpl);
-      if (Object.keys(block).length === 0) throw new Error(`nothing to resolve for ${source}: the resolve block names no login, handle(s), player_search or probe_url`);
-      await write(block, null);
+      if (probeUrl) {
+        const feed = await attempt("feed", () => probeFeed(probeUrl, fetchImpl));
+        if (feed !== undefined) block.feed = feed;
+      }
+      if (Object.keys(block).length === 0) throw new Error(errors.join("; "));
+      await write(block, errors.length > 0 ? errors.join("; ").slice(0, 400) : null);
       result.resolved.push(`${slug}/${source}`);
+      continue;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       console.warn(`[identity] ${slug}/${source}: ${reason}`);

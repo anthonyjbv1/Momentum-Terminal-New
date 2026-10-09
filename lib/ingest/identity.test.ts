@@ -86,8 +86,9 @@ describe("resolveIdentities", () => {
       { match: "helix/users?login=jynxzi", body: { data: [{ id: "411377640", login: "jynxzi", display_name: "Jynxzi", created_at: "2019-01-01T00:00:00Z" }] } },
       { match: "helix/videos?user_id=411377640&type=archive", body: { data: [] } },
       { match: "youtube/v3/channels?part=snippet%2Cstatistics&forHandle=%40Jynxzi", body: { items: [{ id: "UC6BfARTPllDG1IjDJvM7dMg", snippet: { title: "Jynxzi", customUrl: "@jynxzi" }, statistics: { subscriberCount: "5000000", videoCount: "800" } }] } },
-      { match: "/players?search=Smith-Njigba&season=2026", body: { errors: [], response: [{ id: 3771, name: "Jaxon Smith-Njigba", position: "WR", group: "Offense", number: 11 }] } },
-      { match: "/teams?search=Seattle", body: { errors: [], response: [{ id: 29, name: "Seattle Seahawks", code: "SEA" }] } },
+      // The team first (the franchise is the lowest id; the college sorts after), then the players scoped to it, the hyphen sent as a space.
+      { match: "/teams?search=Seattle", body: { errors: [], response: [{ id: 23, name: "Seattle Seahawks", code: "SEA" }, { id: 611, name: "Seattle U" }] } },
+      { match: "/players?search=Smith%20Njigba&season=2026&team=23", body: { errors: [], response: [{ id: 3771, name: "Jaxon Smith-Njigba", position: "WR", group: "Offense", number: 11 }] } },
       { match: "news.google.com/rss/search?q=probe", text: `<rss><channel><item><title>Fresh one</title><pubDate>${new Date(NOW.getTime() - 3_600_000).toUTCString()}</pubDate></item><item><title>Old one</title><pubDate>${new Date(NOW.getTime() - 30 * 86_400_000).toUTCString()}</pubDate></item></channel></rss>` },
     ]);
     const result = await resolveIdentities({ client, fetch: fetchImpl, now: NOW });
@@ -105,7 +106,8 @@ describe("resolveIdentities", () => {
     expect(by("m1").resolve).toEqual({ login: "zackrawrr", handles: ["@AsmongoldTV", "@AsmongoldClips"] });
     // A single handle resolves to one object, and a streamer with no archive has no last-live date.
     expect(by("m2").identity).toMatchObject({ twitch: { id: "411377640", last_live_at: null }, youtube: { channel_id: "UC6BfARTPllDG1IjDJvM7dMg", title: "Jynxzi" } });
-    expect(by("m3").identity).toMatchObject({ apisports: { season: 2026, players: [{ id: 3771, name: "Jaxon Smith-Njigba", position: "WR", group: "Offense", number: 11 }], teams: [{ id: 29, name: "Seattle Seahawks" }] } });
+    expect(by("m3").identity).toMatchObject({ apisports: { season: 2026, team_id: 23, players: [{ id: 3771, name: "Jaxon Smith-Njigba", position: "WR", group: "Offense", number: 11 }], teams: [{ id: 23, name: "Seattle Seahawks" }, { id: 611, name: "Seattle U" }], player_errors: null, team_errors: null } });
+    expect(calls.some((url) => url.includes("/players?search=Smith-Njigba"))).toBe(false);
     expect(by("m4").identity).toMatchObject({ feed: { items: 2, newer_than_7d: 1, first_titles: ["Fresh one", "Old one"] } });
     // The keys travel in the right place and never in a message.
     expect(calls.some((url) => url.includes("key=yt-key"))).toBe(true);
@@ -126,9 +128,30 @@ describe("resolveIdentities", () => {
     const result = await resolveIdentities({ client, fetch: fetchImpl, now: NOW });
     expect(result.considered).toBe(3);
     expect(result.resolved).toEqual(["forced/youtube_trending"]);
-    expect(result.failed).toEqual([{ slug: "nobody", source: "twitch", reason: 'Twitch login "nobody" not found' }]);
-    expect((updates.find((u) => u.id === "m1")!.config as { identity: { error: string } }).identity.error).toBe('Twitch login "nobody" not found');
+    expect(result.failed).toEqual([{ slug: "nobody", source: "twitch", reason: 'twitch: Twitch login "nobody" not found' }]);
+    expect((updates.find((u) => u.id === "m1")!.config as { identity: { error: string } }).identity.error).toBe('twitch: Twitch login "nobody" not found');
     expect(updates.some((u) => u.id === "m2")).toBe(false);
     expect(calls.some((url) => url.includes("forHandle=%40x"))).toBe(false);
+  });
+
+  it("keeps what answered when one platform or one handle fails: the Twitch id lands beside the handle's error", async () => {
+    const rows: Row[] = [
+      { id: "m1", person_id: "p1", external_identifier: "zackrawrr", config: { resolve: { login: "zackrawrr", handles: ["@NoSuchHandle", "@AsmongoldClips"] } }, people: { slug: "asmongold" }, data_sources: { name: "twitch", config: {} } },
+    ];
+    const { client, updates } = fakeClient(rows);
+    const { fetchImpl } = fakeFetch([
+      { match: "helix/users?login=zackrawrr", body: { data: [{ id: "552120296", login: "zackrawrr", display_name: "Zackrawrr" }] } },
+      { match: "helix/videos?user_id=552120296&type=archive", body: { data: [] } },
+      { match: "forHandle=%40NoSuchHandle", body: { items: [] } },
+      { match: "forHandle=%40AsmongoldClips", body: { items: [{ id: "UCMwJJL5FJFuTRT55ksbQ4GQ", snippet: { title: "Asmongold Clips", customUrl: "@asmongoldclips" } }] } },
+    ]);
+    const result = await resolveIdentities({ client, fetch: fetchImpl, now: NOW });
+    expect(result).toEqual({ considered: 1, resolved: ["asmongold/twitch"], failed: [] });
+    const identity = (updates[0].config as { identity: Record<string, unknown> }).identity;
+    expect(identity).toMatchObject({
+      twitch: { id: "552120296" },
+      youtube: [{ handle: "@NoSuchHandle", error: 'youtube @NoSuchHandle: YouTube handle "@NoSuchHandle" not found' }, { channel_id: "UCMwJJL5FJFuTRT55ksbQ4GQ", title: "Asmongold Clips" }],
+      error: 'youtube @NoSuchHandle: YouTube handle "@NoSuchHandle" not found',
+    });
   });
 });
