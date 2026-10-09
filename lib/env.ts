@@ -299,6 +299,20 @@ export function isTwitchRampUpEnabled(): boolean {
 }
 
 /**
+ * LIVE_MOMENT_TUNE_ENABLED (2026-10-09; ships off). Every live moment
+ * scored at or near full confidence whatever its size: Asmongold's +15%
+ * step read 0.97 (1.46 points) beside Kai Cenat's +73% record surge at 1.0
+ * (1.50), and the 09-26 stream fired five moments for 4.15 points. On: a
+ * surge's confidence is its size against the channel's own normal swings
+ * (lib/ingest/live/rules.ts, tuneMoment), one moment a sample, a cooldown
+ * between firings of any kind, and a per-stream cap on the moments' points.
+ * Exactly "true" turns it on; off, every moment scores as before.
+ */
+export function isLiveMomentTuneEnabled(): boolean {
+  return process.env.LIVE_MOMENT_TUNE_ENABLED?.trim() === "true";
+}
+
+/**
  * The switch of the drifting Gravity target, as the operator console reports
  * it. The Engine reads it through getEngineEnvOverrides(); this is the same
  * rule (exactly "true") in one place for display.

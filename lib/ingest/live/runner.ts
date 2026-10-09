@@ -1,7 +1,7 @@
 import { connectorRegistry, type ConnectorRegistry } from "@/lib/connectors/registry";
 import type { ConnectorContext, LiveCapability, LiveStatus, LiveStream, RawSignal } from "@/lib/connectors/types";
 import type { DataSource } from "@/types";
-import { isGoLiveNeutralEnabled, isTwitchRampUpEnabled } from "@/lib/env";
+import { isGoLiveNeutralEnabled, isLiveMomentTuneEnabled, isTwitchRampUpEnabled } from "@/lib/env";
 import type { Json } from "@/types/database";
 
 import { metricSignal, observeMetric, readMetricConfigs, seriesReadFrom, type MetricConfigs } from "../metrics";
@@ -15,8 +15,10 @@ import {
   clipWindow,
   CLIPS_PER_STREAM_HOUR_METRIC,
   dropMoment,
+  LIVE_TUNE_DEFAULTS,
   liveMomentSignal,
   minutesBetween,
+  normalSwing,
   openSession,
   qualityClipMoment,
   qualitySurgeMoment,
@@ -29,6 +31,7 @@ import {
   sessionShape,
   shapeBucket,
   streamSummarySignal,
+  tuneMoments,
   typicalSessionPeak,
   usualClipsPerHour,
   withLiveQuality,
@@ -36,6 +39,7 @@ import {
   type LiveMoment,
   type LiveQualityRules,
   type LiveSession,
+  type LiveTuneRules,
   type SessionShape,
 } from "./rules";
 import type { LiveStore } from "./store";
@@ -116,6 +120,12 @@ export interface LiveRunOptions {
    * nothing else changes.
    */
   rampUp?: boolean;
+  /**
+   * The live-moment tune (LIVE_MOMENT_TUNE_ENABLED, 2026-10-09): the rules
+   * to apply over the moments found at each sample, or false. Defaults to
+   * the defaults when the switch is on; off, every moment stores as found.
+   */
+  tune?: LiveTuneRules | false;
 }
 
 export interface LivePersonSummary {
@@ -195,6 +205,7 @@ function emptySummary(source: DataSource): LiveSourceSummary {
 
 export async function runLiveMode(options: LiveRunOptions): Promise<LiveRunSummary> {
   const { store, registry = connectorRegistry, now = new Date(), fetch: baseFetch = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS, budgetMs, clock = Date.now, log = defaultLog, quality, rampUp = isTwitchRampUpEnabled() } = options;
+  const tune: LiveTuneRules | false = options.tune ?? (isLiveMomentTuneEnabled() ? LIVE_TUNE_DEFAULTS : false);
   const wallClockStart = clock();
   const elapsedMs = () => clock() - wallClockStart;
   let budgetExhausted = false;
@@ -321,7 +332,7 @@ export async function runLiveMode(options: LiveRunOptions): Promise<LiveRunSumma
             log({ event: "sample", source: source.name, person: mapping.person.slug, sessionId: session.id, status: "skipped", reason: budgetReason() });
             await store.updateSession({ ...session, lastSeenAt: now, missedChecks: 0 });
           } else {
-            const result = await sampleSession({ session, mapping, stream, cfg, source, capability, context, store, clock, log, now, rampUp });
+            const result = await sampleSession({ session, mapping, stream, cfg, source, capability, context, store, clock, log, now, rampUp, tune });
             personSummary.sampled = true;
             summary.samples += 1;
             summary.signalsCreated += result.signalsCreated;
@@ -423,6 +434,7 @@ interface SampleInput {
   log: (line: LiveLogLine) => void;
   now: Date;
   rampUp: boolean;
+  tune: LiveTuneRules | false;
 }
 
 /** One sample of one session: the clip window, the moments, the row, the session's aggregates. */
@@ -450,7 +462,7 @@ export function viewerGate<S extends { viewerCount: number | null }>(
 }
 
 async function sampleSession(input: SampleInput): Promise<{ signalsCreated: number; requests: number; error: string | null }> {
-  const { session, mapping, stream, cfg, source, capability, context, store, clock, log, now, rampUp } = input;
+  const { session, mapping, stream, cfg, source, capability, context, store, clock, log, now, rampUp, tune } = input;
   const started = clock();
   const window = clipWindow(session, now, cfg);
   let clips: { from: Date; to: Date; count: number } | null = null;
@@ -493,12 +505,11 @@ async function sampleSession(input: SampleInput): Promise<{ signalsCreated: numb
     audience = gate.ready ? audienceMoment(session, gate.samples, current, cfg) : null;
     burst = clips ? clipMoment(session, prior, clips, now, cfg) : null;
   }
-  if (audience) signals.push(liveMomentSignal(mapping.person, session, audience, now, source.name));
-  if (burst) signals.push(liveMomentSignal(mapping.person, session, burst, now, source.name));
   // THE RAMP-UP (TWITCH_RAMP_UP_ENABLED): against the channel's typical
   // session peak, once a session, on two consecutive positive readings. The
   // reads happen only on a positive reading (a 0 is never judged) and only
   // while the switch is on; off, nothing here runs.
+  let ramp: LiveMoment | null = null;
   let rampLog: Record<string, unknown> | null = null;
   if (rampUp && (current.viewerCount ?? 0) > 0) {
     const counts = await store.countSessionMoments({ personId: mapping.person.id, dataSourceId: source.id, sourceName: source.name, streamId: session.streamId });
@@ -507,10 +518,28 @@ async function sampleSession(input: SampleInput): Promise<{ signalsCreated: numb
       const peaks = (await store.listSnapshots(mapping.person.id, source.id, SESSION_PEAK_VIEWERS_METRIC, new Date(now.getTime() - RAMP_PEAKS_WINDOW_HOURS * HOUR_MS))).map((snapshot) => snapshot.value);
       typicalPeak = typicalSessionPeak(peaks, cfg);
     }
-    const ramp = rampUpMoment(session, prior, current, { typicalPeak, rampsSoFar: counts.ramp_up }, cfg);
-    if (ramp) signals.push(liveMomentSignal(mapping.person, session, ramp, now, source.name));
+    ramp = rampUpMoment(session, prior, current, { typicalPeak, rampsSoFar: counts.ramp_up }, cfg);
     rampLog = { typicalPeak: typicalPeak === null ? null : Math.round(typicalPeak), rampsSoFar: counts.ramp_up, fired: ramp !== null };
   }
+
+  // THE TUNE (LIVE_MOMENT_TUNE_ENABLED): over whatever was found at this
+  // sample, one moment sized against the channel's normal swings, inside
+  // the cooldown and the stream's cap. The two reads happen only when a
+  // moment was found. Off, every moment found is stored as found.
+  let fired: LiveMoment[] = [audience, burst, ramp].filter((moment): moment is LiveMoment => moment !== null);
+  let tuneLog: Record<string, unknown> | null = null;
+  if (tune && fired.length > 0) {
+    const ledger = await store.sessionMomentLedger({ personId: mapping.person.id, dataSourceId: source.id, sourceName: source.name, streamId: session.streamId });
+    const past = await store.listPastSessionSamples({ personId: mapping.person.id, dataSourceId: source.id, excludeSessionId: session.id, sessions: tune.swingSessions });
+    const swing = normalSwing(past, cfg, cfg.quality?.stepWindowMinutes);
+    const tuned = tuneMoments(fired, { normalSwing: swing, pointsUsed: ledger.pointsUsed, lastMomentAt: ledger.lastMomentAt }, tune, now);
+    tuneLog = { found: fired.map((moment) => ({ moment: moment.moment, confidence: moment.confidence })), normalSwing: swing === null ? null : round3(swing), pointsUsed: ledger.pointsUsed, lastMomentAt: ledger.lastMomentAt?.toISOString() ?? null, fired: tuned ? { moment: tuned.moment, confidence: tuned.confidence } : null };
+    fired = tuned ? [tuned] : [];
+    // The session's own marks follow what fired, not what was found.
+    if (!fired.some((moment) => moment.moment === "audience_surge" || moment.moment === "audience_drop")) audience = null;
+    if (!fired.some((moment) => moment.moment === "clip_burst")) burst = null;
+  }
+  for (const moment of fired) signals.push(liveMomentSignal(mapping.person, session, moment, now, source.name));
 
   let next = applySample(session, { now, stream, clips }, cfg);
   const delta = gate.ready ? audienceDelta(gate.samples, current, cfg) : null;
@@ -559,6 +588,7 @@ async function sampleSession(input: SampleInput): Promise<{ signalsCreated: numb
     complete: next.complete,
     ...(qualityLog ? { quality: qualityLog } : {}),
     ...(rampLog ? { rampUp: rampLog } : {}),
+    ...(tuneLog ? { tune: tuneLog } : {}),
   });
   for (const signal of signals) {
     const payload = signal.rawPayload as { moment?: string; direction?: number; confidence?: number; rationale?: string };

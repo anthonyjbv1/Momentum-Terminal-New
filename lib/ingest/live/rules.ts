@@ -881,6 +881,122 @@ export function rampUpMoment(
 }
 
 // ---------------------------------------------------------------------------
+// The live-moment tune (LIVE_MOMENT_TUNE_ENABLED, 2026-10-09)
+// ---------------------------------------------------------------------------
+
+/**
+ * THE TUNE. What the stored firings showed (2026-10-09): a surge reads at or
+ * near full confidence whatever its size, because the quality rule's scale
+ * runs from +12% to +20% and the Phase 16 rule's from 0 to +50%. Asmongold's
+ * +15.3% step (27,988 to 32,282) scored 0.971, 1.46 points; Kai Cenat's +73%
+ * record surge (398,044 to 688,053) scored 1.0, 1.50 points; and his 09-26
+ * stream fired four surges and a burst for 4.15 points, the within-session
+ * rules having no cap in points and a per-kind cooldown only.
+ *
+ * Three rules, judged after the moments are found and before they are
+ * stored, so the finding rules are untouched:
+ *
+ *   SIZE. A surge's confidence is its fraction against the channel's own
+ *        normal swings: full confidence at fullFraction, which is the larger
+ *        of fullFractionFloor (0.5) and swingMultiple (10) times the
+ *        channel's NORMAL SWING, the median absolute ten-minute step across
+ *        its past complete sessions (Kai Cenat's is 3.0% on 09-26: a 73%
+ *        surge is twenty-four of his normal swings, a 15% step five). With
+ *        no past session the floor stands: +15% reads 0.3, +73% reads 1.0.
+ *        A clip burst's confidence already reads against the session's own
+ *        pace and is left as found; a ramp-up's against the typical peak.
+ *   ONE A SAMPLE, THEN A COOLDOWN. Of the moments found at one sample the
+ *        strongest fires; nothing fires inside cooldownMinutes (30) of the
+ *        session's last moment of any kind.
+ *   THE CAP. A stream's moments may total maxSessionPoints (1.5, in
+ *        confidence units: at the Twitch tier and full freshness one unit is
+ *        1.5 points); the moment that would cross it is clipped to what is
+ *        left, and once nothing is left nothing fires.
+ */
+export interface LiveTuneRules {
+  fullFractionFloor: number;
+  swingMultiple: number;
+  /** The channel's newest complete sessions the normal swing is read over. */
+  swingSessions: number;
+  cooldownMinutes: number;
+  maxSessionPoints: number;
+}
+
+export const LIVE_TUNE_DEFAULTS: LiveTuneRules = { fullFractionFloor: 0.5, swingMultiple: 10, swingSessions: 10, cooldownMinutes: 30, maxSessionPoints: 1.5 };
+
+/**
+ * The channel's normal swing: for each past session, every ten-minute step
+ * (the mean of the last stepWindowMinutes against the mean of the
+ * stepWindowMinutes before, positive readings only, from the end of the
+ * warm-up); the median of their absolute values across every session. Null
+ * with no step to read.
+ */
+export function normalSwing(sessions: Array<{ startedAt: Date; samples: Array<Pick<LiveSample, "sampledAt" | "viewerCount">> }>, config: Pick<LiveConfig, "warmupMinutes">, stepWindowMinutes = LIVE_QUALITY_DEFAULTS.stepWindowMinutes): number | null {
+  const steps: number[] = [];
+  for (const session of sessions) {
+    const warm = new Date(session.startedAt.getTime() + config.warmupMinutes * MINUTE);
+    const positive = session.samples.filter((sample): sample is Pick<LiveSample, "sampledAt"> & { viewerCount: number } => sample.viewerCount !== null && sample.viewerCount > 0);
+    for (const sample of positive) {
+      if (minutesBetween(session.startedAt, sample.sampledAt) < config.warmupMinutes + 2 * stepWindowMinutes) continue;
+      const age = (other: Pick<LiveSample, "sampledAt">) => minutesBetween(other.sampledAt, sample.sampledAt);
+      const after = positive.filter((other) => age(other) >= 0 && age(other) < stepWindowMinutes).map((other) => other.viewerCount);
+      const before = positive.filter((other) => age(other) >= stepWindowMinutes && age(other) < 2 * stepWindowMinutes && other.sampledAt.getTime() >= warm.getTime()).map((other) => other.viewerCount);
+      if (after.length < 2 || before.length < 2) continue;
+      const beforeMean = mean(before);
+      if (!(beforeMean > 0)) continue;
+      steps.push(Math.abs((mean(after) - beforeMean) / beforeMean));
+    }
+  }
+  return steps.length > 0 ? median(steps) : null;
+}
+
+/** Full confidence for a surge on this channel: the floor, or the multiple of its normal swing when that is larger. */
+export function fullFractionFor(swing: number | null, rules: LiveTuneRules): number {
+  return Math.max(rules.fullFractionFloor, swing === null ? 0 : rules.swingMultiple * swing);
+}
+
+export interface TuneContext {
+  /** The channel's normal swing, or null with no past session. */
+  normalSwing: number | null;
+  /** Confidence units the stream's stored moments already carry. */
+  pointsUsed: number;
+  /** When the stream's last moment of any kind fired. */
+  lastMomentAt: Date | null;
+}
+
+export interface TunedMoment extends LiveMoment {
+  tune: { normalSwing: number | null; fullFraction: number; foundConfidence: number; pointsUsed: number; pointsAfter: number; chosenOf: number };
+}
+
+/**
+ * The tune over the moments found at one sample: the strongest after sizing
+ * fires, inside the cooldown and the cap; null when none does. Pure.
+ */
+export function tuneMoments(found: LiveMoment[], context: TuneContext, rules: LiveTuneRules, now: Date): TunedMoment | null {
+  const candidates = found.filter((moment): moment is LiveMoment => moment !== null);
+  if (candidates.length === 0) return null;
+  if (context.lastMomentAt !== null && minutesBetween(context.lastMomentAt, now) < rules.cooldownMinutes) return null;
+  const remaining = Math.max(0, rules.maxSessionPoints - context.pointsUsed);
+  if (remaining <= 0) return null;
+  const fullFraction = fullFractionFor(context.normalSwing, rules);
+  const sized = candidates.map((moment) => {
+    const confidence = moment.moment === "audience_surge" || moment.moment === "audience_drop" ? round3(clamp(Math.abs(moment.magnitude) / fullFraction, 0, 1)) : moment.confidence;
+    return { moment, confidence };
+  });
+  // The strongest; on a tie the audience moment, which is the stream's own fact (a burst is clips of it).
+  const rank = (entry: { moment: LiveMoment }) => (entry.moment.moment === "audience_surge" || entry.moment.moment === "audience_drop" ? 2 : entry.moment.moment === "ramp_up" ? 1 : 0);
+  const best = sized.reduce((top, entry) => (entry.confidence > top.confidence || (entry.confidence === top.confidence && rank(entry) > rank(top)) ? entry : top));
+  if (best.confidence <= 0) return null;
+  const confidence = round3(Math.min(best.confidence, remaining));
+  return {
+    ...best.moment,
+    confidence,
+    rationale: `${best.moment.rationale}; tuned: ${best.moment.moment === "audience_surge" || best.moment.moment === "audience_drop" ? `size ${Math.round(Math.abs(best.moment.magnitude) * 100)}% against full ${Math.round(fullFraction * 100)}% (normal swing ${context.normalSwing === null ? "unknown" : `${(context.normalSwing * 100).toFixed(1)}%`})` : "size as found"}, ${context.pointsUsed.toFixed(2)} of ${rules.maxSessionPoints} units used before`,
+    tune: { normalSwing: context.normalSwing === null ? null : round3(context.normalSwing), fullFraction: round3(fullFraction), foundConfidence: best.moment.confidence, pointsUsed: round3(context.pointsUsed), pointsAfter: round3(context.pointsUsed + confidence), chosenOf: candidates.length },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The signals
 // ---------------------------------------------------------------------------
 
@@ -933,6 +1049,7 @@ export function liveMomentSignal(person: { display_name: string }, session: Live
       minutes_into_stream: Math.round(minutesBetween(session.startedAt, now)),
       rationale: moment.rationale,
       ...(moment.rule ? { rule: moment.rule } : {}),
+      ...("tune" in moment && moment.tune ? { tune: (moment as TunedMoment).tune } : {}),
     },
   };
 }

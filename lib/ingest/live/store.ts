@@ -38,6 +38,24 @@ export interface LiveStore extends LiveIngestStore {
    * quality rules: the session shape).
    */
   listShapeViewers(query: { personId: string; dataSourceId: string; excludeSessionId: string; fromMinutes: number; toMinutes: number; sessions: number }): Promise<number[][]>;
+  /**
+   * The person's newest complete, ended sessions (not `excludeSessionId`)
+   * with every sample's viewer count, newest session first (the live-moment
+   * tune, 2026-10-09: the channel's normal swing).
+   */
+  listPastSessionSamples(query: { personId: string; dataSourceId: string; excludeSessionId: string; sessions: number }): Promise<Array<{ startedAt: Date; samples: Array<Pick<LiveSample, "sampledAt" | "viewerCount">> }>>;
+  /** The confidence units the broadcast's stored moments carry and when the last fired (the tune's cap and cooldown). */
+  sessionMomentLedger(query: { personId: string; dataSourceId: string; sourceName: string; streamId: string }): Promise<{ pointsUsed: number; lastMomentAt: Date | null }>;
+}
+
+function momentLedger(rows: Array<{ confidence: unknown; occurredAt: Date }>): { pointsUsed: number; lastMomentAt: Date | null } {
+  let pointsUsed = 0;
+  let lastMomentAt: Date | null = null;
+  for (const row of rows) {
+    if (typeof row.confidence === "number" && Number.isFinite(row.confidence)) pointsUsed += Math.max(0, row.confidence);
+    if (lastMomentAt === null || row.occurredAt.getTime() > lastMomentAt.getTime()) lastMomentAt = row.occurredAt;
+  }
+  return { pointsUsed: Math.round(pointsUsed * 1000) / 1000, lastMomentAt };
 }
 
 const NO_MOMENTS: Record<LiveMomentKind, number> = { audience_surge: 0, audience_drop: 0, clip_burst: 0, ramp_up: 0 };
@@ -262,6 +280,44 @@ export function createSupabaseLiveStore(client: TypedSupabaseClient): LiveStore 
       if (samplesError) throw new Error(`Failed to load past live samples: ${samplesError.message}`);
       return sessions.map((session) => samples.filter((sample) => sample.session_id === session.id).map((sample) => Number(sample.viewer_count)));
     },
+
+    async listPastSessionSamples({ personId, dataSourceId, excludeSessionId, sessions: limit }) {
+      const { data: sessions, error } = await client
+        .from("live_sessions")
+        .select("id, started_at")
+        .eq("person_id", personId)
+        .eq("data_source_id", dataSourceId)
+        .eq("complete", true)
+        .not("ended_at", "is", null)
+        .neq("id", excludeSessionId)
+        .order("started_at", { ascending: false })
+        .limit(limit);
+      if (error) throw new Error(`Failed to load past live sessions: ${error.message}`);
+      if (sessions.length === 0) return [];
+      const { data: samples, error: samplesError } = await client
+        .from("live_samples")
+        .select("session_id, sampled_at, viewer_count")
+        .in("session_id", sessions.map((session) => session.id))
+        .order("sampled_at")
+        .limit(10_000);
+      if (samplesError) throw new Error(`Failed to load past live samples: ${samplesError.message}`);
+      return sessions.map((session) => ({
+        startedAt: new Date(session.started_at),
+        samples: samples.filter((sample) => sample.session_id === session.id).map((sample) => ({ sampledAt: new Date(sample.sampled_at), viewerCount: sample.viewer_count === null ? null : Number(sample.viewer_count) })),
+      }));
+    },
+
+    async sessionMomentLedger({ personId, dataSourceId, sourceName, streamId }) {
+      const { data, error } = await client
+        .from("signals")
+        .select("raw_payload, occurred_at")
+        .eq("person_id", personId)
+        .eq("data_source_id", dataSourceId)
+        .like("dedupe_key", `${momentKeyPrefix(sourceName, streamId)}%`)
+        .limit(500);
+      if (error) throw new Error(`Failed to read the session's moments: ${error.message}`);
+      return momentLedger(data.map((row) => ({ confidence: row.raw_payload && typeof row.raw_payload === "object" && !Array.isArray(row.raw_payload) ? (row.raw_payload as Record<string, unknown>).confidence : null, occurredAt: new Date(row.occurred_at) })));
+    },
   };
 }
 
@@ -335,6 +391,27 @@ export function createMemoryLiveStore(seed: MemoryLiveStoreSeed = {}): MemoryLiv
         const to = session.startedAt.getTime() + toMinutes * 60_000;
         return samples.filter((sample) => sample.sessionId === session.id && sample.viewerCount !== null && sample.sampledAt.getTime() >= from && sample.sampledAt.getTime() < to).map((sample) => sample.viewerCount as number);
       });
+    },
+    async listPastSessionSamples({ personId, dataSourceId, excludeSessionId, sessions: limit }) {
+      return sessions
+        .filter((session) => session.personId === personId && session.dataSourceId === dataSourceId && session.complete && session.endedAt !== null && session.id !== excludeSessionId)
+        .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
+        .slice(0, limit)
+        .map((session) => ({
+          startedAt: session.startedAt,
+          samples: samples
+            .filter((sample) => sample.sessionId === session.id)
+            .sort((a, b) => a.sampledAt.getTime() - b.sampledAt.getTime())
+            .map((sample) => ({ sampledAt: sample.sampledAt, viewerCount: sample.viewerCount })),
+        }));
+    },
+    async sessionMomentLedger({ personId, dataSourceId, sourceName, streamId }) {
+      const prefix = momentKeyPrefix(sourceName, streamId);
+      return momentLedger(
+        ingest.signals
+          .filter((signal) => signal.personId === personId && signal.dataSourceId === dataSourceId && (signal.dedupeKey ?? "").startsWith(prefix))
+          .map((signal) => ({ confidence: (signal.rawPayload as Record<string, unknown>).confidence, occurredAt: signal.occurredAt })),
+      );
     },
   };
 }
