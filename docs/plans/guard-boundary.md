@@ -114,10 +114,67 @@ and ten ticks for any `permission denied` in `source_polls.reason`,
 console's actions one by one. Rollback is the exported function definitions
 and `GRANT UPDATE ON <table> TO service_role`.
 
-## Open questions for the operator
+## Decided 2026-10-09 (plan approved; build after the freeze)
 
-- Supabase's managed roles: `service_role` is `BYPASSRLS`, and the migration
-  role (`postgres`) owns the tables. The plan keeps both; confirm the writer
-  role may be created by a migration on the project's plan.
-- Whether `record_allegation_holds()` should stay callable by `service_role`
-  (the Engine runs as it) or move behind a narrower role of its own.
+**The rolcreaterole check, run first as asked (read-only, production, 19:05 UTC).**
+
+| Role | CREATEROLE | superuser | BYPASSRLS | login |
+|---|---|---|---|---|
+| `postgres` (the migration role; `current_user` of the SQL tool) | yes | no | yes | yes |
+| `service_role` | no | no | yes | no |
+| `authenticated`, `anon` | no | no | no | no |
+| `authenticator` | no | no | no | yes |
+| `supabase_admin` (Supabase's own) | yes | yes | yes | yes |
+
+PostgreSQL 17.6. `postgres` owns every guarded table (`signals`, `narratives`,
+`people`, `market_tier_settings`, `engine_parameters`, `platform_settings`,
+`allegation_claims`, `admin_audit_log`) and every admin function, all of
+which are already `SECURITY DEFINER`; it is a member of `service_role`,
+`authenticated`, `anon` and `authenticator`. So the migration role CAN create
+the writer roles (`CREATEROLE` without superuser), and three things the
+check adds to the plan:
+
+1. **Membership for the ownership change.** `ALTER FUNCTION ... OWNER TO
+   <writer>` needs the migration role to be a member of the new owner. On
+   17 a role created by a `CREATEROLE` role gives its creator `ADMIN OPTION`
+   but membership depends on `createrole_self_grant`; the migration grants
+   it explicitly: `grant momentum_admin_writer to postgres with admin option`
+   (the same for the allegation writer). The grant makes `postgres` able to
+   SET ROLE to the writers, which it already can do to everything that
+   matters; it is not a widening.
+2. **Row-level security on the guarded tables.** Every guarded table has RLS
+   enabled (not forced) with SELECT policies for `authenticated` only; the
+   writes work today because `postgres` owns the tables and `service_role`
+   is `BYPASSRLS`. A definer function owned by a writer role runs as a role
+   that neither owns the table nor bypasses RLS, so its UPDATE would be
+   refused by RLS, not by privilege. The writer roles are therefore created
+   WITHOUT `BYPASSRLS` (a `CREATEROLE` non-superuser may not be able to grant
+   it on 17 anyway, and the narrower the better) and each guarded table gets
+   one UPDATE policy per writer role, `using (true) with check (true)`,
+   restricted to that role; the column privileges decide which columns. The
+   replay's privilege assertions gain a `pg_policies` check for exactly these
+   policies and no others.
+3. **The guard's test.** `market_write_is_admin()` becomes
+   `current_user in ('momentum_admin_writer', 'momentum_allegation_writer')`;
+   which columns each may touch is the column grant, not the trigger.
+
+**The allegation writer, as decided: its own narrower role.**
+`momentum_allegation_writer`, `NOLOGIN`, no `BYPASSRLS`, holding exactly
+`UPDATE (allegation, allegation_held)` on `signals` and
+`SELECT, INSERT, UPDATE` on `allegation_claims`, and nothing else: no hide,
+no void, no market or engine parameter. `record_allegation_holds()` is owned
+by it (and by nothing of the admin writer's), `SECURITY DEFINER`,
+`SET search_path = ''`, `EXECUTE` granted to `service_role` alone (the
+Engine's role; `authenticated` and `anon` revoked). `admin_lift_allegation_hold()`
+stays with `momentum_admin_writer`, which holds the allegation columns too
+(a lift is an admin action with an audit row). `service_role` keeps
+SELECT/INSERT/DELETE on `allegation_claims` for the console's reads and the
+backlog scripts, loses UPDATE on it and on the two signal columns. The
+boundary replay adds: as `service_role`, a direct UPDATE of
+`signals.allegation_held` and of `allegation_claims.lifted_at` is refused;
+through `record_allegation_holds()` the same write lands; the allegation
+writer cannot execute `admin_hide_signal()` (`SET ROLE` to it in the test,
+expect `permission denied`) and a direct UPDATE of `hidden_at` as it is
+refused.
+
+**Still open, for the build:** none. The build is scheduled after the freeze.
