@@ -433,7 +433,7 @@ export function viewerGate<S extends { viewerCount: number | null }>(
   const minSamples = Math.max(2, Math.ceil(cfg.warmupMinutes / Math.max(1, cfg.sampleIntervalMinutes)));
   // The session, not the lookback window, says whether the counter has
   // reported and whether the minimum samples are in.
-  const ready = (current.viewerCount ?? 0) > 0 && session.viewerPeak > 0 && session.sampleCount >= minSamples;
+  const ready = (current.viewerCount ?? 0) > 0 && (session.viewerPeak ?? 0) > 0 && session.sampleCount >= minSamples;
   return { samples, ready, minSamples };
 }
 
