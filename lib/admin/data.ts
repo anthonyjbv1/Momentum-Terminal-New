@@ -1016,7 +1016,7 @@ export async function readMarket(): Promise<MarketReport> {
   for (const alert of [...(open.data ?? []), ...(closed.data ?? [])]) for (const id of alert.user_ids ?? []) userIds.add(id);
   for (const row of excluded.data ?? []) userIds.add(row.user_id);
   for (const row of audit.data ?? []) {
-    userIds.add(row.actor_id);
+    if (row.actor_id) userIds.add(row.actor_id);
     if (row.target_user_id) userIds.add(row.target_user_id);
   }
   const users = userIds.size > 0 ? await client.from("users").select("id, username, frozen_at").in("id", [...userIds]) : { data: [], error: null };
@@ -1157,7 +1157,8 @@ export async function readMarket(): Promise<MarketReport> {
     audit: (audit.data ?? []).map((row) => ({
       id: Number(row.id),
       performedAt: row.performed_at,
-      actor: userById.get(row.actor_id)?.username ?? row.actor_id,
+      // The admin whose session performed it, else who did (2026-10-09: an agent, a migration, a job).
+      actor: row.actor_id ? (userById.get(row.actor_id)?.username ?? row.actor_id) : (row.performed_by ?? "unknown"),
       action: row.action,
       alertId: row.alert_id,
       targetUser: row.target_user_id ? (userById.get(row.target_user_id)?.username ?? row.target_user_id) : null,

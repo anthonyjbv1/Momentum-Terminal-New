@@ -32,3 +32,17 @@ describe("allegation_scans", () => {
     expect(rls).toBe(true);
   });
 });
+
+describe("admin_audit_log.performed_by (2026-10-09)", () => {
+  it("accepts a row that names who performed an action outside the admin functions, and refuses a row that names nobody", async () => {
+    const [{ id: personId }] = await database.rows<{ id: string }>("select id from public.people where slug = 'kai-cenat'");
+    await database.operator(
+      "insert into public.admin_audit_log (actor_id, performed_by, action, target_person_id, note, details) values (null, 'Claude Code', 'hide_signal', $1, 'correction', '{\"instructed_by\": \"Anthony\"}')",
+      [personId],
+    );
+    const rows = await database.operator<{ actor_id: string | null; performed_by: string; note: string }>("select actor_id, performed_by, note from public.admin_audit_log where performed_by = 'Claude Code'");
+    expect(rows).toEqual([{ actor_id: null, performed_by: "Claude Code", note: "correction" }]);
+    await expect(database.operator("insert into public.admin_audit_log (actor_id, performed_by, action, note, details) values (null, null, 'hide_signal', 'nobody', '{}')")).rejects.toThrow(/admin_audit_log_actor_or_performer/);
+    await expect(database.operator("insert into public.admin_audit_log (actor_id, performed_by, action, note, details) values (null, '  ', 'hide_signal', 'blank', '{}')")).rejects.toThrow(/admin_audit_log_performed_by_nonempty|admin_audit_log_actor_or_performer/);
+  });
+});
