@@ -288,8 +288,9 @@ describe("the registry", () => {
     const executive = (slug: string, name: string, symbol: string) => [{ slug, source: "finnhub", identifier: symbol }, ...news(slug, name)];
     // 2026-10-09 roster expansion: a streamer reads the two news doors, Twitch
     // by login and the chart; an athlete the two news doors and the chart. The
-    // six NFL API-Sports mappings are INACTIVE until their ids are resolved
-    // live and compared with the prep listing, so they do not appear here.
+    // API-Sports mappings went live with the ids the platform answered
+    // (20261009140000); Jaxon Smith-Njigba's is still inactive, so it does
+    // not appear here. Caedrel's youtube mapping is channel statistics only.
     const streamer = (slug: string, name: string, login: string) => [
       { slug, source: "publisher_rss", identifier: name },
       { slug, source: "rss", identifier: expect.stringContaining(`news.google.com/rss/search?q=%22${name.replace(/ /g, "+")}%22`) },
@@ -300,8 +301,13 @@ describe("the registry", () => {
       ...news("adin-ross", "Adin Ross"),
       ...news("anthony-baptiste", "Anthony Baptiste"),
       ...streamer("asmongold", "Asmongold", "zackrawrr"),
+      { slug: "bijan-robinson", source: "apisports", identifier: "24380" },
       ...news("bijan-robinson", "Bijan Robinson"),
-      ...streamer("caedrel", "Caedrel", "caedrel"),
+      { slug: "caedrel", source: "publisher_rss", identifier: "Caedrel" },
+      { slug: "caedrel", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Caedrel%22") },
+      { slug: "caedrel", source: "twitch", identifier: "caedrel" },
+      { slug: "caedrel", source: "youtube", identifier: "UCOFiUtKui6-x4T-J7_DgCag" },
+      ...trending("caedrel", "Caedrel"),
       // Phase 13: every subject also reads the publisher feed catalogue, under
       // their primary match term; the Google News search stays as the fallback.
       { slug: "drake", source: "publisher_rss", identifier: "Drake" },
@@ -309,13 +315,16 @@ describe("the registry", () => {
       { slug: "drake", source: "spotify", identifier: "3TVXtAsR1Inumwj472S9r4" },
       ...trending("drake", "Drake"),
       ...executive("elon-musk", "Elon Musk", "TSLA"),
+      { slug: "jahmyr-gibbs", source: "apisports", identifier: "14098" },
       ...news("jahmyr-gibbs", "Jahmyr Gibbs"),
+      { slug: "jamarr-chase", source: "apisports", identifier: "690" },
       { slug: "jamarr-chase", source: "publisher_rss", identifier: "Ja'Marr Chase" },
       { slug: "jamarr-chase", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Ja%27Marr+Chase%22") },
       ...trending("jamarr-chase", "Ja'Marr Chase"),
       ...news("jaxon-smith-njigba", "Jaxon Smith-Njigba"),
       ...executive("jeff-bezos", "Jeff Bezos", "AMZN"),
       ...executive("jensen-huang", "Jensen Huang", "NVDA"),
+      { slug: "josh-allen", source: "apisports", identifier: "1414" },
       ...news("josh-allen", "Josh Allen"),
       ...streamer("jynxzi", "Jynxzi", "jynxzi"),
       // Phase 10: a creator whose primary platform is Twitch, and an athlete on
@@ -325,6 +334,7 @@ describe("the registry", () => {
       { slug: "kai-cenat", source: "twitch", identifier: "kaicenat" },
       ...trending("kai-cenat", "Kai Cenat"),
       ...news("kendrick-lamar", "Kendrick Lamar"),
+      { slug: "lamar-jackson", source: "apisports", identifier: "291" },
       ...news("lamar-jackson", "Lamar Jackson"),
       ...executive("larry-ellison", "Larry Ellison", "ORCL"),
       ...executive("larry-page", "Larry Page", "GOOGL"),
@@ -507,7 +517,8 @@ describe("observability", () => {
     `);
     const [health] = await database.rows<Record<string, unknown>>("select * from public.source_health where name = 'youtube'");
     expect(health).toMatchObject({ name: "youtube", last_error: "quota", last_skip_reason: "inactive: YOUTUBE_API_KEY is not set" });
-    expect([health.people_mapped, health.polls_24h, health.errors_24h, health.signals_24h].map(Number)).toEqual([1, 3, 1, 3]);
+    // Two people on the youtube source since 2026-10-09: MrBeast and Caedrel.
+    expect([health.people_mapped, health.polls_24h, health.errors_24h, health.signals_24h].map(Number)).toEqual([2, 3, 1, 3]);
     // The Phase 8 counters: what the trailing day dropped as blocked and collapsed as duplicates.
     expect([health.blocked_24h, health.collapsed_24h].map(Number)).toEqual([1, 6]);
     expect(Number(health.error_rate_24h)).toBeCloseTo(1 / 3, 4);

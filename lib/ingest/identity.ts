@@ -13,7 +13,7 @@ import type { Json } from "@/types/database";
  * handle to its channel id (channels.list forHandle), an NFL player's name
  * to API-Sports' player and team ids (/players, /teams), and a feed address
  * to what it serves right now (items, newest and oldest dates). The keys of
- * the resolve block (login, handle or handles, player_search, probe_url)
+ * the resolve block (login, handle or handles, channel_ids, player_search, probe_url)
  * choose the platforms, not the mapping's source: a streamer's Twitch
  * mapping carries the YouTube handles too, so the trending mapping stays in
  * the Phase 22 seed shape and costs nothing until a channel id is pinned. The
@@ -99,6 +99,23 @@ async function resolveYouTube(handle: string, fetchImpl: typeof fetch): Promise<
   );
   const item = body.items?.[0];
   if (!item?.id) throw new Error(`YouTube handle "${handle}" not found`);
+  return { channel_id: item.id, title: item.snippet?.title ?? null, handle: item.snippet?.customUrl ?? null, subscribers: item.statistics?.subscriberCount ?? null, videos: item.statistics?.videoCount ?? null };
+}
+
+/** A channel id the prep listed without a handle: verified by id, so the title and audience can be compared. */
+async function resolveYouTubeById(channelId: string, fetchImpl: typeof fetch): Promise<Json> {
+  const key = getYouTubeApiKeyOrNull();
+  if (!key) throw new Error("YOUTUBE_API_KEY is not set");
+  const url = new URL("https://www.googleapis.com/youtube/v3/channels");
+  url.searchParams.set("part", "snippet,statistics");
+  url.searchParams.set("id", channelId);
+  url.searchParams.set("key", key);
+  const body = await json<{ items?: Array<{ id?: string; snippet?: { title?: string; customUrl?: string }; statistics?: { subscriberCount?: string; videoCount?: string } }> }>(
+    await fetchImpl(url, { headers: { accept: "application/json" } }),
+    "YouTube channels.list",
+  );
+  const item = body.items?.[0];
+  if (!item?.id) throw new Error(`YouTube channel "${channelId}" not found`);
   return { channel_id: item.id, title: item.snippet?.title ?? null, handle: item.snippet?.customUrl ?? null, subscribers: item.statistics?.subscriberCount ?? null, videos: item.statistics?.videoCount ?? null };
 }
 
@@ -208,9 +225,10 @@ export async function resolveIdentities(options: { client: TypedSupabaseClient; 
       };
       const login = text(resolve.login);
       const handles = [text(resolve.handle), ...(Array.isArray(resolve.handles) ? resolve.handles.map(text) : [])].filter((h): h is string => h !== null);
+      const channelIds = (Array.isArray(resolve.channel_ids) ? resolve.channel_ids.map(text) : []).filter((id): id is string => id !== null);
       const playerSearch = text(resolve.player_search);
       const probeUrl = text(resolve.probe_url);
-      if (!login && handles.length === 0 && !playerSearch && !probeUrl) throw new Error(`nothing to resolve for ${source}: the resolve block names no login, handle(s), player_search or probe_url`);
+      if (!login && handles.length === 0 && channelIds.length === 0 && !playerSearch && !probeUrl) throw new Error(`nothing to resolve for ${source}: the resolve block names no login, handle(s), channel_ids, player_search or probe_url`);
       if (login) {
         const twitch = await attempt("twitch", () => resolveTwitch(login, fetchImpl));
         if (twitch !== undefined) block.twitch = twitch;
@@ -222,6 +240,14 @@ export async function resolveIdentities(options: { client: TypedSupabaseClient; 
           channels.push(channel === undefined ? { handle, error: errors[errors.length - 1] ?? "failed" } : channel);
         }
         block.youtube = channels.length === 1 ? channels[0] : channels;
+      }
+      if (channelIds.length > 0) {
+        const channels: Json[] = [];
+        for (const channelId of channelIds) {
+          const channel = await attempt(`youtube ${channelId}`, () => resolveYouTubeById(channelId, fetchImpl));
+          channels.push(channel === undefined ? { channel_id: channelId, error: errors[errors.length - 1] ?? "failed" } : channel);
+        }
+        block.youtube_by_id = channels.length === 1 ? channels[0] : channels;
       }
       if (playerSearch) {
         const host = text(record(row.data_sources?.config).host) ?? "v1.american-football.api-sports.io";

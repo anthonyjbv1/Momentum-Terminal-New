@@ -105,6 +105,8 @@ describe("the mappings", () => {
       // active one (@DrakeOfficial, 33.1M, where releases go up) and the label
       // catalogue (@DrakeVEVO). @Drake itself was refused; see below.
       drake: ["UCByOQJjav0CUDwxCk-jVNRQ", "UCQznUf1SjfDqx65hX3zRDiA"],
+      // 2026-10-09: @caedrel resolved live through channels.list (643K).
+      caedrel: ["UCOFiUtKui6-x4T-J7_DgCag"],
     });
     // The singular key is gone (the connector reads a set) and every id is well formed.
     for (const row of rows) {
@@ -182,6 +184,9 @@ describe("the mappings", () => {
       "20260920214752_phase22_trending_pin_channel_ids.sql",
       "20260920215816_phase22_drake_official_handle.sql",
       "20260920222317_phase22_pin_drake_official.sql",
+      // The roster expansion's pins: the seed gives Caedrel's row the singular
+      // channel_id from his youtube mapping; this puts the set back.
+      "20261009140000_roster_ids_resolved.sql",
     ]) {
       await database.exec(readFileSync(join(__dirname, "..", "..", "supabase", "migrations", file), "utf8"));
     }

@@ -136,7 +136,7 @@ describe("resolveIdentities", () => {
 
   it("keeps what answered when one platform or one handle fails: the Twitch id lands beside the handle's error", async () => {
     const rows: Row[] = [
-      { id: "m1", person_id: "p1", external_identifier: "zackrawrr", config: { resolve: { login: "zackrawrr", handles: ["@NoSuchHandle", "@AsmongoldClips"] } }, people: { slug: "asmongold" }, data_sources: { name: "twitch", config: {} } },
+      { id: "m1", person_id: "p1", external_identifier: "zackrawrr", config: { resolve: { login: "zackrawrr", handles: ["@NoSuchHandle", "@AsmongoldClips"], channel_ids: ["UCQeRaTukNYft1_6AZPACnog"] } }, people: { slug: "asmongold" }, data_sources: { name: "twitch", config: {} } },
     ];
     const { client, updates } = fakeClient(rows);
     const { fetchImpl } = fakeFetch([
@@ -144,6 +144,8 @@ describe("resolveIdentities", () => {
       { match: "helix/videos?user_id=552120296&type=archive", body: { data: [] } },
       { match: "forHandle=%40NoSuchHandle", body: { items: [] } },
       { match: "forHandle=%40AsmongoldClips", body: { items: [{ id: "UCMwJJL5FJFuTRT55ksbQ4GQ", snippet: { title: "Asmongold Clips", customUrl: "@asmongoldclips" } }] } },
+      // A channel the prep listed by id and no handle resolves: verified by id.
+      { match: "channels?part=snippet%2Cstatistics&id=UCQeRaTukNYft1_6AZPACnog", body: { items: [{ id: "UCQeRaTukNYft1_6AZPACnog", snippet: { title: "Asmongold TV", customUrl: "@asmongold247" }, statistics: { subscriberCount: "3900000" } }] } },
     ]);
     const result = await resolveIdentities({ client, fetch: fetchImpl, now: NOW });
     expect(result).toEqual({ considered: 1, resolved: ["asmongold/twitch"], failed: [] });
@@ -151,6 +153,7 @@ describe("resolveIdentities", () => {
     expect(identity).toMatchObject({
       twitch: { id: "552120296" },
       youtube: [{ handle: "@NoSuchHandle", error: 'youtube @NoSuchHandle: YouTube handle "@NoSuchHandle" not found' }, { channel_id: "UCMwJJL5FJFuTRT55ksbQ4GQ", title: "Asmongold Clips" }],
+      youtube_by_id: { channel_id: "UCQeRaTukNYft1_6AZPACnog", title: "Asmongold TV", handle: "@asmongold247", subscribers: "3900000" },
       error: 'youtube @NoSuchHandle: YouTube handle "@NoSuchHandle" not found',
     });
   });
