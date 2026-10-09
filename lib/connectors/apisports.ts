@@ -852,7 +852,7 @@ export function gameSignal(person: { display_name: string }, game: ApiSportsGame
       home_score: game.home.score,
       away_score: game.away.score,
       subject: person.display_name,
-      ...(clauses.length > 0 ? { line: { ...line } } : {}),
+      ...(clauseText ? { line: { ...line } } : {}),
     },
   };
 }
