@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ageMatchedPace, DEFAULT_PACE_OPTIONS, viewsAtAge, type VideoViewSample } from "./youtube-pace";
+import { ageMatchedPace, DEFAULT_PACE_OPTIONS, PACE_LEDGER_DAYS, videoPaceStatus, viewsAtAge, type VideoViewSample } from "./youtube-pace";
 
 /**
  * THE AGE-MATCHED PACE (YOUTUBE_PACE_AGE_MATCHED_ENABLED, 2026-10-09), on
@@ -89,5 +89,22 @@ describe("ageMatchedPace", () => {
     // The newest upload's views are its newest sample's.
     const bumped = MRBEAST.map((s) => (s.videoId === "newest" && s.recordedAt.getTime() === NOW.getTime() ? { ...s, views: curve(72) * 4 } : s));
     expect(ageMatchedPace(bumped, NOW)?.reading).toBe(2);
+  });
+});
+
+describe("the ledger-ready reminder (health check)", () => {
+  it("names the day the ledger holds two weeks, from its first row or the migration, and stops warning once the switch is on", () => {
+    const first = new Date("2026-10-09T18:15:29.000Z");
+    const before = videoPaceStatus({ firstRecordedAt: first, switchOn: false }, new Date("2026-10-10T00:00:00.000Z"));
+    expect(before).toMatchObject({ ledgerSince: "2026-10-09T18:15:29.000Z", ledgerHasRows: true, readyOn: "2026-10-23T18:15:29.000Z", ready: false });
+    expect(before.warnings).toEqual(["youtube.video_pace_age_matched: ledger since 2026-10-09T18:15:29.000Z, 14 days of history on 2026-10-23T18:15:29.000Z; YOUTUBE_PACE_AGE_MATCHED_ENABLED stays off until then"]);
+    const none = videoPaceStatus({ firstRecordedAt: null, switchOn: false }, new Date("2026-10-09T18:00:00.000Z"));
+    expect(none).toMatchObject({ ledgerSince: "2026-10-09T17:45:00.000Z", ledgerHasRows: false, readyOn: "2026-10-23T17:45:00.000Z" });
+    expect(none.warnings[0]).toContain("(the migration; no row yet)");
+    const due = videoPaceStatus({ firstRecordedAt: first, switchOn: false }, new Date("2026-10-24T00:00:00.000Z"));
+    expect(due.ready).toBe(true);
+    expect(due.warnings).toEqual(["youtube.video_pace_age_matched: the ledger has held 14 days since 2026-10-23T18:15:29.000Z; replay the window from it, then set YOUTUBE_PACE_AGE_MATCHED_ENABLED=true"]);
+    expect(videoPaceStatus({ firstRecordedAt: first, switchOn: true }, new Date("2026-10-24T00:00:00.000Z")).warnings).toEqual([]);
+    expect(PACE_LEDGER_DAYS).toBe(14);
   });
 });

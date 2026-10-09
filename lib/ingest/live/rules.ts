@@ -106,8 +106,10 @@ export interface LiveConfig {
    * once, after two consecutive positive readings clear it; rampFullMultiple
    * is where it reads at confidence 1. The typical peak is the median of the
    * channel's newest rampSessions complete sessions' peaks (the
-   * session_peak_viewers ledger), and nothing fires until rampMinSessions
-   * of them exist. Judged only while the switch is on.
+   * session_peak_viewers ledger) with the single highest left out (revised
+   * 2026-10-09: one record stream must not set the bar for every stream
+   * after it), and nothing is judged until rampMinSessions (3) of them
+   * exist: below that, today's rules alone. Judged only while the switch is on.
    */
   rampMultiple: number;
   rampFullMultiple: number;
@@ -138,7 +140,7 @@ export const DEFAULT_LIVE_CONFIG: Omit<LiveConfig, "enabled"> = {
   clipMaxPages: 3,
   rampMultiple: 1.5,
   rampFullMultiple: 4,
-  rampMinSessions: 1,
+  rampMinSessions: 3,
   rampSessions: 10,
 };
 
@@ -826,7 +828,12 @@ export function qualityClipMoment(
  *
  * The rule: the typical peak is the median of the channel's newest complete
  * sessions' peaks (the session_peak_viewers ledger, which only a complete
- * session of at least the warm-up writes), once rampMinSessions exist. The
+ * session of at least the warm-up writes) WITH THE SINGLE HIGHEST LEFT OUT,
+ * so one record stream does not raise the bar for every stream after it
+ * (revised 2026-10-09; the first cut's plain median made Kai Cenat's 10-09
+ * stream, at 3.8 times his 09-26 peak, read as under his typical). Nothing
+ * is judged until rampMinSessions past sessions exist: below that, today's
+ * rules alone, as if the switch were off. The
  * moment fires ONCE a session, at the second of two consecutive positive
  * readings that both exceed rampMultiple times the typical peak. A 0 or a
  * missing reading is never a reading here (the neutral go-live rule): it
@@ -837,7 +844,11 @@ export function qualityClipMoment(
  */
 export function typicalSessionPeak(peaks: readonly number[], config: Pick<LiveConfig, "rampMinSessions" | "rampSessions">): number | null {
   const values = peaks.filter((value) => Number.isFinite(value) && value > 0).slice(-config.rampSessions);
-  return values.length >= config.rampMinSessions ? median(values) : null;
+  if (values.length < Math.max(1, config.rampMinSessions)) return null;
+  // The single highest is left out once there is more than one to choose from.
+  const highest = values.indexOf(Math.max(...values));
+  const rest = values.length > 1 ? values.filter((_, index) => index !== highest) : values;
+  return median(rest);
 }
 
 export function rampUpMoment(

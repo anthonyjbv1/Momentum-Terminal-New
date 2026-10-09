@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { authorizeSharedSecret } from "@/lib/api-auth";
 import { apiSportsWarnings } from "@/lib/connectors/apisports";
 import { getEngineSecretOrNull, getIngestSecretOrNull, getScorerName, isEngineCronEnabled, isGoogleNewsFreshEnabled, isTwitchRampUpEnabled, isYouTubePaceAgeMatchedEnabled } from "@/lib/env";
+import { videoPaceStatus } from "@/lib/connectors/youtube-pace";
 import { DEFAULT_MIN_SAMPLES_AFTER_CUT, REBASELINE_HOLD_DAYS, rebaselineStatus } from "@/lib/ingest/rebaseline";
 import { resolveRoute } from "@/lib/llm/routing";
 import { ANTHROPIC_DEFAULT_MODEL } from "@/lib/llm/providers/anthropic";
@@ -48,7 +49,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const admin = createSupabaseAdminClient();
-    const [sources, recentRuns, llmCost, apisportsPoll, sourceConfigs] = await Promise.all([
+    const [sources, recentRuns, llmCost, apisportsPoll, sourceConfigs, ledgerFirst] = await Promise.all([
       admin.from("source_health").select("*").order("name"),
       admin.from("ingest_runs").select("*").order("started_at", { ascending: false }).limit(runs),
       admin.from("llm_cost_per_tick").select("*").order("tick_number", { ascending: false, nullsFirst: false }).limit(ticks),
@@ -56,8 +57,10 @@ export async function GET(request: NextRequest) {
       admin.from("source_polls").select("started_at, detail, data_sources!inner(name)").eq("data_sources.name", "apisports").not("detail->apisports", "is", null).order("started_at", { ascending: false }).limit(1).maybeSingle(),
       // Every source's metric declarations, for the baseline-cut reminder (2026-10-09).
       admin.from("data_sources").select("name, config").eq("is_active", true),
+      // The per-video ledger's first row, for the ledger-ready reminder (2026-10-09).
+      admin.from("raw_video_view_samples").select("recorded_at").order("recorded_at", { ascending: true }).limit(1).maybeSingle(),
     ]);
-    for (const [label, result] of Object.entries({ sources, recentRuns, llmCost, apisportsPoll, sourceConfigs })) {
+    for (const [label, result] of Object.entries({ sources, recentRuns, llmCost, apisportsPoll, sourceConfigs, ledgerFirst })) {
       if (result.error) throw new Error(`${label}: ${result.error.message}`);
     }
     // The daily subscription check: the plan and its end as the last poll read them, and
@@ -84,6 +87,9 @@ export async function GET(request: NextRequest) {
     // due back to its everyday value, so the hold is not forgotten.
     const rebaseline = rebaselineStatus((sourceConfigs.data ?? []).map((row) => ({ name: row.name, config: row.config })), new Date());
     warnings.push(...rebaseline.warnings);
+    // The age-matched pace: when the ledger holds two weeks, so the switch day is tracked (2026-10-09).
+    const videoPace = videoPaceStatus({ firstRecordedAt: ledgerFirst.data?.recorded_at ? new Date(ledgerFirst.data.recorded_at) : null, switchOn: isYouTubePaceAgeMatchedEnabled() }, new Date());
+    warnings.push(...videoPace.warnings);
     const taskTypes: LLMTaskType[] = ["sentiment", "anomaly", "narrative", "memory"];
     const routes = taskTypes.map((taskType) => {
       const route = resolveRoute(taskType);
@@ -127,6 +133,7 @@ export async function GET(request: NextRequest) {
       // The scoring batch's two switches (2026-10-09), both shipped off.
       youtubePaceAgeMatched: isYouTubePaceAgeMatchedEnabled(),
       twitchRampUp: isTwitchRampUpEnabled(),
+      videoPace,
       rebaseline: { holdDays: REBASELINE_HOLD_DAYS, minSamplesAfterHold: DEFAULT_MIN_SAMPLES_AFTER_CUT, metrics: rebaseline.metrics },
       llm,
       sources: sources.data ?? [],

@@ -5,7 +5,7 @@ import { buildRegistry } from "@/lib/connectors/registry";
 import type { DataConnector, LiveStream } from "@/lib/connectors/types";
 import type { Json } from "@/types/database";
 
-import { fixtureSamples, KAI_0926, KAI_1001_RECORD } from "./__fixtures__/sessions";
+import { fixtureSamples, KAI_0926, KAI_1001_RECORD, KAI_1009 } from "./__fixtures__/sessions";
 import { LIVE_QUALITY_DEFAULTS, type LiveQualityRules, type LiveSession } from "./rules";
 import { runLiveMode, type LiveLogLine, viewerGate } from "./runner";
 import { createMemoryLiveStore, type MemoryLiveStore } from "./store";
@@ -462,41 +462,55 @@ describe("live mode — the neutral go-live's viewer gate (GO_LIVE_NEUTRAL_ENABL
 });
 
 describe("the ramp-up through the runner (TWITCH_RAMP_UP_ENABLED, 2026-10-09)", () => {
-  /** Kai Cenat's record stream, replayed through the runner at the ledger's own timestamps, with the 09-26 session's peak on the record. */
-  async function replayRecord(rampUp: boolean) {
-    const started = new Date(KAI_1001_RECORD.startedAt);
+  /** A stored session replayed through the runner at the ledger's own timestamps, with the past sessions' peaks on the record. */
+  async function replaySession(fixture: typeof KAI_1009, pastPeaks: Array<{ value: number; recordedAt: string }>, rampUp: boolean, liveOverrides: Record<string, Json> = {}) {
+    const started = new Date(fixture.startedAt);
     const w = world({ streams: new Map() });
+    const source = makeSource({ ...twitch, config: { ...(LIVE_CONFIG as Record<string, Json>), live: { enabled: true, sample_interval_minutes: 2, ...liveOverrides } } });
     const store: MemoryLiveStore = createMemoryLiveStore({
-      sources: [twitch],
+      sources: [source],
       mappings: { "src-twitch": [{ person: kai, externalIdentifier: "kaicenat" }] },
-      snapshots: [{ personId: kai.id, dataSourceId: "src-twitch", metricKey: "session_peak_viewers", value: KAI_0926.viewerPeak, recordedAt: new Date(KAI_0926.endedAt) }],
+      snapshots: pastPeaks.map((peak) => ({ personId: kai.id, dataSourceId: "src-twitch", metricKey: "session_peak_viewers", value: peak.value, recordedAt: new Date(peak.recordedAt) })),
     });
     const connector = liveConnector(w);
     const registry = buildRegistry([connector]);
     const lines: LiveLogLine[] = [];
-    for (const sample of fixtureSamples(KAI_1001_RECORD)) {
-      w.streams.set("kaicenat", stream({ id: KAI_1001_RECORD.streamId, startedAt: started, viewerCount: sample.viewerCount }));
+    for (const sample of fixtureSamples(fixture)) {
+      w.streams.set("kaicenat", stream({ id: fixture.streamId, startedAt: started, viewerCount: sample.viewerCount }));
       await runLiveMode({ store, registry, now: sample.sampledAt, log: (line) => lines.push(line), rampUp });
     }
     return { signals: store.ingest.signals.map((s) => ({ headline: s.headline, dedupeKey: s.dedupeKey, payload: s.rawPayload, at: s.occurredAt })), lines };
   }
+  const peaks0926 = { value: KAI_0926.viewerPeak, recordedAt: KAI_0926.endedAt };
+  const peaksRecord = { value: KAI_1001_RECORD.viewerPeak, recordedAt: KAI_1001_RECORD.endedAt };
 
-  it("fires once on the record stream at 03:11:38, and off it is byte-identical to today", async () => {
-    const on = await replayRecord(true);
-    const off = await replayRecord(false);
-    const ramps = on.signals.filter((s) => s.payload.moment === "ramp_up");
-    expect(ramps).toHaveLength(1);
-    expect(ramps[0].at.toISOString()).toBe("2026-10-01T03:11:38.000Z");
-    expect(ramps[0].headline).toBe("Kai Cenat's stream is already 8.2× their usual peak: 398,044 viewers against a typical session peak of 48,370, 9m into the stream.");
-    expect(ramps[0].payload).toMatchObject({ kind: "live_moment", moment: "ramp_up", direction: 1, confidence: 1, magnitude: 8.229, from: 48_370, to: 398_044, rule: "ramp", stream_id: KAI_1001_RECORD.streamId });
-    // Every other signal of the session is the same on and off: the switch adds the one moment and changes nothing else.
-    expect(on.signals.filter((s) => s.payload.moment !== "ramp_up")).toEqual(off.signals);
-    expect(off.signals.some((s) => s.payload.moment === "ramp_up")).toBe(false);
-    // The sample log says what the rule read, on positive readings only, and nothing with the switch off.
+  it("is silent on the record stream (one past session, under the three-session minimum), and off it is byte-identical to today", async () => {
+    const on = await replaySession(KAI_1001_RECORD, [peaks0926], true);
+    const off = await replaySession(KAI_1001_RECORD, [peaks0926], false);
+    expect(on.signals).toEqual(off.signals);
+    expect(on.signals.some((s) => s.payload.moment === "ramp_up")).toBe(false);
+    // The rule was read on every positive reading and found no typical peak; nothing with the switch off.
     const judged = on.lines.filter((line) => line.event === "sample" && line.rampUp !== undefined);
-    expect(judged.map((line) => (line.rampUp as { fired: boolean }).fired).filter(Boolean)).toHaveLength(1);
-    expect(judged[0]).toMatchObject({ viewerCount: 62_192, rampUp: { typicalPeak: 48_370, rampsSoFar: 0, fired: false } });
+    expect(judged.length).toBeGreaterThan(0);
+    expect(judged.every((line) => (line.rampUp as { typicalPeak: number | null; fired: boolean }).typicalPeak === null && !(line.rampUp as { fired: boolean }).fired)).toBe(true);
     expect(on.lines.filter((line) => line.event === "sample" && line.viewerCount === 0).every((line) => line.rampUp === undefined)).toBe(true);
     expect(off.lines.filter((line) => line.event === "sample").every((line) => line.rampUp === undefined)).toBe(true);
+  });
+
+  it("fires once on 10-09 at 00:12:39 with the minimum at two (the record left out of the typical), and adds nothing else", async () => {
+    const on = await replaySession(KAI_1009, [peaks0926, peaksRecord], true, { ramp_min_sessions: 2 });
+    const off = await replaySession(KAI_1009, [peaks0926, peaksRecord], false, { ramp_min_sessions: 2 });
+    const ramps = on.signals.filter((s) => s.payload.moment === "ramp_up");
+    expect(ramps).toHaveLength(1);
+    expect(ramps[0].at.toISOString()).toBe("2026-10-09T00:12:39.000Z");
+    expect(ramps[0].headline).toBe("Kai Cenat's stream is already 2.3× their usual peak: 182,938 viewers against a typical session peak of 48,370, 12m into the stream.");
+    expect(ramps[0].payload).toMatchObject({ kind: "live_moment", moment: "ramp_up", direction: 1, confidence: 0.306, magnitude: 2.266, from: 48_370, to: 182_938, rule: "ramp", stream_id: KAI_1009.streamId });
+    expect(on.signals.filter((s) => s.payload.moment !== "ramp_up")).toEqual(off.signals);
+    const fired = on.lines.filter((line) => line.event === "sample" && (line.rampUp as { fired?: boolean } | undefined)?.fired);
+    expect(fired).toHaveLength(1);
+    expect(fired[0]).toMatchObject({ viewerCount: 182_938, rampUp: { typicalPeak: 48_370, rampsSoFar: 0, fired: true } });
+    // At the default minimum of three, the same session is silent.
+    const strict = await replaySession(KAI_1009, [peaks0926, peaksRecord], true);
+    expect(strict.signals.some((s) => s.payload.moment === "ramp_up")).toBe(false);
   });
 });

@@ -67,6 +67,42 @@ export interface AgeMatchedPace {
 
 const HOUR_MS = 3_600_000;
 
+/**
+ * THE LEDGER-READY REMINDER (2026-10-09), for the health check, like the
+ * baseline-cut reminder: the switch goes on only once the ledger holds two
+ * weeks (the peers must reach the newest upload's age), and nothing marks
+ * the day on its own. The ledger began with the migration of 2026-10-09
+ * 17:45 UTC; its first row says exactly when.
+ */
+export const PACE_LEDGER_DAYS = 14;
+export const PACE_LEDGER_MIGRATED_AT = new Date("2026-10-09T17:45:00.000Z");
+
+export interface VideoPaceStatus {
+  switchOn: boolean;
+  /** The ledger's first row, or the migration when it has none yet. */
+  ledgerSince: string;
+  ledgerHasRows: boolean;
+  /** When the ledger holds two weeks: ledgerSince plus PACE_LEDGER_DAYS. */
+  readyOn: string;
+  ready: boolean;
+  warnings: string[];
+}
+
+export function videoPaceStatus(input: { firstRecordedAt: Date | null; switchOn: boolean }, now: Date): VideoPaceStatus {
+  const since = input.firstRecordedAt ?? PACE_LEDGER_MIGRATED_AT;
+  const readyOn = new Date(since.getTime() + PACE_LEDGER_DAYS * 24 * HOUR_MS);
+  const ready = now.getTime() >= readyOn.getTime();
+  const warnings: string[] = [];
+  if (!input.switchOn) {
+    warnings.push(
+      ready
+        ? `youtube.${VIDEO_PACE_METRIC}: the ledger has held ${PACE_LEDGER_DAYS} days since ${readyOn.toISOString()}; replay the window from it, then set YOUTUBE_PACE_AGE_MATCHED_ENABLED=true`
+        : `youtube.${VIDEO_PACE_METRIC}: ledger since ${since.toISOString()}${input.firstRecordedAt ? "" : " (the migration; no row yet)"}, ${PACE_LEDGER_DAYS} days of history on ${readyOn.toISOString()}; YOUTUBE_PACE_AGE_MATCHED_ENABLED stays off until then`,
+    );
+  }
+  return { switchOn: input.switchOn, ledgerSince: since.toISOString(), ledgerHasRows: input.firstRecordedAt !== null, readyOn: readyOn.toISOString(), ready, warnings };
+}
+
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);

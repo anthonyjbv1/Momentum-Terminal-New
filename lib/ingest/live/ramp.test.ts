@@ -44,55 +44,59 @@ function replay(fixture: SessionFixture, config: LiveConfig = CONFIG): Array<{ a
 }
 
 describe("the typical session peak", () => {
-  it("is the median of the newest complete sessions' peaks, once the minimum exist, and null before", () => {
+  it("is the median of the newest complete sessions' peaks with the single highest left out, once three exist, and null before (revised 2026-10-09)", () => {
     expect(typicalSessionPeak([], CONFIG)).toBeNull();
-    expect(typicalSessionPeak([48_370], CONFIG)).toBe(48_370);
-    expect(typicalSessionPeak([48_370, 690_631], CONFIG)).toBe(369_500.5);
-    expect(typicalSessionPeak([48_370, 690_631, 182_938], CONFIG)).toBe(182_938);
-    // The newest rampSessions only; zeros and non-numbers are not peaks.
-    expect(typicalSessionPeak([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 100], { ...CONFIG, rampSessions: 2 })).toBe(50.5);
-    expect(typicalSessionPeak([0, Number.NaN, 48_370], CONFIG)).toBe(48_370);
-    expect(typicalSessionPeak([48_370], { ...CONFIG, rampMinSessions: 2 })).toBeNull();
+    expect(typicalSessionPeak([48_370], CONFIG)).toBeNull();
+    expect(typicalSessionPeak([48_370, 690_631], CONFIG)).toBeNull();
+    // Three: the record is left out, the median of the other two.
+    expect(typicalSessionPeak([48_370, 690_631, 182_938], CONFIG)).toBe((48_370 + 182_938) / 2);
+    expect(typicalSessionPeak([48_370, 690_631, 182_938, 60_000], CONFIG)).toBe(60_000);
+    // The newest rampSessions only; zeros and non-numbers are not peaks; below the minimum, nothing.
+    expect(typicalSessionPeak([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 100, 10, 30, 20], { ...CONFIG, rampSessions: 3 })).toBe(15);
+    expect(typicalSessionPeak([0, Number.NaN, 48_370, 50_000, 52_000], CONFIG)).toBe(49_185);
+    // The minimum relaxed to two: the highest is still left out.
+    expect(typicalSessionPeak([48_370, 690_631], { ...CONFIG, rampMinSessions: 2 })).toBe(48_370);
+    expect(typicalSessionPeak([48_370], { ...CONFIG, rampMinSessions: 1 })).toBe(48_370);
   });
 });
 
-describe("the ramp-up, replayed on the four stored sessions", () => {
-  it("fires on the record stream at 03:11:38, nine minutes in, on the second reading of 398,044 against a typical peak of 48,370 (live: the surge at 03:23:38)", () => {
-    expect(peaksBefore(KAI_1001_RECORD)).toEqual([48_370]);
-    const firings = replay(KAI_1001_RECORD);
-    expect(firings).toHaveLength(1);
-    expect(firings[0].at.toISOString()).toBe("2026-10-01T03:11:38.000Z");
-    expect(firings[0].secondsIn).toBe(522);
-    expect(firings[0].moment).toMatchObject({ moment: "ramp_up", direction: 1, confidence: 1, magnitude: 8.229, from: 48_370, to: 398_044, windowMinutes: 2, rule: "ramp" });
-    expect(firings[0].moment.rationale).toBe("audience 398,044 then 398,044 (9 min in) against a typical session peak of 48,370: 8.2×, threshold 1.5×");
-    // Twelve minutes before the live surge, which the within-session rules fired at minute 21.
-    expect(Math.round((new Date(KAI_1001_RECORD.liveSurgeAt!).getTime() - firings[0].at.getTime()) / 60_000)).toBe(12);
-    // The 62,192 readings at minutes 3 and 5 are under the multiple (72,555): not a ramp.
-    expect(62_192).toBeLessThan(CONFIG.rampMultiple * 48_370);
-  });
-
-  it("is silent on 09-26 and on Asmongold's 10-08: no past session, no typical peak", () => {
+describe("the ramp-up, replayed on the four stored sessions (revised rule: three past sessions, the highest left out)", () => {
+  it("is silent on every stored session under the three-session minimum: 09-26 and 10-01 had one past session at most, 10-09 two, Asmongold none", () => {
     expect(peaksBefore(KAI_0926)).toEqual([]);
-    expect(replay(KAI_0926)).toEqual([]);
-    expect(peaksBefore(ASMONGOLD_1008)).toEqual([]);
-    expect(replay(ASMONGOLD_1008)).toEqual([]);
-  });
-
-  it("is silent on 10-09: a peak of 182,938 against a typical of 369,500 (the median of 48,370 and the record), threshold 554,251", () => {
+    expect(peaksBefore(KAI_1001_RECORD)).toEqual([48_370]);
     expect(peaksBefore(KAI_1009)).toEqual([48_370, 690_631]);
-    expect(typicalSessionPeak(peaksBefore(KAI_1009), CONFIG)).toBe(369_500.5);
-    expect(replay(KAI_1009)).toEqual([]);
-    // Against the 09-26 peak alone it would have fired at minute 8 (109,607 then 182,938 against 48,370): the record raised his typical.
-    const against0926 = fixtureSamples(KAI_1009);
-    const fired = against0926.map((current, index) => rampUpMoment(session(KAI_1009), against0926.slice(0, index), current, { typicalPeak: 48_370, rampsSoFar: 0 }, CONFIG)).find(Boolean);
-    expect(fired).toMatchObject({ to: 182_938, magnitude: 2.266 });
+    expect(peaksBefore(ASMONGOLD_1008)).toEqual([]);
+    for (const fixture of SESSION_FIXTURES) expect(replay(fixture)).toEqual([]);
   });
 
-  it("never fires on a normal-sized session: a stream that peaks at 1.4× the typical stays under the multiple", () => {
+  it("with the minimum at two, 10-09 fires at 00:12:39, twelve minutes in: 109,607 then 182,938 against a typical of 48,370 (the record left out), 2.3× at confidence 0.306", () => {
+    const relaxed = { ...CONFIG, rampMinSessions: 2 };
+    const firings = replay(KAI_1009, relaxed);
+    expect(firings).toHaveLength(1);
+    expect(firings[0].at.toISOString()).toBe("2026-10-09T00:12:39.000Z");
+    expect(firings[0].secondsIn).toBe(747);
+    expect(firings[0].moment).toMatchObject({ moment: "ramp_up", direction: 1, confidence: 0.306, magnitude: 2.266, from: 48_370, to: 182_938, windowMinutes: 4, rule: "ramp" });
+    expect(firings[0].moment.rationale).toBe("audience 109,607 then 182,938 (12 min in) against a typical session peak of 48,370: 2.3×, threshold 1.5×");
+    // The record stream still fires at 03:11:38 once its one past session counts (the minimum at one), and still twelve minutes before the live surge.
+    const record = replay(KAI_1001_RECORD, { ...CONFIG, rampMinSessions: 1 });
+    expect(record.map((f) => f.at.toISOString())).toEqual(["2026-10-01T03:11:38.000Z"]);
+    expect(record[0].moment).toMatchObject({ magnitude: 8.229, confidence: 1 });
+    expect(Math.round((new Date(KAI_1001_RECORD.liveSurgeAt!).getTime() - record[0].at.getTime()) / 60_000)).toBe(12);
+    // 09-26 and Asmongold stay silent at any minimum: no past session at all.
+    expect(replay(KAI_0926, { ...CONFIG, rampMinSessions: 1 })).toEqual([]);
+    expect(replay(ASMONGOLD_1008, { ...CONFIG, rampMinSessions: 1 })).toEqual([]);
+  });
+
+  it("never fires on a normal-sized session: a stream that peaks at 1.4× the typical stays under the multiple, with three past sessions on the record", () => {
     const start = new Date("2026-10-12T00:00:00.000Z");
-    const samples = Array.from({ length: 30 }, (_, i) => ({ sampledAt: new Date(start.getTime() + i * 120_000), viewerCount: Math.round(Math.min(1.4, 0.1 * i) * 100_000) }));
-    const firings = samples.map((current, index) => rampUpMoment({ startedAt: start }, samples.slice(0, index), current, { typicalPeak: 100_000, rampsSoFar: 0 }, CONFIG)).filter(Boolean);
+    const typical = typicalSessionPeak([100_000, 95_000, 300_000], CONFIG)!;
+    expect(typical).toBe(97_500);
+    const samples = Array.from({ length: 30 }, (_, i) => ({ sampledAt: new Date(start.getTime() + i * 120_000), viewerCount: Math.round(Math.min(1.4, 0.1 * i) * typical) }));
+    const firings = samples.map((current, index) => rampUpMoment({ startedAt: start }, samples.slice(0, index), current, { typicalPeak: typical, rampsSoFar: 0 }, CONFIG)).filter(Boolean);
     expect(firings).toEqual([]);
+    // 1.6× for two readings: a ramp.
+    const big = [...samples, { sampledAt: new Date(start.getTime() + 30 * 120_000), viewerCount: Math.round(1.6 * typical) }, { sampledAt: new Date(start.getTime() + 31 * 120_000), viewerCount: Math.round(1.6 * typical) }];
+    expect(rampUpMoment({ startedAt: start }, big.slice(0, -1), big.at(-1)!, { typicalPeak: typical, rampsSoFar: 0 }, CONFIG)).toMatchObject({ magnitude: 1.6 });
   });
 });
 
@@ -127,7 +131,7 @@ describe("the ramp-up rule", () => {
   });
 
   it("has its thresholds on the live block with defaults, and writes its signal as a live moment the prescored scorer reads", () => {
-    expect(DEFAULT_LIVE_CONFIG).toMatchObject({ rampMultiple: 1.5, rampFullMultiple: 4, rampMinSessions: 1, rampSessions: 10 });
+    expect(DEFAULT_LIVE_CONFIG).toMatchObject({ rampMultiple: 1.5, rampFullMultiple: 4, rampMinSessions: 3, rampSessions: 10 });
     expect(readLiveConfig({ live: { enabled: true, ramp_multiple: 2, ramp_min_sessions: 3 } })).toMatchObject({ rampMultiple: 2, rampMinSessions: 3, rampFullMultiple: 4 });
     const moment = rampUpMoment({ startedAt: start }, [sample(0, 398_044)], sample(2, 398_044), { typicalPeak: 48_370, rampsSoFar: 0 }, CONFIG)!;
     const liveSession = { startedAt: start, streamId: "319414213079", channel: "kaicenat" } as LiveSession;
