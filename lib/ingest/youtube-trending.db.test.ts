@@ -76,7 +76,8 @@ describe("the mappings", () => {
     const rows = await mappings();
     const people = await database.rows<{ slug: string; display_name: string }>("select slug, display_name from public.people where is_active order by slug");
     expect(rows.map((r) => r.slug)).toEqual(people.map((p) => p.slug));
-    expect(rows).toHaveLength(16);
+    // Sixteen at Phase 22; twenty-nine since the 2026-10-09 roster expansion.
+    expect(rows).toHaveLength(29);
     for (const row of rows) {
       expect(row.identifier, row.slug).toBe(row.display_name);
       expect(row.is_active, row.slug).toBe(true);

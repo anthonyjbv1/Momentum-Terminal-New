@@ -250,11 +250,14 @@ describe("THE ONE HARD RULE: votes influence nothing", () => {
         events: allPeople.map((id) => ({ person_id: id, force: "gravity", impact: 0.05, details: {} })),
       });
 
-    // With votes: every person holds several, of both directions.
-    const voters = await Promise.all(["v1", "v2", "v3"].map((name) => createUser(`${name}@example.com`)));
-    for (const personId of allPeople) {
-      for (const [index, voter] of voters.entries()) {
-        expect(await cast(voter, personId, index === 0 ? "falling" : "rising", "other")).toMatchObject({ ok: true });
+    // With votes: every person holds three, of both directions. Five voters
+    // rotate so none passes the twenty-people-an-hour cap on a roster of
+    // twenty-nine.
+    const voters = await Promise.all(["v1", "v2", "v3", "v4", "v5"].map((name) => createUser(`${name}@example.com`)));
+    for (const [personIndex, personId] of allPeople.entries()) {
+      for (let offset = 0; offset < 3; offset += 1) {
+        const voter = voters[(personIndex + offset) % voters.length];
+        expect(await cast(voter, personId, offset === 0 ? "falling" : "rising", "other")).toMatchObject({ ok: true });
       }
     }
     const [{ count }] = await database.rows<{ count: number }>("select count(*)::int as count from public.forecast_votes where superseded_at is null");

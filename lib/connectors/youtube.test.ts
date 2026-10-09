@@ -9,8 +9,8 @@ const NOW = new Date("2026-09-07T12:00:00.000Z");
 const CHANNEL = "UCX6OQ3DkcsbYNE6H8uQQuVA";
 const person = makePerson();
 
-function context(fetch: typeof globalThis.fetch, config: Record<string, never> | Record<string, unknown> = {}) {
-  return { source: makeSource(), config: config as Record<string, never>, snapshots: { latest: async () => null, record: () => undefined }, now: NOW, fetch };
+function context(fetch: typeof globalThis.fetch, config: Record<string, never> | Record<string, unknown> = {}, personConfig?: Record<string, unknown>) {
+  return { source: makeSource(), config: config as Record<string, never>, snapshots: { latest: async () => null, record: () => undefined }, now: NOW, fetch, ...(personConfig ? { personConfig: personConfig as Record<string, never> } : {}) };
 }
 
 function searchResponse(count: number, options: { own?: number; nextPageToken?: string } = {}) {
@@ -125,6 +125,17 @@ describe("youtubeConnector", () => {
     const readings = await youtubeConnector.fetchMetrics!(person, CHANNEL, context(fetch, { commentary: false }));
     expect(readings.map((r) => r.metricKey)).toEqual(["view_count", "video_count"]);
     expect(fetch.calls).toHaveLength(1);
+  });
+
+  it("lets the mapping switch commentary off for its channel alone (2026-10-09): channel statistics, no search.list", async () => {
+    const fetch = fullRoutes();
+    const readings = await youtubeConnector.fetchMetrics!(person, CHANNEL, context(fetch, {}, { commentary: false }));
+    expect(readings.map((r) => r.metricKey)).not.toContain("commentary_volume_24h");
+    expect(fetch.calls.some((call) => String(call).includes("/search?"))).toBe(false);
+    // The source's own setting still applies to a mapping that says nothing.
+    const all = fullRoutes();
+    const everything = await youtubeConnector.fetchMetrics!(person, CHANNEL, context(all, {}));
+    expect(everything.map((r) => r.metricKey)).toContain("commentary_volume_24h");
   });
 
   it("fails the poll, not the run, on an API error, without the key in the message", async () => {

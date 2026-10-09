@@ -14,8 +14,7 @@ import {
   readGroupedStatistic,
   readStatistic,
   resetApiSportsStatusCache,
-  seasonFor,
-} from "./apisports";
+  seasonFor, apiSportsPacing, resetApiSportsPacing } from "./apisports";
 
 const NOW = new Date("2026-09-17T12:00:00.000Z");
 const person = makePerson({ slug: "patrick-mahomes", display_name: "Patrick Mahomes" });
@@ -361,9 +360,21 @@ describe("readApiSportsConfig", () => {
 
 describe("apisportsConnector", () => {
   const saved = process.env.APISPORTS_API_KEY;
+  // The request pacing (2026-10-09) waits on a clock; here the clock is the wait.
+  const realPacing = { now: apiSportsPacing.now, sleep: apiSportsPacing.sleep };
   beforeEach(() => {
     resetApiSportsStatusCache();
+    resetApiSportsPacing();
+    let clock = Date.now();
+    apiSportsPacing.now = () => clock;
+    apiSportsPacing.sleep = async (ms) => {
+      clock += ms;
+    };
     process.env.APISPORTS_API_KEY = "test-key";
+  });
+  afterEach(() => {
+    apiSportsPacing.now = realPacing.now;
+    apiSportsPacing.sleep = realPacing.sleep;
   });
   afterEach(() => {
     if (saved === undefined) delete process.env.APISPORTS_API_KEY;

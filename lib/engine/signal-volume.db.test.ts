@@ -9,6 +9,9 @@ import { readDisambiguation } from "@/lib/ingest/disambiguation";
  * baseline the Engine reads.
  */
 
+// The seven NFL players (Mahomes and the six added 2026-10-09). The NBA four read
+// sports and general: the catalogue has no basketball desk.
+const NFL = ["patrick-mahomes", "jaxon-smith-njigba", "jamarr-chase", "jahmyr-gibbs", "bijan-robinson", "lamar-jackson", "josh-allen"];
 const TOPICS = ["general", "entertainment", "music", "tech", "creator", "business", "sports", "nfl", "gaming", "streaming"];
 /** Names shared with somebody the feeds also write about, and so seeded with exclusions. */
 const AMBIGUOUS = ["elon-musk", "jeff-bezos", "mark-zuckerberg", "warren-buffett", "kendrick-lamar", "drake"];
@@ -40,10 +43,11 @@ async function mappings(): Promise<MappingRow[]> {
   );
 }
 
-describe("the sixteen subjects on the two news doors", () => {
+describe("the twenty-nine subjects on the two news doors", () => {
   it("every active person has an active publisher_rss and rss mapping", async () => {
     const people = await database.rows<{ slug: string }>("select slug from public.people where is_active order by slug");
-    expect(people).toHaveLength(16);
+    // Sixteen through Phase 31; twenty-nine since the 2026-10-09 roster expansion.
+    expect(people).toHaveLength(29);
     const rows = await mappings();
     for (const { slug } of people) {
       for (const source of ["publisher_rss", "rss"]) {
@@ -64,9 +68,10 @@ describe("the sixteen subjects on the two news doors", () => {
       if (row.category === "executive") expect(topics).toEqual(["business", "tech", "general"]);
       if (row.category === "musician") expect(topics).toContain("music");
       if (row.category === "creator") expect(topics).toContain("creator");
-      if (row.slug !== "patrick-mahomes") expect(topics).not.toContain("nfl");
+      if (row.category === "athlete") expect(topics).toContain("sports");
+      if (!NFL.includes(row.slug)) expect(topics, `${row.slug} nfl`).not.toContain("nfl");
     }
-    expect(rows.find((r) => r.slug === "patrick-mahomes")!.config!.topics).toContain("nfl");
+    for (const slug of NFL) expect(rows.find((r) => r.slug === slug)!.config!.topics, slug).toContain("nfl");
   });
 
   it("names are matched as the row's identifier plus safe aliases only: no bare Page, Dell, Ellison, Lamar or Huang", async () => {
@@ -136,7 +141,7 @@ describe("the sixteen subjects on the two news doors", () => {
 describe("person_signal_volume()", () => {
   it("returns one row per active person with the regime start, the trailing day and the complete days since; service role only", async () => {
     const rows = await database.rows<{ person_id: string; tracked_since: string; current_24h: string; daily: number[] | string }>("select * from public.person_signal_volume(14) order by person_id");
-    expect(rows).toHaveLength(16);
+    expect(rows).toHaveLength(29);
     for (const row of rows) {
       expect(row.tracked_since).not.toBeNull();
       expect(Number(row.current_24h)).toBe(0);

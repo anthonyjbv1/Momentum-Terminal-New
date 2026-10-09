@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { authorizeSharedSecret } from "@/lib/api-auth";
+import { apiSportsWarnings } from "@/lib/connectors/apisports";
 import { getEngineSecretOrNull, getIngestSecretOrNull, getScorerName, isEngineCronEnabled } from "@/lib/env";
 import { resolveRoute } from "@/lib/llm/routing";
 import { ANTHROPIC_DEFAULT_MODEL } from "@/lib/llm/providers/anthropic";
@@ -46,14 +47,36 @@ export async function GET(request: NextRequest) {
 
   try {
     const admin = createSupabaseAdminClient();
-    const [sources, recentRuns, llmCost] = await Promise.all([
+    const [sources, recentRuns, llmCost, apisportsPoll] = await Promise.all([
       admin.from("source_health").select("*").order("name"),
       admin.from("ingest_runs").select("*").order("started_at", { ascending: false }).limit(runs),
       admin.from("llm_cost_per_tick").select("*").order("tick_number", { ascending: false, nullsFirst: false }).limit(ticks),
+      // The newest API-Sports poll's account of the subscription and the day's usage (2026-10-09).
+      admin.from("source_polls").select("started_at, detail, data_sources!inner(name)").eq("data_sources.name", "apisports").not("detail->apisports", "is", null).order("started_at", { ascending: false }).limit(1).maybeSingle(),
     ]);
-    for (const [label, result] of Object.entries({ sources, recentRuns, llmCost })) {
+    for (const [label, result] of Object.entries({ sources, recentRuns, llmCost, apisportsPoll })) {
       if (result.error) throw new Error(`${label}: ${result.error.message}`);
     }
+    // The daily subscription check: the plan and its end as the last poll read them, and
+    // the warnings the operator must see (a Free plan, an end within five days).
+    const apisportsDetail = ((apisportsPoll.data?.detail as { apisports?: Record<string, unknown> } | null)?.apisports ?? null) as Record<string, unknown> | null;
+    const apisports = apisportsDetail
+      ? {
+          readAt: apisportsPoll.data?.started_at ?? null,
+          ...apisportsDetail,
+          warnings: apiSportsWarnings(
+            {
+              plan: typeof apisportsDetail.plan === "string" ? apisportsDetail.plan : null,
+              subscriptionEnd: typeof apisportsDetail.subscription_end === "string" ? apisportsDetail.subscription_end : null,
+              subscriptionActive: typeof apisportsDetail.subscription_active === "boolean" ? apisportsDetail.subscription_active : null,
+            },
+            new Date(),
+          ),
+        }
+      : { readAt: null, warnings: ["API-Sports has not reported its subscription yet: no poll detail recorded"] };
+    const warnings = [...apisports.warnings];
+    const lastRead = apisports.readAt ? Date.parse(apisports.readAt) : Number.NaN;
+    if (Number.isFinite(lastRead) && Date.now() - lastRead > 24 * 3_600_000) warnings.push(`API-Sports subscription last read ${apisports.readAt}: more than a day ago`);
     const taskTypes: LLMTaskType[] = ["sentiment", "anomaly", "narrative", "memory"];
     const routes = taskTypes.map((taskType) => {
       const route = resolveRoute(taskType);
@@ -91,6 +114,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       generatedAt: new Date().toISOString(),
       cronEnabled: isEngineCronEnabled(),
+      warnings,
+      apisports,
       llm,
       sources: sources.data ?? [],
       recentRuns: (recentRuns.data ?? []).map((run) => ({ ...run, summary: undefined, hasSummary: run.summary !== null })),

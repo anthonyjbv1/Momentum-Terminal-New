@@ -1,4 +1,5 @@
 import { getApiSportsKeyOrNull } from "@/lib/env";
+import type { Json } from "@/types/database";
 
 import { ConnectorError, type DataConnector, type MetricReading, type RawSignal } from "./types";
 
@@ -316,8 +317,115 @@ export function envelopeErrors(errors: unknown): string[] {
   return typeof errors === "string" ? [errors] : [];
 }
 
+// ---------------------------------------------------------------------------
+// The request pacing (2026-10-09, roster expansion): half the limit, backoff on 429
+// ---------------------------------------------------------------------------
+//
+// API-Sports answers every request with its limits in the headers: the daily
+// quota (x-ratelimit-requests-limit / -remaining) and the per-minute rate
+// (X-RateLimit-Limit / -Remaining). The connector never spends more than HALF
+// the per-minute rate: calls are spaced so that no sixty-second window holds
+// more than limit/2 of them, and never closer than 250 ms (a quarter of the
+// documented 1/s floor is a safe reading of "half the per-second limit"
+// without a per-second header). Before the first response names the rate the
+// Pro plan's 300 a minute is assumed (the account's plan; the first response
+// corrects it, and a Free key is then paced at five a minute). A 429 is
+// retried with exponential backoff (1 s, 2 s, 4 s,
+// honouring Retry-After) before it is raised as retryable. The counters are
+// per process; the poll writes them onto source_polls.detail so the day's
+// usage is readable against the quota, which resets at 00:00 UTC.
+
+const ASSUMED_MINUTE_LIMIT = 300;
+const MIN_SPACING_MS = 250;
+const BACKOFF_RETRIES = 3;
+
+export interface ApiSportsUsage {
+  minuteLimit: number | null;
+  minuteRemaining: number | null;
+  dayLimit: number | null;
+  dayRemaining: number | null;
+  /** Requests this process has made since it started. */
+  requests: number;
+  /** When the counters were last read off a response. */
+  readAt: string | null;
+}
+
+const usage: ApiSportsUsage = { minuteLimit: null, minuteRemaining: null, dayLimit: null, dayRemaining: null, requests: 0, readAt: null };
+/** The times of recent calls, for the sixty-second window. */
+let recentCalls: number[] = [];
+
+/** Replaceable in tests: how the pacing waits. */
+export const apiSportsPacing = {
+  sleep: (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms)),
+  now: (): number => Date.now(),
+};
+
+/** The counters as the last response left them. */
+export function apiSportsUsage(): ApiSportsUsage {
+  return { ...usage };
+}
+
+/** For tests. */
+export function resetApiSportsPacing(): void {
+  usage.minuteLimit = usage.minuteRemaining = usage.dayLimit = usage.dayRemaining = null;
+  usage.requests = 0;
+  usage.readAt = null;
+  recentCalls = [];
+}
+
+/** How many calls a sixty-second window may hold: half the per-minute limit, at least one. */
+export function allowedPerMinute(minuteLimit: number | null): number {
+  return Math.max(1, Math.floor((minuteLimit ?? ASSUMED_MINUTE_LIMIT) / 2));
+}
+
+/** Waits until the next call keeps the window under half the limit and the spacing above the floor. */
+async function pace(): Promise<void> {
+  const allowed = allowedPerMinute(usage.minuteLimit);
+  const spacing = Math.max(MIN_SPACING_MS, Math.ceil(60_000 / allowed));
+  for (;;) {
+    const now = apiSportsPacing.now();
+    recentCalls = recentCalls.filter((at) => now - at < 60_000);
+    const last = recentCalls[recentCalls.length - 1];
+    const waitForWindow = recentCalls.length >= allowed ? recentCalls[0] + 60_000 - now : 0;
+    const waitForSpacing = last !== undefined ? last + spacing - now : 0;
+    const wait = Math.max(waitForWindow, waitForSpacing);
+    if (wait <= 0) break;
+    await apiSportsPacing.sleep(wait);
+  }
+  recentCalls.push(apiSportsPacing.now());
+  usage.requests += 1;
+}
+
+function headerNumber(headers: Headers, name: string): number | null {
+  const raw = headers.get(name);
+  if (raw === null) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** Reads the limits off a response's headers, whichever casing the host used. */
+export function readRateHeaders(headers: Headers, now = apiSportsPacing.now()): void {
+  const minuteLimit = headerNumber(headers, "x-ratelimit-limit");
+  const minuteRemaining = headerNumber(headers, "x-ratelimit-remaining");
+  const dayLimit = headerNumber(headers, "x-ratelimit-requests-limit");
+  const dayRemaining = headerNumber(headers, "x-ratelimit-requests-remaining");
+  if (minuteLimit !== null) usage.minuteLimit = minuteLimit;
+  if (minuteRemaining !== null) usage.minuteRemaining = minuteRemaining;
+  if (dayLimit !== null) usage.dayLimit = dayLimit;
+  if (dayRemaining !== null) usage.dayRemaining = dayRemaining;
+  if (minuteLimit !== null || dayLimit !== null) usage.readAt = new Date(now).toISOString();
+}
+
 async function call<T>(path: string, config: ApiSportsConnectorConfig, key: string, fetchImpl: typeof fetch): Promise<ApiSportsEnvelope<T>> {
-  const response = await fetchImpl(`https://${config.host}${path}`, { headers: { "x-apisports-key": key, accept: "application/json" } });
+  let response: Response | null = null;
+  for (let attempt = 0; ; attempt += 1) {
+    await pace();
+    response = await fetchImpl(`https://${config.host}${path}`, { headers: { "x-apisports-key": key, accept: "application/json" } });
+    readRateHeaders(response.headers);
+    if (response.status !== 429 || attempt >= BACKOFF_RETRIES) break;
+    const retryAfter = Number(response.headers.get("retry-after"));
+    await apiSportsPacing.sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000 * 2 ** attempt);
+  }
   if (!response.ok) {
     throw new ConnectorError(`API-Sports responded ${response.status} for ${path} on ${config.host}`, {
       status: response.status,
@@ -341,6 +449,9 @@ async function call<T>(path: string, config: ApiSportsConnectorConfig, key: stri
 
 export interface ApiSportsStatus {
   plan: string | null;
+  /** When the subscription ends (ISO), as /status reports it; the plan falls back to Free after it and does not renew itself. */
+  subscriptionEnd: string | null;
+  subscriptionActive: boolean | null;
   requestsToday: number | null;
   dailyLimit: number | null;
 }
@@ -378,10 +489,12 @@ export async function fetchApiSportsStatus(
   if (cachedStatus && cachedStatus.host === config.host && now - cachedStatus.at < STATUS_CACHE_MS) return cachedStatus.status;
   const body = await call<unknown>("/status", config, key, fetchImpl);
   const first = (Array.isArray(body.response) ? body.response[0] : body.response) as
-    | { subscription?: { plan?: string }; requests?: { current?: number; limit_day?: number } }
+    | { subscription?: { plan?: string; end?: string; active?: boolean }; requests?: { current?: number; limit_day?: number } }
     | undefined;
   const status: ApiSportsStatus = {
     plan: typeof first?.subscription?.plan === "string" ? first.subscription.plan : null,
+    subscriptionEnd: typeof first?.subscription?.end === "string" ? first.subscription.end : null,
+    subscriptionActive: typeof first?.subscription?.active === "boolean" ? first.subscription.active : null,
     requestsToday: numberOrNull(first?.requests?.current),
     dailyLimit: numberOrNull(first?.requests?.limit_day),
   };
@@ -865,6 +978,52 @@ async function resolveTeam(config: ApiSportsConnectorConfig, key: string, fetchI
   return team;
 }
 
+/** The daily subscription check (2026-10-09): what the health check warns about. */
+export function apiSportsWarnings(status: Pick<ApiSportsStatus, "plan" | "subscriptionEnd" | "subscriptionActive">, now: Date, withinDays = 5): string[] {
+  const warnings: string[] = [];
+  if (status.plan !== null && /free/i.test(status.plan)) warnings.push(`API-Sports plan is ${status.plan}: the Pro subscription has lapsed or was never applied to this key`);
+  if (status.subscriptionActive === false) warnings.push("API-Sports subscription is not active");
+  if (status.subscriptionEnd) {
+    const end = Date.parse(status.subscriptionEnd);
+    if (Number.isFinite(end)) {
+      const days = (end - now.getTime()) / 86_400_000;
+      if (days < 0) warnings.push(`API-Sports subscription ended ${status.subscriptionEnd}; the key is on the Free plan now`);
+      else if (days <= withinDays) warnings.push(`API-Sports subscription ends ${status.subscriptionEnd} (${days.toFixed(1)} days): it does not renew itself`);
+    }
+  }
+  return warnings;
+}
+
+/** The poll's account of the subscription and the day's usage, onto source_polls.detail. */
+function recordUsage(context: { detail?: (key: string, value: Json) => void; now: Date }, status: ApiSportsStatus, requestsBefore: number): void {
+  const current = apiSportsUsage();
+  context.detail?.("apisports", {
+    plan: status.plan,
+    subscription_end: status.subscriptionEnd,
+    subscription_active: status.subscriptionActive,
+    requests_today: current.dayLimit !== null && current.dayRemaining !== null ? current.dayLimit - current.dayRemaining : status.requestsToday,
+    daily_limit: current.dayLimit ?? status.dailyLimit,
+    minute_limit: current.minuteLimit,
+    minute_remaining: current.minuteRemaining,
+    requests_this_poll: current.requests - requestsBefore,
+    warnings: apiSportsWarnings(status, context.now),
+  });
+}
+
+/**
+ * The mapping's own overrides (2026-10-09): a player's team, the per-game
+ * statistics that describe their position (a receiver's yards and catches,
+ * a back's rushing yards), and the headline line. The source row keeps the
+ * host, paths and metric definitions; a mapping says which of them apply.
+ */
+export function mergedApiSportsConfig(sourceConfig: Record<string, unknown>, personConfig: Record<string, unknown> | undefined): Record<string, unknown> {
+  const overrides: Record<string, unknown> = {};
+  for (const key of ["team_id", "game_stats", "headline_stats", "recent_games"]) {
+    if (personConfig && personConfig[key] !== undefined && personConfig[key] !== null) overrides[key] = personConfig[key];
+  }
+  return { ...sourceConfig, ...overrides };
+}
+
 export const apisportsConnector: DataConnector = {
   name: APISPORTS_SOURCE_NAME,
 
@@ -876,8 +1035,9 @@ export const apisportsConnector: DataConnector = {
   async fetchForPerson(person, playerId, context): Promise<RawSignal[]> {
     if (typeof window !== "undefined") throw new Error("The API-Sports connector is server-only.");
     const key = requireKey();
-    const config = readApiSportsConfig(context.config as Record<string, unknown>);
+    const config = readApiSportsConfig(mergedApiSportsConfig(context.config as Record<string, unknown>, context.personConfig as Record<string, unknown> | undefined));
     const player = requirePlayer(person, playerId);
+    const requestsBefore = apiSportsUsage().requests;
 
     const status = await fetchApiSportsStatus(config, key, context.fetch, context.now.getTime());
     const season = seasonFor(context.now, config.season);
@@ -922,6 +1082,7 @@ export const apisportsConnector: DataConnector = {
       }
     }
 
+    recordUsage(context, status, requestsBefore);
     return finished
       .slice(0, config.recent_games)
       .map((game) => gameSignal(person, game, APISPORTS_SOURCE_NAME, { observedAt: context.now, config, line: game === newest ? line : null }))
@@ -950,8 +1111,9 @@ export const apisportsConnector: DataConnector = {
   async fetchMetrics(person, playerId, context): Promise<MetricReading[]> {
     if (typeof window !== "undefined") throw new Error("The API-Sports connector is server-only.");
     const key = requireKey();
-    const config = readApiSportsConfig(context.config as Record<string, unknown>);
+    const config = readApiSportsConfig(mergedApiSportsConfig(context.config as Record<string, unknown>, context.personConfig as Record<string, unknown> | undefined));
     const player = requirePlayer(person, playerId);
+    const requestsBefore = apiSportsUsage().requests;
 
     const status = await fetchApiSportsStatus(config, key, context.fetch, context.now.getTime());
     const season = seasonFor(context.now, config.season);
@@ -1077,6 +1239,7 @@ export const apisportsConnector: DataConnector = {
       const newest = list.at(-1);
       if (newest) out.push({ metricKey, value: newest.value, recordedAt: newest.game.date });
     }
+    recordUsage(context, status, requestsBefore);
     return out;
   },
 };

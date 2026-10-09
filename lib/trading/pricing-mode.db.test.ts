@@ -102,7 +102,8 @@ describe("depth resolution", () => {
         where p.is_active and p.trading_mode = 'tradeable'
         order by p.slug`,
     );
-    expect(rows).toHaveLength(15);
+    // Fifteen tradeable through Phase 31 (Anthony Baptiste is not); twenty-eight since the 2026-10-09 roster expansion.
+    expect(rows).toHaveLength(28);
     for (const row of rows) {
       expect(`${row.slug}: ${row.override} ${row.mode} ${row.resolved}`).toBe(`${row.slug}: null curve ${row.tier_depth}`);
       expect(row.resolved).not.toBeNull();

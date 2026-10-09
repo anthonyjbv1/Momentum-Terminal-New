@@ -4,6 +4,7 @@ import { getCronSecretOrNull, getIngestSecretOrNull, isIngestCronEnabled } from 
 import { INGEST_CRON_DEFAULTS, authorizeIngestCronRequest, runScheduledIngestion } from "@/lib/ingest/cron";
 import { ingestQualityFromEnv } from "@/lib/ingest/quality";
 import { runIngestion } from "@/lib/ingest/runner";
+import { resolveIdentities } from "@/lib/ingest/identity";
 import { createSupabaseIngestStore } from "@/lib/ingest/store";
 import { refreshPersonAvatars } from "@/lib/people/avatars";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
@@ -72,7 +73,17 @@ export async function GET(request: NextRequest) {
         console.warn("[ingest/cron] avatar refresh failed:", avatars.error);
       }
     }
-    return NextResponse.json({ ...result, avatars }, { status: result.error ? 500 : 200 });
+    // Identity resolution (2026-10-09): the platform ids a mapping asked for, written onto the mapping. Never fails the run.
+    let identities: Awaited<ReturnType<typeof resolveIdentities>> | { error: string } = { error: "skipped" };
+    if (result.status === "ran") {
+      try {
+        identities = await resolveIdentities({ client: createSupabaseAdminClient() });
+      } catch (error) {
+        identities = { error: error instanceof Error ? error.message : String(error) };
+        console.warn("[ingest/cron] identity resolution failed:", identities.error);
+      }
+    }
+    return NextResponse.json({ ...result, avatars, identities }, { status: result.error ? 500 : 200 });
   } catch (error) {
     console.error("[ingest/cron] failed:", error);
     return NextResponse.json({ error: "Scheduled ingestion failed", detail: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });

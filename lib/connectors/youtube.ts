@@ -270,7 +270,11 @@ export const youtubeConnector: DataConnector = {
     const identifier = channelId.trim();
     if (!identifier) throw new ConnectorError(`No YouTube channel ID configured for ${person.slug}`);
 
-    const config = readYouTubeConfig(context.config);
+    // The mapping may switch the commentary read off for its channel alone
+    // (2026-10-09, the streamers: comment tracking off, channel statistics
+    // on), which is the one hundred-unit search.list a poll it would cost.
+    const personCommentary = context.personConfig?.commentary;
+    const config = readYouTubeConfig(personCommentary === undefined ? context.config : { ...context.config, commentary: personCommentary });
     const channel = await fetchYouTubeChannelStats(identifier, apiKey, context.fetch);
 
     const readings: MetricReading[] = [];

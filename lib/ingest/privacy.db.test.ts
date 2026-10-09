@@ -286,9 +286,22 @@ describe("the registry", () => {
     // for its news VOLUME and their own Form 4s. Never for its share price,
     // which is recorded and scores nothing (finnhub.db.test.ts).
     const executive = (slug: string, name: string, symbol: string) => [{ slug, source: "finnhub", identifier: symbol }, ...news(slug, name)];
+    // 2026-10-09 roster expansion: a streamer reads the two news doors, Twitch
+    // by login and the chart; an athlete the two news doors and the chart. The
+    // six NFL API-Sports mappings are INACTIVE until their ids are resolved
+    // live and compared with the prep listing, so they do not appear here.
+    const streamer = (slug: string, name: string, login: string) => [
+      { slug, source: "publisher_rss", identifier: name },
+      { slug, source: "rss", identifier: expect.stringContaining(`news.google.com/rss/search?q=%22${name.replace(/ /g, "+")}%22`) },
+      { slug, source: "twitch", identifier: login },
+      ...trending(slug, name),
+    ];
     expect(mappings).toEqual([
       ...news("adin-ross", "Adin Ross"),
       ...news("anthony-baptiste", "Anthony Baptiste"),
+      ...streamer("asmongold", "Asmongold", "zackrawrr"),
+      ...news("bijan-robinson", "Bijan Robinson"),
+      ...streamer("caedrel", "Caedrel", "caedrel"),
       // Phase 13: every subject also reads the publisher feed catalogue, under
       // their primary match term; the Google News search stays as the fallback.
       { slug: "drake", source: "publisher_rss", identifier: "Drake" },
@@ -296,8 +309,15 @@ describe("the registry", () => {
       { slug: "drake", source: "spotify", identifier: "3TVXtAsR1Inumwj472S9r4" },
       ...trending("drake", "Drake"),
       ...executive("elon-musk", "Elon Musk", "TSLA"),
+      ...news("jahmyr-gibbs", "Jahmyr Gibbs"),
+      { slug: "jamarr-chase", source: "publisher_rss", identifier: "Ja'Marr Chase" },
+      { slug: "jamarr-chase", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Ja%27Marr+Chase%22") },
+      ...trending("jamarr-chase", "Ja'Marr Chase"),
+      ...news("jaxon-smith-njigba", "Jaxon Smith-Njigba"),
       ...executive("jeff-bezos", "Jeff Bezos", "AMZN"),
       ...executive("jensen-huang", "Jensen Huang", "NVDA"),
+      ...news("josh-allen", "Josh Allen"),
+      ...streamer("jynxzi", "Jynxzi", "jynxzi"),
       // Phase 10: a creator whose primary platform is Twitch, and an athlete on
       // a weekly schedule — two data shapes the first two subjects do not have.
       { slug: "kai-cenat", source: "publisher_rss", identifier: "Kai Cenat" },
@@ -305,8 +325,10 @@ describe("the registry", () => {
       { slug: "kai-cenat", source: "twitch", identifier: "kaicenat" },
       ...trending("kai-cenat", "Kai Cenat"),
       ...news("kendrick-lamar", "Kendrick Lamar"),
+      ...news("lamar-jackson", "Lamar Jackson"),
       ...executive("larry-ellison", "Larry Ellison", "ORCL"),
       ...executive("larry-page", "Larry Page", "GOOGL"),
+      ...news("lebron-james", "LeBron James"),
       ...executive("mark-zuckerberg", "Mark Zuckerberg", "META"),
       ...executive("michael-dell", "Michael Dell", "DELL"),
       { slug: "mrbeast", source: "publisher_rss", identifier: "MrBeast" },
@@ -319,6 +341,9 @@ describe("the registry", () => {
       { slug: "patrick-mahomes", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Patrick+Mahomes%22") },
       ...trending("patrick-mahomes", "Patrick Mahomes"),
       ...executive("sergey-brin", "Sergey Brin", "GOOGL"),
+      ...news("shai-gilgeous-alexander", "Shai Gilgeous-Alexander"),
+      ...news("stephen-curry", "Stephen Curry"),
+      ...news("victor-wembanyama", "Victor Wembanyama"),
       ...executive("warren-buffett", "Warren Buffett", "BRK.B"),
     ]);
   });
@@ -416,6 +441,10 @@ describe("the registry", () => {
       "apisports.game_interceptions",
       "apisports.game_passing_yards",
       "apisports.game_rating",
+      // 2026-10-09: the receivers' and backs' per-game lines.
+      "apisports.game_receiving_yards",
+      "apisports.game_receptions",
+      "apisports.game_rushing_yards",
       "twitch.clips_per_stream_hour",
       "twitch.follower_count",
       "twitch.session_peak_viewers",

@@ -51,24 +51,37 @@ describe("the flag", () => {
     await database.exec("delete from public.people where slug = 'nobody-asked'");
   });
 
-  it("is on for the sixteen, and for exactly the sixteen", async () => {
+  it("is on for the twenty-nine, and for exactly the twenty-nine", async () => {
     const rows = await database.rows<{ slug: string }>("select slug from public.people where is_discoverable order by slug");
     expect(rows.map((r) => r.slug)).toEqual([
       "adin-ross",
       "anthony-baptiste",
+      "asmongold",
+      "bijan-robinson",
+      "caedrel",
       "drake",
       "elon-musk",
+      "jahmyr-gibbs",
+      "jamarr-chase",
+      "jaxon-smith-njigba",
       "jeff-bezos",
       "jensen-huang",
+      "josh-allen",
+      "jynxzi",
       "kai-cenat",
       "kendrick-lamar",
+      "lamar-jackson",
       "larry-ellison",
       "larry-page",
+      "lebron-james",
       "mark-zuckerberg",
       "michael-dell",
       "mrbeast",
       "patrick-mahomes",
       "sergey-brin",
+      "shai-gilgeous-alexander",
+      "stephen-curry",
+      "victor-wembanyama",
       "warren-buffett",
     ]);
     const [{ n }] = await database.rows<{ n: number }>("select count(*)::int as n from public.people where is_active and not is_discoverable");
@@ -136,7 +149,8 @@ describe("finding a person", () => {
 
   it("matches a partial from the start of a name, a word inside it, or anywhere at all", async () => {
     expect(await names("kend")).toEqual(["Kendrick Lamar"]);
-    expect(await names("lamar")).toEqual(["Kendrick Lamar"]);
+    // A prefix match (Lamar Jackson) ranks above a word match (Kendrick Lamar) since the 2026-10-09 roster expansion.
+    expect(await names("lamar")).toEqual(["Lamar Jackson", "Kendrick Lamar"]);
     expect(await names("beast")).toEqual(["MrBeast"]);
   });
 
@@ -151,10 +165,13 @@ describe("finding a person", () => {
   it("ranks the better match first: the exact name, then a prefix, then a word, then anywhere", async () => {
     const rows = await search("la");
     expect(rows.map((r) => [r.display_name, r.match_rank])).toEqual([
+      ["Lamar Jackson", 1],
       ["Larry Ellison", 1],
       ["Larry Page", 1],
       ["Kendrick Lamar", 2],
+      ["Caedrel", 3],
       ["Patrick Mahomes", 3],
+      ["Jynxzi", 5],
     ]);
     const [drake] = await search("drake");
     expect(drake.match_rank).toBe(0);
