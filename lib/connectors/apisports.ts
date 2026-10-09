@@ -700,6 +700,9 @@ export const APISPORTS_GAME_KIND = "game_result";
 export interface GameLine {
   passing_yards?: number;
   passing_touchdowns?: number;
+  rushing_yards?: number;
+  receptions?: number;
+  receiving_yards?: number;
 }
 
 /**
@@ -715,7 +718,25 @@ const HEADLINE_PHRASE: Record<keyof GameLine, (value: number) => string | null> 
   // A zero-touchdown game is a real line, and saying "and 0 touchdowns" is
   // worse than saying nothing: the clause is for what happened.
   passing_touchdowns: (value) => (value > 0 ? `${round(value)} ${round(value) === 1 ? "touchdown" : "touchdowns"}` : null),
+  // The backs' and receivers' lines (2026-10-09 roster expansion), each a
+  // clause of its own so a quarterback who also runs reads "threw for 250
+  // yards, 2 touchdowns and rushed for 60 yards".
+  rushing_yards: (value) => (value > 0 ? `rushed for ${round(value)} ${round(value) === 1 ? "yard" : "yards"}` : null),
+  receptions: (value) => (value > 0 ? `caught ${round(value)} ${round(value) === 1 ? "pass" : "passes"}` : null),
+  receiving_yards: (value) => (value > 0 ? `had ${round(value)} receiving ${round(value) === 1 ? "yard" : "yards"}` : null),
 };
+
+/** The line's clauses in the fixed order above, joined as English joins a list: two with "and", more with commas and a final "and". */
+export function headlineClauses(line: GameLine | null | undefined): string {
+  const clauses = (Object.keys(HEADLINE_PHRASE) as Array<keyof GameLine>)
+    .map((key) => {
+      const value = line?.[key];
+      return typeof value === "number" && Number.isFinite(value) ? HEADLINE_PHRASE[key](value) : null;
+    })
+    .filter((clause): clause is string => clause !== null);
+  if (clauses.length <= 2) return clauses.join(" and ");
+  return `${clauses.slice(0, -1).join(", ")} and ${clauses[clauses.length - 1]}`;
+}
 
 function round(value: number): number {
   return Math.round(value);
@@ -797,12 +818,7 @@ export function gameSignal(person: { display_name: string }, game: ApiSportsGame
 
   // "threw for 382 yards and 3 touchdowns", in a fixed order so the sentence
   // reads the same every week.
-  const clauses = (Object.keys(HEADLINE_PHRASE) as Array<keyof GameLine>)
-    .map((key) => {
-      const value = line?.[key];
-      return typeof value === "number" && Number.isFinite(value) ? HEADLINE_PHRASE[key](value) : null;
-    })
-    .filter((clause): clause is string => clause !== null);
+  const clauseText = headlineClauses(line);
 
   // The result leads and the line follows, joined by a semicolon rather than
   // by "as". Putting the player first would read better — "Patrick Mahomes
@@ -810,7 +826,7 @@ export function gameSignal(person: { display_name: string }, game: ApiSportsGame
   // Colts" — and that article is a grammar guess about a team name this
   // connector reads as data. NFL names happen to take one; a host that ever
   // carries "Real Madrid" would not. Two clauses, no guess.
-  const sentence = clauses.length > 0 ? `${outcome}; ${person.display_name} ${clauses.join(" and ")}.` : `${outcome}.`;
+  const sentence = clauseText ? `${outcome}; ${person.display_name} ${clauseText}.` : `${outcome}.`;
   const { at, basis } = gameEndedAt(game, observedAt, config);
 
   return {

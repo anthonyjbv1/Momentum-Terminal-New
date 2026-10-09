@@ -289,8 +289,8 @@ describe("the registry", () => {
     // 2026-10-09 roster expansion: a streamer reads the two news doors, Twitch
     // by login and the chart; an athlete the two news doors and the chart. The
     // API-Sports mappings went live with the ids the platform answered
-    // (20261009140000); Jaxon Smith-Njigba's is still inactive, so it does
-    // not appear here. Caedrel's youtube mapping is channel statistics only.
+    // (20261009140000, 20261009150000). The two youtube mappings (Asmongold's
+    // main channel, Caedrel) are channel statistics only, commentary off.
     const streamer = (slug: string, name: string, login: string) => [
       { slug, source: "publisher_rss", identifier: name },
       { slug, source: "rss", identifier: expect.stringContaining(`news.google.com/rss/search?q=%22${name.replace(/ /g, "+")}%22`) },
@@ -300,7 +300,11 @@ describe("the registry", () => {
     expect(mappings).toEqual([
       ...news("adin-ross", "Adin Ross"),
       ...news("anthony-baptiste", "Anthony Baptiste"),
-      ...streamer("asmongold", "Asmongold", "zackrawrr"),
+      { slug: "asmongold", source: "publisher_rss", identifier: "Asmongold" },
+      { slug: "asmongold", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Asmongold%22") },
+      { slug: "asmongold", source: "twitch", identifier: "zackrawrr" },
+      { slug: "asmongold", source: "youtube", identifier: "UCQeRaTukNYft1_6AZPACnog" },
+      ...trending("asmongold", "Asmongold"),
       { slug: "bijan-robinson", source: "apisports", identifier: "24380" },
       ...news("bijan-robinson", "Bijan Robinson"),
       { slug: "caedrel", source: "publisher_rss", identifier: "Caedrel" },
@@ -321,6 +325,7 @@ describe("the registry", () => {
       { slug: "jamarr-chase", source: "publisher_rss", identifier: "Ja'Marr Chase" },
       { slug: "jamarr-chase", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Ja%27Marr+Chase%22") },
       ...trending("jamarr-chase", "Ja'Marr Chase"),
+      { slug: "jaxon-smith-njigba", source: "apisports", identifier: "14255" },
       ...news("jaxon-smith-njigba", "Jaxon Smith-Njigba"),
       ...executive("jeff-bezos", "Jeff Bezos", "AMZN"),
       ...executive("jensen-huang", "Jensen Huang", "NVDA"),
@@ -517,8 +522,8 @@ describe("observability", () => {
     `);
     const [health] = await database.rows<Record<string, unknown>>("select * from public.source_health where name = 'youtube'");
     expect(health).toMatchObject({ name: "youtube", last_error: "quota", last_skip_reason: "inactive: YOUTUBE_API_KEY is not set" });
-    // Two people on the youtube source since 2026-10-09: MrBeast and Caedrel.
-    expect([health.people_mapped, health.polls_24h, health.errors_24h, health.signals_24h].map(Number)).toEqual([2, 3, 1, 3]);
+    // Three people on the youtube source since 2026-10-09: MrBeast, Asmongold and Caedrel.
+    expect([health.people_mapped, health.polls_24h, health.errors_24h, health.signals_24h].map(Number)).toEqual([3, 3, 1, 3]);
     // The Phase 8 counters: what the trailing day dropped as blocked and collapsed as duplicates.
     expect([health.blocked_24h, health.collapsed_24h].map(Number)).toEqual([1, 6]);
     expect(Number(health.error_rate_24h)).toBeCloseTo(1 / 3, 4);

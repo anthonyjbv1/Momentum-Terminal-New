@@ -14,7 +14,7 @@ import {
   readGroupedStatistic,
   readStatistic,
   resetApiSportsStatusCache,
-  seasonFor, apiSportsPacing, resetApiSportsPacing } from "./apisports";
+  seasonFor, apiSportsPacing, resetApiSportsPacing, headlineClauses } from "./apisports";
 
 const NOW = new Date("2026-09-17T12:00:00.000Z");
 const person = makePerson({ slug: "patrick-mahomes", display_name: "Patrick Mahomes" });
@@ -765,5 +765,18 @@ describe("apisportsConnector", () => {
 
   it("refuses an empty player id", async () => {
     await expect(apisportsConnector.fetchMetrics?.(person, "  ", context(apisportsFetch()))).rejects.toThrow(/No API-Sports player id configured for patrick-mahomes/);
+  });
+});
+
+describe("headlineClauses", () => {
+  it("says a back's, a receiver's and a running quarterback's line in a fixed order, as English lists them", () => {
+    expect(headlineClauses({ passing_yards: 184, passing_touchdowns: 2 })).toBe("threw for 184 yards and 2 touchdowns");
+    expect(headlineClauses({ rushing_yards: 95, receiving_yards: 30 })).toBe("rushed for 95 yards and had 30 receiving yards");
+    expect(headlineClauses({ receptions: 8, receiving_yards: 120 })).toBe("caught 8 passes and had 120 receiving yards");
+    expect(headlineClauses({ passing_yards: 250, passing_touchdowns: 2, rushing_yards: 60 })).toBe("threw for 250 yards, 2 touchdowns and rushed for 60 yards");
+    expect(headlineClauses({ receptions: 1, receiving_yards: 1 })).toBe("caught 1 pass and had 1 receiving yard");
+    // A zero line is no clause: the sentence is the result alone.
+    expect(headlineClauses({ rushing_yards: 0, receptions: 0 })).toBe("");
+    expect(headlineClauses(null)).toBe("");
   });
 });

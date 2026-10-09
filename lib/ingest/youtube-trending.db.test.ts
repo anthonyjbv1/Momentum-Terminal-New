@@ -107,6 +107,8 @@ describe("the mappings", () => {
       drake: ["UCByOQJjav0CUDwxCk-jVNRQ", "UCQznUf1SjfDqx65hX3zRDiA"],
       // 2026-10-09: @caedrel resolved live through channels.list (643K).
       caedrel: ["UCOFiUtKui6-x4T-J7_DgCag"],
+      // Main channel verified by id ("Asmongold TV", @asmontv), clips by handle.
+      asmongold: ["UCQeRaTukNYft1_6AZPACnog", "UCMwJJL5FJFuTRT55ksbQ4GQ"],
     });
     // The singular key is gone (the connector reads a set) and every id is well formed.
     for (const row of rows) {
@@ -187,6 +189,7 @@ describe("the mappings", () => {
       // The roster expansion's pins: the seed gives Caedrel's row the singular
       // channel_id from his youtube mapping; this puts the set back.
       "20261009140000_roster_ids_resolved.sql",
+      "20261009150000_roster_ids_resolved_two.sql",
     ]) {
       await database.exec(readFileSync(join(__dirname, "..", "..", "supabase", "migrations", file), "utf8"));
     }
