@@ -476,6 +476,13 @@ export interface EngineConfig {
     minAbsChange: number;
     /** Most narratives written per tick. */
     maxPerTick: number;
+    /**
+     * GO_LIVE_NEUTRAL_ENABLED (2026-10-09): a person whose tick carries a
+     * neutral go-live gets the fixed template ("<Name> went live: <title>"),
+     * never a viewer count, never context beyond the title. Ships false;
+     * absent reads as false.
+     */
+    goLiveNeutral?: boolean;
   };
   /** Per-entity memory updates. */
   memory: {
@@ -670,7 +677,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     minRelativeChangeForLlm: 0.002,
     memoryCacheTtlMs: 60_000,
   },
-  narratives: { minAbsChange: 0.5, maxPerTick: 16 },
+  narratives: { minAbsChange: 0.5, maxPerTick: 16, goLiveNeutral: false },
   memory: { notableImpactThreshold: 0.5, maxRecentEvents: 8, maxEventAgeDays: 30, llmSummaries: true },
   spread: {
     base: 0.5,
@@ -797,6 +804,8 @@ export interface EngineEnvOverrides {
    * it off.
    */
   companyNewsTuneEnabled?: string | undefined;
+  /** GO_LIVE_NEUTRAL_ENABLED: the neutral go-live (narratives.goLiveNeutral, default false). Only the exact string "true" turns it on. */
+  goLiveNeutralEnabled?: string | undefined;
 }
 
 /** A strictly positive integer from a raw environment string, or null. */
@@ -832,6 +841,7 @@ export function engineConfigFromEnv(env: EngineEnvOverrides, base: EngineConfig 
   if (parseExactTrue(env.signalQualityEnabled)) overrides.signalQuality = { ...base.signalQuality, enabled: true };
   if (parseExactTrue(env.newsVolumeTuneEnabled)) overrides.newsVolume = { ...base.newsVolume, enabled: true };
   if (parseExactTrue(env.companyNewsTuneEnabled)) overrides.companyNewsVolume = { ...base.companyNewsVolume, enabled: true };
+  if (parseExactTrue(env.goLiveNeutralEnabled)) overrides.narratives = { ...base.narratives, goLiveNeutral: true };
   const volumeReference = parsePositiveNumber(env.volumeReference);
   // withEngineConfig merges ONE level deep, so a nested section has to be
   // handed over whole: `{ volume: { referenceSignalsPerDay } }` alone would
@@ -865,6 +875,9 @@ export function describeEngineOverrides(config: EngineConfig, base: EngineConfig
   }
   if (config.newsVolume.enabled !== base.newsVolume.enabled) {
     out.push(`newsVolume.enabled = ${config.newsVolume.enabled} (default ${base.newsVolume.enabled})`);
+  }
+  if ((config.narratives.goLiveNeutral ?? false) !== (base.narratives.goLiveNeutral ?? false)) {
+    out.push(`narratives.goLiveNeutral = ${config.narratives.goLiveNeutral ?? false} (default ${base.narratives.goLiveNeutral ?? false})`);
   }
   if (config.companyNewsVolume.enabled !== base.companyNewsVolume.enabled) {
     out.push(`companyNewsVolume.enabled = ${config.companyNewsVolume.enabled} (default ${base.companyNewsVolume.enabled})`);

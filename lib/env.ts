@@ -193,6 +193,7 @@ export function getEngineEnvOverrides(): {
   newsVolumeTuneEnabled: string | undefined;
   companyNewsTuneEnabled: string | undefined;
   googleNewsFreshEnabled: string | undefined;
+  goLiveNeutralEnabled: string | undefined;
 } {
   return {
     tradingMinPopulatedWindows: process.env.ENGINE_TRADING_MIN_POPULATED_WINDOWS,
@@ -204,6 +205,7 @@ export function getEngineEnvOverrides(): {
     newsVolumeTuneEnabled: process.env.NEWS_VOLUME_TUNE_ENABLED,
     companyNewsTuneEnabled: process.env.COMPANY_NEWS_TUNE_ENABLED,
     googleNewsFreshEnabled: process.env.GOOGLE_NEWS_FRESH_ENABLED,
+    goLiveNeutralEnabled: process.env.GO_LIVE_NEUTRAL_ENABLED,
   };
 }
 
@@ -246,6 +248,21 @@ export function isCompanyNewsTuneEnabled(): boolean {
  * metric and the signals read the same feed, so both change together; the
  * metric's baseline re-forms from the new feed (see the README).
  */
+/**
+ * GO_LIVE_NEUTRAL_ENABLED (2026-10-09): going live is a neutral event. At
+ * stream start Twitch reports 0 viewers until its counter refreshes (about
+ * four minutes), and the Engine read that as a collapse: Kai Cenat's record
+ * stream opened at −1.10, the 10-09 stream at −0.78 with a "streamed to zero
+ * viewers" narrative. On: the go-live signal is a fixed line with no viewer
+ * count and scores 0; no viewer-based moment is judged until the counter
+ * has reported a non-zero value and the session has its minimum samples;
+ * the go-live narrative is the fixed template. Exactly "true" turns it on;
+ * it ships unset, which is off, and off everything reads as before.
+ */
+export function isGoLiveNeutralEnabled(): boolean {
+  return process.env.GO_LIVE_NEUTRAL_ENABLED?.trim() === "true";
+}
+
 export function isGoogleNewsFreshEnabled(): boolean {
   return process.env.GOOGLE_NEWS_FRESH_ENABLED?.trim() === "true";
 }

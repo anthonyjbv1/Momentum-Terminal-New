@@ -6,7 +6,7 @@ import type { DataConnector, LiveStream } from "@/lib/connectors/types";
 import type { Json } from "@/types/database";
 
 import { LIVE_QUALITY_DEFAULTS, type LiveQualityRules, type LiveSession } from "./rules";
-import { runLiveMode, type LiveLogLine } from "./runner";
+import { runLiveMode, type LiveLogLine, viewerGate } from "./runner";
 import { createMemoryLiveStore, type MemoryLiveStore } from "./store";
 
 /**
@@ -394,5 +394,68 @@ describe("live mode — what it leaves alone", () => {
     expect(summary.sources[0]).toMatchObject({ sessionsClosed: 1 });
     expect(gone.sessions[0]).toMatchObject({ personId: "p-kai", endedAt: T0 });
     expect(gone.ingest.signals).toEqual([]);
+  });
+});
+
+describe("live mode — the neutral go-live's viewer gate (GO_LIVE_NEUTRAL_ENABLED)", () => {
+  // Kai Cenat's record stream, 2026-10-01, as the live ledger sampled it: the
+  // counter read 0 at the first check and 62,192 two minutes later.
+  const KAI_RECORD = [0, 62_192, 62_192, 398_044, 398_044, 568_391, 568_391, 613_694, 613_694, 688_053, 688_053, 688_053, 659_007, 659_007, 666_190, 666_190, 679_321, 679_321, 679_321, 679_321];
+  const withSwitch = async <T,>(value: string | undefined, run: () => Promise<T>): Promise<T> => {
+    const saved = process.env.GO_LIVE_NEUTRAL_ENABLED;
+    if (value === undefined) delete process.env.GO_LIVE_NEUTRAL_ENABLED;
+    else process.env.GO_LIVE_NEUTRAL_ENABLED = value;
+    try {
+      return await run();
+    } finally {
+      if (saved === undefined) delete process.env.GO_LIVE_NEUTRAL_ENABLED;
+      else process.env.GO_LIVE_NEUTRAL_ENABLED = saved;
+    }
+  };
+  const replay = (levels: number[]) =>
+    async () => {
+      const w = world({ streams: new Map([["kaicenat", stream({ startedAt: T0, viewerCount: levels[0] })]]) });
+      const { store, fire } = setup(w);
+      for (let i = 0; i < levels.length; i += 1) {
+        w.streams.set("kaicenat", stream({ startedAt: T0, viewerCount: levels[i] }));
+        await fire(at(2 * i));
+      }
+      return { moments: store.ingest.signals.filter((s) => s.rawPayload.kind === "live_moment").map((s) => ({ headline: s.headline, payload: s.rawPayload, at: s.occurredAt })), session: store.sessions[0] };
+    };
+
+  it("is a pass-through with the switch off, and on it reads only positive counts and judges only once the session is ready", () => {
+    const cfg = { warmupMinutes: 20, sampleIntervalMinutes: 2 } as Parameters<typeof viewerGate>[3];
+    const prior = [{ viewerCount: 0 }, { viewerCount: null }, { viewerCount: 62_192 }, { viewerCount: 398_044 }];
+    const young = { sampleCount: 4, viewerPeak: 398_044 };
+    expect(viewerGate(young, prior, { viewerCount: 0 }, cfg, false)).toEqual({ samples: prior, ready: true, minSamples: 0 });
+    const on = viewerGate(young, prior, { viewerCount: 568_391 }, cfg, true);
+    expect(on.samples).toEqual([{ viewerCount: 62_192 }, { viewerCount: 398_044 }]);
+    expect(on.minSamples).toBe(10);
+    expect(on.ready).toBe(false);
+    // Ten samples in and the counter has reported: ready. The counter never having reported: not, however many samples.
+    expect(viewerGate({ sampleCount: 10, viewerPeak: 62_192 }, prior, { viewerCount: 1_200 }, cfg, true).ready).toBe(true);
+    expect(viewerGate({ sampleCount: 30, viewerPeak: 0 }, [{ viewerCount: 0 }], { viewerCount: 1_200 }, cfg, true).ready).toBe(false);
+    // A 0 or a missing reading is never judged, whatever the session has.
+    expect(viewerGate({ sampleCount: 30, viewerPeak: 50_000 }, prior, { viewerCount: 0 }, cfg, true).ready).toBe(false);
+    expect(viewerGate({ sampleCount: 30, viewerPeak: 50_000 }, prior, { viewerCount: null }, cfg, true).ready).toBe(false);
+  });
+
+  it("replays Kai Cenat's record stream identically on and off: nothing from the zero at the first check, the real surge at minute 20 either way", async () => {
+    const off = await withSwitch(undefined, replay(KAI_RECORD));
+    const on = await withSwitch("true", replay(KAI_RECORD));
+    expect(off.moments.map((m) => m.at)).toEqual([at(20)]);
+    expect(off.moments[0].payload).toMatchObject({ moment: "audience_surge", direction: 1 });
+    expect(on.moments).toEqual(off.moments);
+    expect(on.session.largestDropFraction).toEqual(off.session.largestDropFraction);
+    for (const moment of [...on.moments, ...off.moments]) expect(moment.headline).not.toMatch(/\b0 viewers|to 0\b/);
+  });
+
+  it("never scores a counter that reads 0 mid-stream: off it is recorded as a total collapse, on it is nothing", async () => {
+    const levels = [30_000, 32_000, 34_000, 35_000, 36_000, 36_500, 37_000, 37_000, 37_500, 38_000, 38_000, 38_500, 0, 39_000];
+    const off = await withSwitch(undefined, replay(levels));
+    const on = await withSwitch("true", replay(levels));
+    expect(off.session.largestDropFraction).toBe(-1);
+    expect(on.session.largestDropFraction).toBeNull();
+    expect(on.moments).toEqual([]);
   });
 });

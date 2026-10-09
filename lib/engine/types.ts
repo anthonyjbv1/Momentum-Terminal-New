@@ -292,6 +292,8 @@ export interface TickSummary {
     story?: StoryConfirmation;
     /** The news-volume tune's reading behind a news-volume firing's impact (variant C, 2026-10-02). */
     newsVolume?: NewsVolumeDetail;
+    /** Set on a neutral go-live (GO_LIVE_NEUTRAL_ENABLED): the stream title the narrative template quotes, and nothing else. */
+    goLiveTitle?: string;
     /** The Engine's one-sentence explanation from LLM reasoning, reused by narratives. */
     narrative?: string;
     /** The direction the narrative claims (Phase 31), checked against the Signals force before it is published. */

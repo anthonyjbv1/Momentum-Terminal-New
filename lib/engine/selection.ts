@@ -1,5 +1,6 @@
 import type { EngineConfig } from "@/lib/engine/config";
 import { isMetricSignal } from "@/lib/engine/sentiment/metric";
+import { isNeutralGoLive } from "@/lib/engine/sentiment/go-live";
 import { isPrescoredSignal } from "@/lib/engine/sentiment/prescored";
 import type { EngineSignal } from "@/lib/engine/types";
 import type { Json } from "@/types/database";
@@ -65,7 +66,7 @@ function kindOf(payload: Json | null): string | null {
 
 /** A signal the model never sees, so it costs the tick nothing: a metric, a baseline, or a prescored live moment (Phase 16). */
 export function isFreeSignal(signal: Pick<EngineSignal, "rawPayload">): boolean {
-  return isMetricSignal(signal.rawPayload) || kindOf(signal.rawPayload) === "baseline" || isPrescoredSignal(signal.rawPayload);
+  return isMetricSignal(signal.rawPayload) || kindOf(signal.rawPayload) === "baseline" || isPrescoredSignal(signal.rawPayload) || isNeutralGoLive(signal.rawPayload);
 }
 
 /** Newest first, then id, so a batch stamped with one timestamp is cut the same way every time. */

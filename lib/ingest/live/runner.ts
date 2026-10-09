@@ -1,6 +1,7 @@
 import { connectorRegistry, type ConnectorRegistry } from "@/lib/connectors/registry";
 import type { ConnectorContext, LiveCapability, LiveStatus, LiveStream, RawSignal } from "@/lib/connectors/types";
 import type { DataSource } from "@/types";
+import { isGoLiveNeutralEnabled } from "@/lib/env";
 import type { Json } from "@/types/database";
 
 import { metricSignal, observeMetric, readMetricConfigs, seriesReadFrom, type MetricConfigs } from "../metrics";
@@ -413,6 +414,29 @@ interface SampleInput {
 }
 
 /** One sample of one session: the clip window, the moments, the row, the session's aggregates. */
+/**
+ * The viewer gate (GO_LIVE_NEUTRAL_ENABLED). Off: every sample as before.
+ * On: the samples with a positive viewer count, and whether the audience
+ * rules may judge this sample at all: the current reading is positive and
+ * at least the session's minimum samples (the warm-up in samples, two at
+ * the least) have reported a positive count.
+ */
+export function viewerGate<S extends { viewerCount: number | null }>(
+  session: Pick<LiveSession, "sampleCount" | "viewerPeak">,
+  prior: S[],
+  current: { viewerCount: number | null },
+  cfg: LiveConfig,
+  enabled = isGoLiveNeutralEnabled(),
+): { samples: S[]; ready: boolean; minSamples: number } {
+  if (!enabled) return { samples: prior, ready: true, minSamples: 0 };
+  const samples = prior.filter((sample) => sample.viewerCount !== null && sample.viewerCount > 0);
+  const minSamples = Math.max(2, Math.ceil(cfg.warmupMinutes / Math.max(1, cfg.sampleIntervalMinutes)));
+  // The session, not the lookback window, says whether the counter has
+  // reported and whether the minimum samples are in.
+  const ready = (current.viewerCount ?? 0) > 0 && session.viewerPeak > 0 && session.sampleCount >= minSamples;
+  return { samples, ready, minSamples };
+}
+
 async function sampleSession(input: SampleInput): Promise<{ signalsCreated: number; requests: number; error: string | null }> {
   const { session, mapping, stream, cfg, source, capability, context, store, clock, log, now } = input;
   const started = clock();
@@ -438,25 +462,30 @@ async function sampleSession(input: SampleInput): Promise<{ signalsCreated: numb
   const lookbackMinutes = Math.max(cfg.deltaWindowMinutes, cfg.clipWindowMinutes, qualityLookback) + cfg.clipLagMinutes + cfg.sampleIntervalMinutes + 1;
   const prior = await store.listSamples(session.id, new Date(now.getTime() - lookbackMinutes * MINUTE_MS));
   const current = { sampledAt: now, viewerCount: stream.viewerCount };
+  // THE VIEWER GATE (GO_LIVE_NEUTRAL_ENABLED): a 0 or missing viewer reading
+  // is never scored, as a base or as a step. Audience moments are judged
+  // only once the counter has reported a non-zero value and the session has
+  // its minimum samples; the clips path reads the samples as before.
+  const gate = viewerGate(session, prior, current, cfg);
 
   const signals: RawSignal[] = [];
   let audience: LiveMoment | null;
   let burst: LiveMoment | null;
   let qualityLog: Record<string, unknown> | null = null;
   if (cfg.quality) {
-    const judged = await judgeWithQuality({ session, mapping, source, store, prior, current, clips, cfg, quality: cfg.quality, now });
+    const judged = await judgeWithQuality({ session, mapping, source, store, prior, audiencePrior: gate.samples, audienceReady: gate.ready, current, clips, cfg, quality: cfg.quality, now });
     audience = judged.audience;
     burst = judged.burst;
     qualityLog = judged.log;
   } else {
-    audience = audienceMoment(session, prior, current, cfg);
+    audience = gate.ready ? audienceMoment(session, gate.samples, current, cfg) : null;
     burst = clips ? clipMoment(session, prior, clips, now, cfg) : null;
   }
   if (audience) signals.push(liveMomentSignal(mapping.person, session, audience, now, source.name));
   if (burst) signals.push(liveMomentSignal(mapping.person, session, burst, now, source.name));
 
   let next = applySample(session, { now, stream, clips }, cfg);
-  const delta = audienceDelta(prior, current, cfg);
+  const delta = gate.ready ? audienceDelta(gate.samples, current, cfg) : null;
   if (delta && delta.fraction < 0 && (next.largestDropFraction === null || delta.fraction < next.largestDropFraction)) next = { ...next, largestDropFraction: round3(delta.fraction) };
   if (audience?.moment === "audience_surge") next = { ...next, lastSurgeAt: now };
   if (audience?.moment === "audience_drop") next = { ...next, lastDropAt: now };
@@ -523,13 +552,16 @@ async function judgeWithQuality(input: {
   source: DataSource;
   store: LiveStore;
   prior: Awaited<ReturnType<LiveStore["listSamples"]>>;
+  /** The samples the audience rules may read (the viewer gate's), and whether they may judge at all. */
+  audiencePrior: Awaited<ReturnType<LiveStore["listSamples"]>>;
+  audienceReady: boolean;
   current: { sampledAt: Date; viewerCount: number | null };
   clips: { from: Date; to: Date; count: number } | null;
   cfg: LiveConfig;
   quality: LiveQualityRules;
   now: Date;
 }): Promise<{ audience: LiveMoment | null; burst: LiveMoment | null; log: Record<string, unknown> }> {
-  const { session, mapping, source, store, prior, current, clips, cfg, quality, now } = input;
+  const { session, mapping, source, store, prior, audiencePrior, audienceReady, current, clips, cfg, quality, now } = input;
   const elapsed = minutesBetween(session.startedAt, now);
   const surgesPossible = elapsed >= quality.judgeFromMinutes;
   const burstsPossible = clips !== null && elapsed >= quality.burstMinSessionMinutes;
@@ -541,7 +573,7 @@ async function judgeWithQuality(input: {
     const viewers = await store.listShapeViewers({ personId: mapping.person.id, dataSourceId: source.id, excludeSessionId: session.id, fromMinutes: bucket.fromMinutes, toMinutes: bucket.toMinutes, sessions: quality.shapeSessions });
     shape = sessionShape(viewers, bucket, quality);
   }
-  const audience = qualitySurgeMoment(session, prior, current, { surgesSoFar: counts.audience_surge, shape }, cfg) ?? dropMoment(session, prior, current, cfg);
+  const audience = audienceReady ? (qualitySurgeMoment(session, audiencePrior, current, { surgesSoFar: counts.audience_surge, shape }, cfg) ?? dropMoment(session, audiencePrior, current, cfg)) : null;
 
   let usualPerHour: number | null = null;
   if (burstsPossible && counts.clip_burst < quality.maxBurstsPerSession) {

@@ -88,6 +88,11 @@ export function neutralNarrative(person: PersonSummary): string {
   return `${possessive(person.displayName)} momentum ${person.change > 0 ? "climbed" : "slipped"} on fresh signals.`;
 }
 
+/** The fixed go-live line (GO_LIVE_NEUTRAL_ENABLED): the name and the stream title, nothing else. */
+export function goLiveNarrative(person: Pick<PersonSummary, "displayName">, title: string): string {
+  return `${person.displayName} went live: ${title}`;
+}
+
 export function templateNarrative(person: PersonSummary, summary: TickSummary): string {
   const up = person.change > 0;
   const name = person.displayName;
@@ -207,7 +212,7 @@ export interface NarrativeBuild {
    * a sentence carrying a term of the grave-claim list is stored as the
    * neutral line and the original is logged here for review.
    */
-  replaced: Array<{ personId: string; reason: "direction" | "voice" | "grave_claim"; text: string; term?: string }>;
+  replaced: Array<{ personId: string; reason: "direction" | "voice" | "grave_claim" | "go_live"; text: string; term?: string }>;
 }
 
 export function buildNarrativesDetailed(summary: TickSummary, config: EngineConfig["narratives"], quality?: EngineConfig["signalQuality"]): NarrativeBuild {
@@ -230,6 +235,16 @@ export function buildNarrativesDetailed(summary: TickSummary, config: EngineConf
     }
     let useLlm = Boolean(llmNarrative) && signalsImpact !== 0;
     let text = useLlm ? (llmNarrative as string) : templateNarrative(person, summary);
+    // THE NEUTRAL GO-LIVE (GO_LIVE_NEUTRAL_ENABLED): the tick that carries a
+    // person's go-live says only that, in the fixed template: no viewer
+    // count, no context beyond the title. The model's sentence, if any, goes
+    // to the log.
+    const goLive = config.goLiveNeutral ? signalsFor(summary, person.slug).find((signal) => typeof signal.goLiveTitle === "string") : undefined;
+    if (goLive) {
+      if (useLlm) replaced.push({ personId: person.id, reason: "go_live", text });
+      text = goLiveNarrative(person, goLive.goLiveTitle as string);
+      useLlm = false;
+    }
     // THE INTERIM GRAVE-CLAIM GUARD (2026-10-09, until the allegation hold
     // ships): every sentence, the model's or the template's, is run through
     // the grave-claim list before it is stored. On a match the neutral line

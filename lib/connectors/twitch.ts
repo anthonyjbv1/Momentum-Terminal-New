@@ -1,4 +1,4 @@
-import { getTwitchCredentialsOrNull } from "@/lib/env";
+import { getTwitchCredentialsOrNull, isGoLiveNeutralEnabled } from "@/lib/env";
 
 import { ConnectorError, type ConnectorContext, type DataConnector, type LiveCapability, type LiveClipCount, type LiveStatus, type LiveStream, type MetricReading, type RawSignal } from "./types";
 
@@ -367,15 +367,41 @@ export function summariseArchive(entries: TwitchArchiveEntry[], now: Date, windo
 
 /** Signal kind for a live broadcast, so the Engine and the Feed can tell it from an article. */
 export const TWITCH_LIVE_KIND = "stream";
+/** The payload marker of a neutral go-live (GO_LIVE_NEUTRAL_ENABLED): scored at zero, never shown to the model. */
+export const GO_LIVE_NEUTRAL = "neutral";
 
 /**
  * The event for a broadcast: one per stream id, whichever of the hourly poll
  * and the live runner sees it first (they build the same key).
  */
-export function twitchLiveSignal(person: { display_name: string }, stream: LiveStream, now: Date): RawSignal {
+export function twitchLiveSignal(person: { display_name: string }, stream: LiveStream, now: Date, options: { neutral?: boolean } = {}): RawSignal {
+  const neutral = options.neutral ?? isGoLiveNeutralEnabled();
   const viewers = stream.viewerCount === null ? null : Math.round(stream.viewerCount);
   const audience = viewers === null ? "" : ` to ${viewers.toLocaleString("en-US")} viewers`;
   const playing = stream.category ? ` playing ${stream.category}` : "";
+  // THE NEUTRAL GO-LIVE (GO_LIVE_NEUTRAL_ENABLED): the fixed line, no viewer
+  // count (the counter reads 0 for the first minutes of a broadcast), and a
+  // payload the Engine scores at zero by design. The count is kept only
+  // once it is a reading, never a zero.
+  if (neutral) {
+    return {
+      headline: `${person.display_name} went live: ${stream.title}`,
+      occurredAt: stream.startedAt ?? now,
+      dedupeKey: `${TWITCH_SOURCE_NAME}:stream:${stream.id}`,
+      rawPayload: {
+        kind: TWITCH_LIVE_KIND,
+        go_live: GO_LIVE_NEUTRAL,
+        source: TWITCH_SOURCE_NAME,
+        stream_id: stream.id,
+        channel: stream.channel,
+        title: stream.title,
+        game: stream.category,
+        viewer_count: viewers !== null && viewers > 0 ? viewers : null,
+        started_at: stream.startedAt?.toISOString() ?? null,
+        observed_at: now.toISOString(),
+      },
+    };
+  }
   return {
     headline: `${person.display_name} is live on Twitch${playing}${audience}: "${stream.title}".`,
     occurredAt: stream.startedAt ?? now,

@@ -1,3 +1,4 @@
+import { neutralGoLiveTitle } from "@/lib/engine/sentiment/go-live";
 import { DEFAULT_ENGINE_CONFIG, type EngineConfig } from "@/lib/engine/config";
 import { deadlineAfter, type TickDeadline } from "@/lib/engine/deadline";
 import { convictionForce } from "@/lib/engine/forces/conviction";
@@ -388,6 +389,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       confidence: s.sentiment.confidence,
       direction: s.sentiment.direction,
       impact: round(s.impact, FORCE_DECIMALS),
+      ...(neutralGoLiveTitle(s.signal.rawPayload) !== null ? { goLiveTitle: neutralGoLiveTitle(s.signal.rawPayload) as string } : {}),
       ageHours: Math.round(s.ageHours * 10) / 10,
       freshness: Math.round(s.freshness * 1000) / 1000,
       volumeWeight: s.volumeWeight,

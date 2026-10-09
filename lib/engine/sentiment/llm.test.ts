@@ -480,3 +480,17 @@ describe("the companion scoring rule (decision 4, 2026-09-28)", () => {
     expect(log).not.toHaveBeenCalledWith("signal zeroed: grave claim without a reputable or second source", expect.anything());
   });
 });
+
+describe("the neutral go-live (GO_LIVE_NEUTRAL_ENABLED)", () => {
+  it("never sends a neutral go-live to the model and scores it at zero; the same stream event without the marker still goes to the model", async () => {
+    const complete = fakeComplete();
+    const { scorer } = makeScorer(complete);
+    const neutral = scored(await scorer.scoreSignal(signal("g1", "p-kai", "Kai Cenat went live: LEAVE ME ALONE", { kind: "stream", go_live: "neutral", stream_id: "320669987804", title: "LEAVE ME ALONE", viewer_count: null })));
+    expect(complete).not.toHaveBeenCalled();
+    expect(neutral).toMatchObject({ label: "neutral", direction: 0, confidence: 0, scorer: "prefilter", rationale: "go-live: neutral by design" });
+    expect(scorer.stats.prefiltered).toBe(1);
+    // Switch off, the line reads as it did on 10-09 and the model judges it, exactly as before.
+    await scorer.scoreSignal(signal("g2", "p-kai", 'Kai Cenat is live on Twitch playing Just Chatting to 0 viewers: "LEAVE ME ALONE".', { kind: "stream", stream_id: "320669987804", viewer_count: 0 }));
+    expect(complete).toHaveBeenCalled();
+  });
+});

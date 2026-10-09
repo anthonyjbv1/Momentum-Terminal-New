@@ -200,3 +200,13 @@ describe("engineConfigFromEnv", () => {
     expect(parsePositiveInteger("99999999999999999999")).toBeNull();
   });
 });
+
+describe("GO_LIVE_NEUTRAL_ENABLED", () => {
+  it("ships off, turns on only for the exact string true, and is listed among the overrides", () => {
+    expect(DEFAULT_ENGINE_CONFIG.narratives.goLiveNeutral).toBe(false);
+    for (const raw of [undefined, "", "TRUE", "1", "yes", "false"]) expect(engineConfigFromEnv({ goLiveNeutralEnabled: raw }).narratives.goLiveNeutral).toBe(false);
+    const on = engineConfigFromEnv({ goLiveNeutralEnabled: " true " });
+    expect(on.narratives).toEqual({ ...DEFAULT_ENGINE_CONFIG.narratives, goLiveNeutral: true });
+    expect(describeEngineOverrides(on)).toEqual(["narratives.goLiveNeutral = true (default false)"]);
+  });
+});

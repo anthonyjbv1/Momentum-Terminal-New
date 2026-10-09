@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { makePerson, makeSource } from "@/lib/__tests__/fixtures";
 
-import { parseTwitchDurationHours, resetTwitchTokenCache, summariseArchive, twitchConnector, type TwitchArchiveEntry } from "./twitch";
+import { parseTwitchDurationHours, resetTwitchTokenCache, summariseArchive, twitchConnector, type TwitchArchiveEntry, twitchLiveSignal } from "./twitch";
 
 const NOW = new Date("2026-09-15T12:00:00.000Z");
 const person = makePerson({ slug: "kai-cenat", display_name: "Kai Cenat" });
@@ -347,5 +347,63 @@ describe("twitchConnector.live (Phase 16)", () => {
     expect(signal.dedupeKey).toBe("twitch:stream:48211");
     expect(signal.headline).toBe('Kai Cenat is live on Twitch playing Just Chatting to 184,211 viewers: "MAFIATHON 3 DAY 9".');
     expect(signal.rawPayload).toMatchObject({ kind: "stream", stream_id: "48211", channel: "kaicenat", viewer_count: 184_211 });
+  });
+});
+
+describe("the neutral go-live (GO_LIVE_NEUTRAL_ENABLED)", () => {
+  const kai = { display_name: "Kai Cenat" };
+  // Kai Cenat's two go-lives as production observed them: the counter read 0
+  // at the first check, 42 and 26 seconds after the stream started, and the
+  // Engine scored the line as a collapse (−1.10 and −0.78).
+  const record = { id: "319414213079", broadcasterId: "641972806", channel: "kaicenat", title: "Reginald Travers LETS TALK", category: "Just Chatting", viewerCount: 0, startedAt: new Date("2026-10-01T03:02:56.000Z") };
+  const recordSeen = new Date("2026-10-01T03:03:38.499Z");
+  const tonight = { id: "320669987804", broadcasterId: "641972806", channel: "kaicenat", title: "LEAVE ME ALONE", category: "Just Chatting", viewerCount: 0, startedAt: new Date("2026-10-09T00:00:12.000Z") };
+  const tonightSeen = new Date("2026-10-09T00:00:38.419Z");
+
+  it("replays both go-lives as the fixed line with no viewer count, under the same key, scored at zero by design", () => {
+    for (const [stream, seen] of [[record, recordSeen], [tonight, tonightSeen]] as const) {
+      const signal = twitchLiveSignal(kai, stream, seen, { neutral: true });
+      expect(signal.headline).toBe(`Kai Cenat went live: ${stream.title}`);
+      expect(signal.headline).not.toMatch(/viewer|\b0\b/);
+      expect(signal.dedupeKey).toBe(`twitch:stream:${stream.id}`);
+      expect(signal.occurredAt).toEqual(stream.startedAt);
+      expect(signal.rawPayload).toEqual({
+        kind: "stream",
+        go_live: "neutral",
+        source: "twitch",
+        stream_id: stream.id,
+        channel: "kaicenat",
+        title: stream.title,
+        game: "Just Chatting",
+        viewer_count: null,
+        started_at: stream.startedAt.toISOString(),
+        observed_at: seen.toISOString(),
+      });
+    }
+  });
+
+  it("keeps a positive count in the payload once the counter has one, and still never says it in the line", () => {
+    const signal = twitchLiveSignal(kai, { ...tonight, viewerCount: 47_779 }, tonightSeen, { neutral: true });
+    expect(signal.headline).toBe("Kai Cenat went live: LEAVE ME ALONE");
+    expect(signal.rawPayload).toMatchObject({ viewer_count: 47_779, go_live: "neutral" });
+  });
+
+  it("off, and with the switch unset, is byte-identical to today's line and payload", () => {
+    const saved = process.env.GO_LIVE_NEUTRAL_ENABLED;
+    try {
+      delete process.env.GO_LIVE_NEUTRAL_ENABLED;
+      for (const [stream, seen] of [[record, recordSeen], [tonight, tonightSeen]] as const) {
+        const today = twitchLiveSignal(kai, stream, seen, { neutral: false });
+        expect(today.headline).toBe(`Kai Cenat is live on Twitch playing Just Chatting to 0 viewers: "${stream.title}".`);
+        expect(today.rawPayload).toMatchObject({ kind: "stream", viewer_count: 0 });
+        expect(today.rawPayload).not.toHaveProperty("go_live");
+        expect(twitchLiveSignal(kai, stream, seen)).toEqual(today);
+      }
+      process.env.GO_LIVE_NEUTRAL_ENABLED = "true";
+      expect(twitchLiveSignal(kai, tonight, tonightSeen).headline).toBe("Kai Cenat went live: LEAVE ME ALONE");
+    } finally {
+      if (saved === undefined) delete process.env.GO_LIVE_NEUTRAL_ENABLED;
+      else process.env.GO_LIVE_NEUTRAL_ENABLED = saved;
+    }
   });
 });

@@ -11,6 +11,7 @@ import type { Json } from "@/types/database";
 import { TickCallBudget, type DeferralReason } from "./budget";
 import { guardNarrative, sourceOf, zeroedGraveClaim } from "./grave-claims";
 import { metricScorer as defaultMetricScorer } from "./metric";
+import { isNeutralGoLive } from "./go-live";
 import { LIVE_MOMENT_KIND, prescoredScorer } from "./prescored";
 import { buildSentimentUserPrompt, sentimentPrompt, type SentimentPromptVersion } from "./prompts";
 import { rulesBasedScorer } from "./rules";
@@ -217,6 +218,12 @@ export class LLMScorer implements SentimentScorer {
     if (kind === "baseline") {
       this.stats.prefiltered += 1;
       return Promise.resolve({ label: "neutral", confidence: 0, direction: 0, rationale: "baseline signal: zero impact by design", scorer: "prefilter" });
+    }
+    // A neutral go-live (GO_LIVE_NEUTRAL_ENABLED): going live is an event,
+    // not a verdict; the counter's zero at stream start is never a collapse.
+    if (isNeutralGoLive(signal.rawPayload)) {
+      this.stats.prefiltered += 1;
+      return Promise.resolve({ label: "neutral", confidence: 0, direction: 0, rationale: "go-live: neutral by design", scorer: "prefilter" });
     }
     if (signal.headline.trim().length < 8) {
       this.stats.prefiltered += 1;

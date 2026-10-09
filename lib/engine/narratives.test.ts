@@ -239,3 +239,34 @@ describe("the direction check judges the salience-weighted Signals force (2026-0
     expect(replaced.rows[0].source).toBe("template");
   });
 });
+
+describe("the neutral go-live narrative (GO_LIVE_NEUTRAL_ENABLED)", () => {
+  const kai = person({ id: "kc", slug: "kai-cenat", displayName: "Kai Cenat", previousScore: 60, newScore: 60.8, change: 0.8, forces: { gravity: 0.02, signals: 0.78 }, signalsProcessed: 2 });
+  const tick: TickSummary = {
+    ...summary,
+    people: [kai],
+    signals: [
+      // The go-live itself, scored at zero, carrying the title and nothing else.
+      { id: "g1", personSlug: "kai-cenat", headline: "Kai Cenat went live: LEAVE ME ALONE", label: "neutral", confidence: 0, direction: 0, impact: 0, ageHours: 0, freshness: 1, scorer: "prefilter", goLiveTitle: "LEAVE ME ALONE" },
+      // A follower surge the same tick, with the model's sentence: the kind of context the go-live line must never carry.
+      { id: "f1", personSlug: "kai-cenat", headline: "Followers are piling onto Kai Cenat's channel", label: "positive", confidence: 1, direction: 1, impact: 0.78, ageHours: 0, freshness: 1, scorer: "llm", narrative: "Kai Cenat's momentum climbed as followers piled on while he streamed to zero viewers." },
+    ],
+  };
+
+  it("on, writes the fixed template: the name and the title, no viewer count, no context; the model's sentence goes to the log", () => {
+    const { rows, replaced } = buildNarrativesDetailed(tick, { ...DEFAULT_ENGINE_CONFIG.narratives, goLiveNeutral: true });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].text).toBe("Kai Cenat went live: LEAVE ME ALONE");
+    expect(rows[0].text).not.toMatch(/viewer|zero|follower/i);
+    expect(rows[0].source).toBe("template");
+    expect(replaced).toEqual([{ personId: "kc", reason: "go_live", text: "Kai Cenat's momentum climbed as followers piled on while he streamed to zero viewers." }]);
+  });
+
+  it("off (the default), is byte-identical to today: the model's sentence stands", () => {
+    const { rows, replaced } = buildNarrativesDetailed(tick, DEFAULT_ENGINE_CONFIG.narratives);
+    expect(rows[0].text).toBe("Kai Cenat's momentum climbed as followers piled on while he streamed to zero viewers.");
+    expect(rows[0].source).toBe("llm");
+    expect(replaced).toEqual([]);
+    expect(buildNarrativesDetailed(tick, { ...DEFAULT_ENGINE_CONFIG.narratives, goLiveNeutral: false })).toEqual(buildNarrativesDetailed(tick, DEFAULT_ENGINE_CONFIG.narratives));
+  });
+});
