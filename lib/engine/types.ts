@@ -1,3 +1,4 @@
+import type { AllegationFlag, AllegationHoldRecord } from "@/lib/engine/sentiment/allegations";
 import type { MoodWindowHistory } from "@/lib/engine/forces/market-mood";
 import type { DeferralReason } from "@/lib/engine/sentiment/budget";
 import type { SentimentResult } from "@/lib/engine/sentiment/types";
@@ -67,6 +68,8 @@ export interface ScoredSignal {
   story?: StoryConfirmation;
   /** Set on a news-volume firing while the tune is on (variant C, 2026-10-02): the reading behind the impact. */
   newsVolume?: NewsVolumeDetail;
+  /** The allegation hold's classification (2026-10-09): display and narrative only; the impact is untouched. */
+  allegation?: AllegationFlag;
 }
 
 import type { NewsVolumeContext, NewsVolumeDetail } from "./news-volume";
@@ -294,6 +297,8 @@ export interface TickSummary {
     newsVolume?: NewsVolumeDetail;
     /** Set on a neutral go-live (GO_LIVE_NEUTRAL_ENABLED): the stream title the narrative template quotes, and nothing else. */
     goLiveTitle?: string;
+    /** The allegation hold (2026-10-09): the story carries a serious-crime allegation; held unless a tier 1-2 publisher's. Narratives never mention it either way. */
+    allegation?: AllegationFlag;
     /** The Engine's one-sentence explanation from LLM reasoning, reused by narratives. */
     narrative?: string;
     /** The direction the narrative claims (Phase 31), checked against the Signals force before it is published. */
@@ -323,6 +328,8 @@ export interface TickPersistence {
   events: Array<{ personId: string; force: ForceName; impact: number; details: Record<string, unknown> }>;
   /** The story clusters this tick confirmed (Phase 31), for the story record. Empty while the switch is off. */
   stories: StoryClusterRecord[];
+  /** The allegation classifications this tick made (2026-10-09), for record_allegation_holds(). */
+  allegations: AllegationHoldRecord[];
 }
 
 export interface TickPersistenceResult {

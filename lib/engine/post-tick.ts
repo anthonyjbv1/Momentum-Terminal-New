@@ -66,7 +66,13 @@ export async function runPostTick(summary: TickSummary, deps: PostTickDeps): Pro
     const { rows, replaced } = buildNarrativesDetailed(summary, config.narratives, config.signalQuality);
     // Phase 31: a replaced sentence is a finding about the prompt, not an error; it is logged and the template is published.
     for (const entry of replaced) {
-      log(entry.reason === "grave_claim" ? `narrative withheld for review (grave-claim guard, term "${entry.term}") for ${entry.personId}: ${entry.text}` : `narrative replaced by the template for ${entry.personId} (${entry.reason}): ${entry.text}`);
+      log(
+      entry.reason === "grave_claim"
+        ? `narrative withheld for review (grave-claim guard, term "${entry.term}") for ${entry.personId}: ${entry.text}`
+        : entry.reason === "allegation"
+          ? `narrative withheld (allegation hold, ${entry.term}) for ${entry.personId}: ${entry.text}`
+          : `narrative replaced by the template for ${entry.personId} (${entry.reason}): ${entry.text}`,
+    );
     }
     result.narratives = await deps.narrativeStore.insert(rows);
   } catch (error) {
@@ -81,6 +87,10 @@ export async function runPostTick(summary: TickSummary, deps: PostTickDeps): Pro
   for (const signal of summary.signals) {
     const notable = Math.abs(signal.impact) >= config.memory.notableImpactThreshold || (signal.anomaly !== undefined && signal.anomaly !== "routine");
     if (!notable) continue;
+    // THE ALLEGATION HOLD (2026-10-09): an allegation story never enters the
+    // person's memory, held or lifted; the prompt's 59-term filter stays as
+    // the backstop for what is already there.
+    if (signal.allegation !== undefined) continue;
     const person = peopleBySlug.get(signal.personSlug);
     if (!person) continue;
     const events = eventsByPerson.get(person.id) ?? [];

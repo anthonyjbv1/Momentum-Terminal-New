@@ -83,6 +83,7 @@ For every signal return:
 - anomaly: "routine" (normal for this person), "notable" (worth a real move), or "anomalous" (out of pattern for this person; rare, a genuine surprise). Judge against the person's own baseline: a 2% net worth move is noise for Elon Musk but notable for Warren Buffett; a daily upload is routine for a creator, a record-breaking video is not. The person block gives today's date and dated recent events: an event weeks old is context, not the current picture, and does not make a similar event today routine.
 - salience: what the story says about THIS person's trajectory, whether or not they are its main subject. "relevant" when it carries information about their momentum even as a secondary party: funding a campaign is relevant for the donor, a company's news is relevant for the founder who runs it, and anything the person DID (a deal, a donation, a statement, a sale, a pledge, a filing) is relevant whatever dollar figure is attached. "wealth_ranking" when the only thing the story says about the person is that their net worth or their place in a wealth ranking changed and the change is a stock price moving: a richest-list update, an overtaking, a fortune rising or falling with shares. A funding round, an investment or a donation the person makes or leads is something they did, so it is "relevant", not "wealth_ranking", whatever the sum. "incidental" when the person is named without anything being said about them: a name in an attendee list, a passing comparison, an essay crediting several people generically. "unrelated" when the story is about a different person or thing that shares the name. Keep the label and confidence honest either way; salience is judged separately.
 - rationale: one short sentence.
+- allegation: whether the story carries an UNVERIFIED allegation of a serious crime about this person or a member of their family, whatever the story's stance on it. "sexual_abuse" for sexual abuse, assault, harassment or misconduct; "violence" for physical violence against a person; "minors" for any crime against a minor (grooming, exploitation, abuse of a child). A story that reports a denial, a lawsuit over the claim, or a reaction to it still carries the claim and takes the same label. A conviction or a charge filed by prosecutors is still labelled: the label is about what the story carries, not whether it is proven. "none" for everything else, including a person's own crime-free legal disputes, an arrest for a minor offence, and claims about an unrelated third party. Score the story exactly as you would without this label.
 
 Duplicate or overlapping headlines must not be double counted: give the strongest one its due and mark the rest routine with low confidence. Baseline or status-only signals that report a number without a change are neutral.
 
@@ -91,7 +92,7 @@ Also write "narrative": one sentence, at most 30 words, as an analyst's note for
 And "narrative_direction": "up" if the day's news on balance strengthens the person's standing, "down" if it weakens it, "flat" if it does neither. It must agree with the net of the labels above.
 
 Respond with a single JSON object and nothing else, shaped exactly like:
-{"signals":[{"id":"...","label":"positive","confidence":0.8,"direction":1,"anomaly":"notable","salience":"relevant","rationale":"..."}],"narrative":"...","narrative_direction":"up"}`;
+{"signals":[{"id":"...","label":"positive","confidence":0.8,"direction":1,"anomaly":"notable","salience":"relevant","rationale":"...","allegation":"none"}],"narrative":"...","narrative_direction":"up"}`;
 
 export const SENTIMENT_RESPONSE_SCHEMA_V2: LLMJsonSchema = {
   type: "object",
@@ -103,7 +104,7 @@ export const SENTIMENT_RESPONSE_SCHEMA_V2: LLMJsonSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["id", "label", "confidence", "direction", "anomaly", "salience", "rationale"],
+        required: ["id", "label", "confidence", "direction", "anomaly", "salience", "rationale", "allegation"],
         properties: {
           id: { type: "string" },
           label: { type: "string", enum: ["positive", "negative", "neutral"] },
@@ -112,6 +113,7 @@ export const SENTIMENT_RESPONSE_SCHEMA_V2: LLMJsonSchema = {
           anomaly: { type: "string", enum: ["routine", "notable", "anomalous"] },
           salience: { type: "string", enum: ["relevant", "wealth_ranking", "incidental", "unrelated"] },
           rationale: { type: "string" },
+          allegation: { type: "string", enum: ["none", "sexual_abuse", "violence", "minors"] },
         },
       },
     },

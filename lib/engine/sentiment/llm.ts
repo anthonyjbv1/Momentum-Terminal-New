@@ -101,6 +101,7 @@ interface ParsedSignalAssessment {
   anomaly: SentimentAnomaly;
   /** Version 2 only; absent from a version-1 answer. */
   salience?: SentimentSalience;
+  allegation?: SentimentResult["allegation"];
   rationale: string;
 }
 
@@ -113,6 +114,7 @@ interface ParsedResponse {
 
 const LABELS = new Set(["positive", "negative", "neutral"]);
 const ANOMALIES = new Set(["routine", "notable", "anomalous"]);
+const ALLEGATIONS = new Set(["none", "sexual_abuse", "violence", "minors"]);
 const SALIENCES = new Set(["relevant", "wealth_ranking", "incidental", "unrelated"]);
 const DIRECTIONS = new Set(["up", "down", "flat"]);
 
@@ -434,6 +436,8 @@ export class LLMScorer implements SentimentScorer {
       // Version 2 fields only. A version-2 answer that leaves salience out is
       // read as relevant: the absence of a label must never zero a signal.
       ...(this.promptVersion === 2 ? { salience: assessment.salience ?? "relevant" } : {}),
+      // The allegation label (2026-10-09, version 2): absent reads as none; the terms backstop still runs in the tick.
+      ...(this.promptVersion === 2 ? { allegation: assessment.allegation ?? "none" } : {}),
       ...(this.promptVersion === 2 && parsed.narrativeDirection ? { narrativeDirection: parsed.narrativeDirection } : {}),
     };
   }
@@ -450,12 +454,14 @@ export class LLMScorer implements SentimentScorer {
       const confidence = typeof e.confidence === "number" && Number.isFinite(e.confidence) ? clamp01(e.confidence) : 0.5;
       const anomaly = typeof e.anomaly === "string" && ANOMALIES.has(e.anomaly) ? (e.anomaly as SentimentAnomaly) : "notable";
       const salience = typeof e.salience === "string" && SALIENCES.has(e.salience) ? (e.salience as SentimentSalience) : undefined;
+      const allegation = typeof e.allegation === "string" && ALLEGATIONS.has(e.allegation) ? (e.allegation as NonNullable<SentimentResult["allegation"]>) : undefined;
       signals.push({
         id: e.id,
         label: e.label as SentimentResult["label"],
         confidence,
         anomaly,
         ...(salience ? { salience } : {}),
+        ...(allegation ? { allegation } : {}),
         rationale: typeof e.rationale === "string" ? e.rationale.slice(0, 300) : "",
       });
     }

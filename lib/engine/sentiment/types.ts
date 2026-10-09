@@ -39,6 +39,14 @@ export interface SentimentResult {
   narrative?: string;
   /** The direction the narrative claims (Phase 31, version 2): checked against the Signals force before the sentence is published. */
   narrativeDirection?: NarrativeDirection;
+  /**
+   * THE ALLEGATION LABEL (2026-10-09, version 2 only): whether the story is
+   * an unverified allegation of a serious crime about the person or their
+   * family, by category, or "none". Display and narrative only: the Engine
+   * scores the story exactly as before; the label decides what the platform
+   * shows and says (lib/engine/sentiment/allegations.ts).
+   */
+  allegation?: "none" | "sexual_abuse" | "violence" | "minors";
   /** Which scorer produced the result: "rules", "llm", "prefilter", "rules-fallback". */
   scorer?: string;
 }

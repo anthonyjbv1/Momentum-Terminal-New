@@ -1,3 +1,4 @@
+import { allegationHoldRecord, classifyAllegation } from "@/lib/engine/sentiment/allegations";
 import { neutralGoLiveTitle } from "@/lib/engine/sentiment/go-live";
 import { DEFAULT_ENGINE_CONFIG, type EngineConfig } from "@/lib/engine/config";
 import { deadlineAfter, type TickDeadline } from "@/lib/engine/deadline";
@@ -188,6 +189,14 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     const volume = volumeWeight(context.signalVolumeByPerson.get(person.id), config.signals.volume);
     const quality = config.signalQuality.enabled ? config.signalQuality : undefined;
     let scoredSignals = scoreSignals(signalsByPerson.get(person.id) ?? [], sentiments, config.signals, startedAt, volume.weight, quality);
+    // THE ALLEGATION HOLD (2026-10-09): each story's classification, the
+    // model's label or the 59-term backstop, and whether it displays. The
+    // impact is not touched; the flag rides along for the record, the
+    // narrative and the memory.
+    scoredSignals = scoredSignals.map((s) => {
+      const flag = classifyAllegation(s.signal, s.sentiment);
+      return flag ? { ...s, allegation: flag } : s;
+    });
     // Phase 31: a copy of a story already scored (recently, or by a stronger
     // copy in this tick) contributes a bounded confirmation, never the full
     // impact again. Off, this is not run and nothing is loaded for it.
@@ -398,6 +407,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       anomaly: s.sentiment.anomaly,
       ...(s.sentiment.salience ? { salience: s.sentiment.salience } : {}),
       ...(s.salienceWeight !== undefined ? { salienceWeight: s.salienceWeight } : {}),
+      ...(s.allegation !== undefined ? { allegation: s.allegation } : {}),
       ...(s.story ? { story: s.story } : {}),
       ...(s.newsVolume ? { newsVolume: s.newsVolume } : {}),
       narrative: s.sentiment.narrative,
@@ -430,6 +440,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     ),
 
     stories: partial.flatMap((p) => storyRecords(p.person.id, p.storyClusters)),
+    allegations: partial.flatMap((p) => p.scoredSignals.flatMap((s) => (s.allegation ? [allegationHoldRecord(s.signal.id, s.allegation)] : []))),
   };
 
   const applied = await store.applyTick(persistence);

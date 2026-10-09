@@ -270,3 +270,30 @@ describe("the neutral go-live narrative (GO_LIVE_NEUTRAL_ENABLED)", () => {
     expect(buildNarrativesDetailed(tick, { ...DEFAULT_ENGINE_CONFIG.narratives, goLiveNeutral: false })).toEqual(buildNarrativesDetailed(tick, DEFAULT_ENGINE_CONFIG.narratives));
   });
 });
+
+describe("the allegation hold in narratives (2026-10-09)", () => {
+  const flag = { category: "minors" as const, method: "model" as const, publisherDomain: "usatoday.com", publisherTier: 2, qualifying: true, held: false };
+  const kai = person({ id: "kc", slug: "kai-cenat", displayName: "Kai Cenat", previousScore: 60, newScore: 59.3, change: -0.7, forces: { gravity: 0.02, signals: -0.72 }, signalsProcessed: 1 });
+  const tick: TickSummary = {
+    ...summary,
+    people: [kai],
+    signals: [
+      // The qualifying story: a tier 2 publisher, so the claim is LIFTED and the card displays.
+      { id: "u1", personSlug: "kai-cenat", headline: "Popular streamer Kai Cenat responds to abuse allegations: 'I'm suing you, bro!'", label: "negative", confidence: 0.6, direction: -1, impact: -0.72, ageHours: 1, freshness: 1, scorer: "llm", anomaly: "notable", allegation: flag, narrative: "Kai Cenat's standing slipped as USA Today reported the grooming allegation against him and his threat to sue." },
+    ],
+  };
+
+  it("never states an allegation in the Engine's own voice, even when the claim is lifted: the neutral line, the model's sentence to the log", () => {
+    const { rows, replaced } = buildNarrativesDetailed(tick, DEFAULT_ENGINE_CONFIG.narratives, { ...DEFAULT_ENGINE_CONFIG.signalQuality, enabled: true });
+    expect(rows[0].text).toBe("Kai Cenat's momentum slipped on fresh signals.");
+    expect(rows[0].text).not.toMatch(/allegation|grooming|abuse|sue/i);
+    expect(rows[0].source).toBe("template");
+    expect(replaced).toEqual([{ personId: "kc", reason: "allegation", term: "minors", text: "Kai Cenat's standing slipped as USA Today reported the grooming allegation against him and his threat to sue." }]);
+  });
+
+  it("holds the template too: with no model sentence the headline is not quoted", () => {
+    const silent: TickSummary = { ...tick, signals: [{ ...tick.signals[0], narrative: undefined, scorer: "rules" }] };
+    const { rows } = buildNarrativesDetailed(silent, DEFAULT_ENGINE_CONFIG.narratives);
+    expect(rows[0].text).toBe("Kai Cenat's momentum slipped on fresh signals.");
+  });
+});

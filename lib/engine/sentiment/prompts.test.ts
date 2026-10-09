@@ -154,7 +154,9 @@ describe("the two prompt versions (Phase 31)", () => {
     expect(v2.systemPrompt).toContain("Never mention multiples, baselines, averages, comment volume or view counts.");
     expect(v2.systemPrompt).toContain('"narrative_direction"');
     expect(v2.schema.required).toEqual(["signals", "narrative", "narrative_direction"]);
-    expect(SENTIMENT_RESPONSE_SCHEMA_V2.properties).toMatchObject({ signals: { items: { required: ["id", "label", "confidence", "direction", "anomaly", "salience", "rationale"], properties: { salience: { enum: ["relevant", "wealth_ranking", "incidental", "unrelated"] } } } } });
+    // 2026-10-09: the allegation label, display and narrative only; the score is judged as before.
+    expect(SENTIMENT_RESPONSE_SCHEMA_V2.properties).toMatchObject({ signals: { items: { required: ["id", "label", "confidence", "direction", "anomaly", "salience", "rationale", "allegation"], properties: { salience: { enum: ["relevant", "wealth_ranking", "incidental", "unrelated"] }, allegation: { enum: ["none", "sexual_abuse", "violence", "minors"] } } } } });
+    expect(v2.systemPrompt).toContain("Score the story exactly as you would without this label.");
     // The fourth label (decided 2026-09-26): a rich-list change driven by a stock price, and what keeps a story relevant instead.
     expect(v2.systemPrompt).toContain('"wealth_ranking" when the only thing the story says about the person is that their net worth or their place in a wealth ranking changed');
     expect(v2.systemPrompt).toContain("anything the person DID (a deal, a donation, a statement, a sale, a pledge, a filing) is relevant");

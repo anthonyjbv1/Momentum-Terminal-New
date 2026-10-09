@@ -1,3 +1,4 @@
+import { allegationHoldsPayload } from "@/lib/engine/sentiment/allegations";
 import type { EngineConfig } from "@/lib/engine/config";
 import type { MoodWindowHistory } from "@/lib/engine/forces/market-mood";
 import { isFreeSignal } from "@/lib/engine/selection";
@@ -339,6 +340,13 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         const stories = await client.rpc("record_story_clusters", { p_clusters: storyRecordsPayload(tick.stories) as unknown as Json });
         if (stories.error) console.warn("[engine] record_story_clusters failed:", stories.error.message);
       }
+      // The allegation hold (2026-10-09): the tick's classifications, after
+      // the tick has committed; display only, so a failure is logged and the
+      // next tick that scores the story records it.
+      if (tick.allegations.length > 0) {
+        const holds = await client.rpc("record_allegation_holds", { p_rows: allegationHoldsPayload(tick.allegations) });
+        if (holds.error) console.warn("[engine] record_allegation_holds failed:", holds.error.message);
+      }
 
       const result = (data ?? {}) as Record<string, unknown>;
       return {
@@ -384,6 +392,8 @@ export interface MemoryEngineStore extends EngineStore {
   readonly scoreHistory: Array<{ personId: string; score: number; tickNumber: number; recordedAt: Date }>;
   readonly scoreEvents: Array<TickPersistence["events"][number] & { tickNumber: number }>;
   readonly processedSignals: TickPersistence["signals"];
+  /** The allegation classifications the ticks recorded (2026-10-09). */
+  readonly allegationHolds: TickPersistence["allegations"];
 }
 
 /**
@@ -419,6 +429,7 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
   const scoreHistory: MemoryEngineStore["scoreHistory"] = [];
   const scoreEvents: MemoryEngineStore["scoreEvents"] = [];
   const processedSignals: TickPersistence["signals"] = [];
+  const allegationHolds: TickPersistence["allegations"] = [];
   let lastTickNumber = seed.lastTickNumber ?? 0;
 
   return {
@@ -429,6 +440,7 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
     scoreHistory,
     scoreEvents,
     processedSignals,
+    allegationHolds,
 
     async loadTickContext(now, config) {
       const depthSince = now.getTime() - config.spread.depthWindowHours * 3600 * 1000;
@@ -574,6 +586,7 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
 
       const events = tick.events.filter((e) => e.impact !== 0);
       for (const event of events) scoreEvents.push({ ...event, tickNumber });
+      allegationHolds.push(...tick.allegations);
 
       return { tickNumber, peopleUpdated, signalsProcessed, scoreEvents: events.length };
     },

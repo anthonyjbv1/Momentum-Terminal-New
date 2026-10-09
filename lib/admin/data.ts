@@ -925,6 +925,26 @@ export interface AuditRow {
   details: Record<string, unknown>;
 }
 
+export interface AllegationReviewRow {
+  signalId: string;
+  personSlug: string;
+  personName: string;
+  headline: string;
+  occurredAt: string;
+  impact: number | null;
+  source: string | null;
+  publisherDomain: string | null;
+  tier: number | null;
+  category: string | null;
+  method: string | null;
+  qualifying: boolean;
+  held: boolean;
+  claimStatus: string | null;
+  hiddenAt: string | null;
+  hideReason: string | null;
+  voided: boolean;
+}
+
 export interface MarketReport {
   open: AlertRow[];
   closed: AlertRow[];
@@ -935,6 +955,8 @@ export interface MarketReport {
   tiers: TierSettingsRow[];
   /** The logged Engine parameters (2026-10-09): key, value as stored, when last set. */
   engineParameters: Array<{ key: string; value: string; updatedAt: string }>;
+  /** The allegation hold's review list (2026-10-09): every held, lifted or hidden item, newest first. */
+  allegations: AllegationReviewRow[];
   /** The detectors' thresholds, from platform_settings, name → value. */
   thresholds: Array<{ name: string; value: string; note: string }>;
   /** The house book, summed by category, all time and the trailing day. Integer cents; positive is a house gain. */
@@ -953,7 +975,7 @@ const HOUSE_ROW_CAP = 20_000;
 export async function readMarket(): Promise<MarketReport> {
   const client = await adminClient();
   const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const [open, closed, events, excluded, frozen, people, tiers, settings, house, audit, engineParameters] = await Promise.all([
+  const [open, closed, events, excluded, frozen, people, tiers, settings, house, audit, engineParameters, allegations] = await Promise.all([
     client.from("alerts").select("*").in("status", ["open", "reviewing"]).order("created_at", { ascending: false }).limit(ALERT_LIMIT),
     client.from("alerts").select("*").in("status", ["resolved", "dismissed"]).order("updated_at", { ascending: false }).limit(RECENT_LIMIT),
     client.from("surveillance_events").select("*").order("recorded_at", { ascending: false }).order("id", { ascending: false }).limit(RECENT_LIMIT),
@@ -969,8 +991,9 @@ export async function readMarket(): Promise<MarketReport> {
     client.from("house_ledger").select("category, amount_cents, recorded_at").order("recorded_at", { ascending: false }).limit(HOUSE_ROW_CAP),
     client.from("admin_audit_log").select("*").order("performed_at", { ascending: false }).order("id", { ascending: false }).limit(RECENT_LIMIT),
     client.from("engine_parameters").select("key, value, updated_at").order("key"),
+    client.from("allegation_review").select("*").order("occurred_at", { ascending: false }).limit(200),
   ]);
-  for (const [label, result] of Object.entries({ open, closed, events, excluded, frozen, people, tiers, settings, house, audit, engineParameters })) {
+  for (const [label, result] of Object.entries({ open, closed, events, excluded, frozen, people, tiers, settings, house, audit, engineParameters, allegations })) {
     if (result.error) throw new Error(`${label}: ${result.error.message}`);
   }
 
@@ -1069,6 +1092,25 @@ export async function readMarket(): Promise<MarketReport> {
       },
     })),
     engineParameters: (engineParameters.data ?? []).map((row) => ({ key: row.key, value: JSON.stringify(row.value), updatedAt: row.updated_at })),
+    allegations: (allegations.data ?? []).map((row) => ({
+      signalId: row.signal_id ?? "",
+      personSlug: row.person_slug ?? "",
+      personName: row.person_name ?? "",
+      headline: row.headline ?? "",
+      occurredAt: row.occurred_at ?? "",
+      impact: row.impact_score === null ? null : Number(row.impact_score),
+      source: row.source,
+      publisherDomain: row.publisher_domain,
+      tier: row.tier,
+      category: row.category,
+      method: row.method,
+      qualifying: row.qualifying === true,
+      held: row.held === true,
+      claimStatus: row.claim_status,
+      hiddenAt: row.hidden_at,
+      hideReason: row.hide_reason,
+      voided: row.voided === true,
+    })),
     tiers: (tiers.data ?? []).map((row) => ({
       tier: row.tier,
       pricingMode: row.pricing_mode,

@@ -143,3 +143,23 @@ describe("runPostTick", () => {
     });
   });
 });
+
+describe("the allegation hold in memory (2026-10-09)", () => {
+  it("never remembers an allegation story, held or lifted, while an ordinary notable story is remembered", async () => {
+    const narrativeStore = createMemoryNarrativeStore();
+    const memoryStore = createMemoryMemoryStore();
+    const flag = { category: "minors" as const, method: "model" as const, publisherDomain: "usatoday.com", publisherTier: 2, qualifying: true, held: false };
+    const tick: TickSummary = {
+      ...summary,
+      people: [{ ...summary.people[0], id: "kc", slug: "kai-cenat", displayName: "Kai Cenat", change: -1.3, newScore: 48.7, forces: { signals: -1.3 } }],
+      signals: [
+        { id: "a1", personSlug: "kai-cenat", headline: "Popular streamer Kai Cenat responds to abuse allegations: 'I'm suing you, bro!'", label: "negative", confidence: 0.7, direction: -1, impact: -0.8, ageHours: 0, freshness: 1, scorer: "llm", anomaly: "anomalous", allegation: flag },
+        { id: "a2", personSlug: "kai-cenat", headline: "Reggie Accuses Kai Cenat of Grooming in Streaming Feud", label: "negative", confidence: 0.6, direction: -1, impact: -0.5, ageHours: 0, freshness: 1, scorer: "llm", anomaly: "notable", allegation: { ...flag, publisherDomain: "x.com", publisherTier: 5, qualifying: false, held: true } },
+        { id: "a3", personSlug: "kai-cenat", headline: "Kai Cenat's Mafiathon 3 breaks the Twitch subscriber record", label: "positive", confidence: 0.9, direction: 1, impact: 0.9, ageHours: 0, freshness: 1, scorer: "llm", anomaly: "anomalous" },
+      ],
+    };
+    await runPostTick(tick, { narrativeStore, memoryStore, config: DEFAULT_ENGINE_CONFIG });
+    const kai = memoryStore.memories.get("kc")!;
+    expect(kai.recentContext.notable_events.map((e) => e.headline)).toEqual(["Kai Cenat's Mafiathon 3 breaks the Twitch subscriber record"]);
+  });
+});

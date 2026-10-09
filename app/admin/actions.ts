@@ -28,7 +28,7 @@ import { createSupabaseServerClient } from "@/lib/supabase-server";
  * an object), so the page is one render with no client JavaScript.
  */
 
-const ACTIONS = ["freeze", "unfreeze", "halt", "lift_halt", "set_mode", "exclude", "unexclude", "alert_status", "set_parameter", "set_tier_parameter", "set_engine_parameter", "reset_market", "void_signal", "void_narrative"] as const;
+const ACTIONS = ["freeze", "unfreeze", "halt", "lift_halt", "set_mode", "exclude", "unexclude", "alert_status", "set_parameter", "set_tier_parameter", "set_engine_parameter", "reset_market", "void_signal", "void_narrative", "hide_signal", "unhide_signal", "lift_allegation_hold"] as const;
 /** The logged Engine parameters (2026-10-09). */
 const ENGINE_PARAMETERS = ["gravity_rate"] as const;
 type Action = (typeof ACTIONS)[number];
@@ -189,6 +189,27 @@ export async function marketAction(form: FormData): Promise<void> {
         if (!signalId) finish("A void needs the signal's id.");
         if (!note) finish("A void needs a reason.");
         outcome = await supabase.rpc("admin_void_signal", { p_signal_id: signalId, p_reason: note, p_alert_id: alertId ?? undefined });
+        break;
+      }
+      case "hide_signal": {
+        const signalId = uuid(form, "signal_id");
+        if (!signalId) finish("A hide needs the signal's id.");
+        if (!note) finish("A hide needs a reason.");
+        outcome = await supabase.rpc("admin_hide_signal", { p_signal_id: signalId, p_reason: note, p_alert_id: alertId ?? undefined });
+        break;
+      }
+      case "unhide_signal": {
+        const signalId = uuid(form, "signal_id");
+        if (!signalId) finish("An unhide needs the signal's id.");
+        if (!note) finish("An unhide needs a reason.");
+        outcome = await supabase.rpc("admin_unhide_signal", { p_signal_id: signalId, p_reason: note, p_alert_id: alertId ?? undefined });
+        break;
+      }
+      case "lift_allegation_hold": {
+        const signalId = uuid(form, "signal_id");
+        if (!signalId) finish("A lift needs the signal's id.");
+        if (!note) finish("A lift needs a reason.");
+        outcome = await supabase.rpc("admin_lift_allegation_hold", { p_signal_id: signalId, p_reason: note, p_alert_id: alertId ?? undefined });
         break;
       }
       case "void_narrative": {

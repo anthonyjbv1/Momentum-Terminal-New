@@ -4,7 +4,7 @@ import { cache } from "react";
 
 import { loadCompaniesByPerson } from "@/lib/feed/enrich";
 import { avatarCredit, readAvatarRecord } from "@/lib/people/avatar-model";
-import { isVoided } from "@/lib/signals/voided";
+import { DISPLAY_COLUMNS, isDisplayable } from "@/lib/signals/display";
 import { createSupabaseAdminClient } from "@/lib/supabase-admin";
 
 import {
@@ -324,16 +324,18 @@ export const getPersonSignals = cache(async (slug: string): Promise<ProfileSigna
     // evidence is not an item of its own (rule 8) and falls out in the merge.
     supabase
       .from("signals")
-      .select(`id, headline, occurred_at, impact_score, sentiment_label, sentiment_confidence, processed, voided_at, ${PAYLOAD_SELECT}, data_sources(display_name), narrative_signals(relation)`)
+      .select(`id, headline, occurred_at, impact_score, sentiment_label, sentiment_confidence, processed, ${DISPLAY_COLUMNS}, ${PAYLOAD_SELECT}, data_sources(display_name), narrative_signals(relation)`)
       .eq("person_id", person.id)
       .is("voided_at", null)
+      .is("hidden_at", null)
+      .eq("allegation_held", false)
       .order("occurred_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(SIGNAL_LIMIT * SIGNAL_READ_DEPTH),
     supabase
       .from("narratives")
       .select(
-        `id, text, created_at, score_before, score_after, narrative_signals(relation, signals(id, headline, occurred_at, impact_score, voided_at, ${PAYLOAD_SELECT}, data_sources(display_name), people(display_name)))`,
+        `id, text, created_at, score_before, score_after, narrative_signals(relation, signals(id, headline, occurred_at, impact_score, ${DISPLAY_COLUMNS}, ${PAYLOAD_SELECT}, data_sources(display_name), people(display_name)))`,
       )
       .eq("person_id", person.id)
       .is("voided_at", null)
@@ -350,7 +352,7 @@ export const getPersonSignals = cache(async (slug: string): Promise<ProfileSigna
   // signal (a false input the operator struck) is neither a card nor evidence.
   const liveSignals = ((signals.data ?? []) as unknown as Array<SignalRow & Record<string, unknown>>)
     .map((row) => ({ ...row, raw_payload: payloadFromProjection(row) }))
-    .filter((row) => !isVoided(row));
+    .filter((row) => isDisplayable(row));
   const liveNarratives = ((narratives.data ?? []) as unknown as NarrativeRow[]).map((row) => ({
     ...row,
     narrative_signals: (row.narrative_signals ?? [])
@@ -358,7 +360,7 @@ export const getPersonSignals = cache(async (slug: string): Promise<ProfileSigna
         ...link,
         signals: link.signals ? { ...link.signals, raw_payload: payloadFromProjection(link.signals as unknown as Record<string, unknown>) } : link.signals,
       }))
-      .filter((link) => !isVoided(link.signals)),
+      .filter((link) => isDisplayable(link.signals)),
   }));
 
   return mergeSignals(liveSignals, liveNarratives, SIGNAL_LIMIT, { name: person.displayName, category: person.category, company: companies.get(person.id) ?? null });

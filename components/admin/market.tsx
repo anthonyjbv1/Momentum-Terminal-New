@@ -191,6 +191,91 @@ export function MarketSection({ report, now, notice }: { report: MarketReport; n
           </form>
         </div>
 
+        <div style={{ marginTop: 16 }}>
+          <p className="adm-sub">Allegation holds</p>
+          <p className="adm-note">
+            Unverified allegations of a serious crime are held from every surface until a tier 1-2 publisher reports the claim; connector tiers never count, and a lower-tier story stays held after the lift. The score stands either way. A lift shows that one card and marks the claim lifted; a hide removes any card without voiding it. Every action is logged.
+          </p>
+          {report.allegations.length === 0 ? (
+            <Empty>None held, lifted or hidden.</Empty>
+          ) : (
+            <Scroll>
+              <table className="adm-t">
+                <thead>
+                  <tr>
+                    <th>Person</th>
+                    <th>Claim</th>
+                    <th>Source</th>
+                    <th>Tier</th>
+                    <th>Date</th>
+                    <th>State</th>
+                    <th className="wrap">Headline</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.allegations.map((row) => (
+                    <tr key={row.signalId}>
+                      <td>{row.personName}</td>
+                      <td>
+                        {row.category ?? "—"}
+                        {row.method === "terms" ? " (terms)" : ""}
+                      </td>
+                      <td>{row.publisherDomain ?? row.source ?? "—"}</td>
+                      <td>{row.tier ?? "—"}</td>
+                      <td>{age(row.occurredAt, now)}</td>
+                      <td>
+                        {row.voided ? "voided" : row.hiddenAt ? `hidden: ${row.hideReason ?? ""}` : row.held ? "held" : row.category ? (row.qualifying ? "displays (qualifying)" : "lifted") : "—"}
+                        {row.claimStatus ? ` · claim ${row.claimStatus}` : ""}
+                      </td>
+                      <td className="wrap">{row.headline}</td>
+                      <td>
+                        {row.held && !row.hiddenAt ? (
+                          <form action={marketAction} className="adm-form">
+                            <input type="hidden" name="action" value="lift_allegation_hold" />
+                            <input type="hidden" name="signal_id" value={row.signalId} />
+                            <input name="note" placeholder="reason (required)" aria-label="Lift reason" required />
+                            <button type="submit" className="adm-btn">
+                              Lift
+                            </button>
+                          </form>
+                        ) : null}
+                        {row.hiddenAt ? (
+                          <form action={marketAction} className="adm-form">
+                            <input type="hidden" name="action" value="unhide_signal" />
+                            <input type="hidden" name="signal_id" value={row.signalId} />
+                            <input name="note" placeholder="reason (required)" aria-label="Unhide reason" required />
+                            <button type="submit" className="adm-btn">
+                              Unhide
+                            </button>
+                          </form>
+                        ) : (
+                          <form action={marketAction} className="adm-form">
+                            <input type="hidden" name="action" value="hide_signal" />
+                            <input type="hidden" name="signal_id" value={row.signalId} />
+                            <input name="note" placeholder="reason (required)" aria-label="Hide reason" required />
+                            <button type="submit" className="adm-btn" data-tone="bad">
+                              Hide
+                            </button>
+                          </form>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Scroll>
+          )}
+          <form action={marketAction} className="adm-form" style={{ marginTop: 8 }}>
+            <input type="hidden" name="action" value="hide_signal" />
+            <input name="signal_id" placeholder="signal id (uuid)" aria-label="Signal id to hide" required style={{ width: 300 }} />
+            <input name="note" placeholder="reason (required)" aria-label="Hide reason" required />
+            <button type="submit" className="adm-btn" data-tone="bad">
+              Hide signal (display only)
+            </button>
+          </form>
+        </div>
+
         <div className="adm-cols" style={{ marginTop: 16 }}>
           <div>
             <p className="adm-sub">Frozen accounts</p>

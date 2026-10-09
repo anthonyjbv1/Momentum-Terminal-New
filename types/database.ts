@@ -2086,8 +2086,59 @@ export type Database = {
           },
         ]
       }
+      allegation_claims: {
+        Row: {
+          category: string
+          created_at: string
+          first_seen_at: string
+          first_signal_id: string | null
+          id: string
+          lift_reason: string | null
+          lifted_at: string | null
+          lifted_by: string | null
+          lifted_by_signal_id: string | null
+          person_id: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          category: string
+          created_at?: string
+          first_seen_at?: string
+          first_signal_id?: string | null
+          id?: string
+          lift_reason?: string | null
+          lifted_at?: string | null
+          lifted_by?: string | null
+          lifted_by_signal_id?: string | null
+          person_id: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          first_seen_at?: string
+          first_signal_id?: string | null
+          id?: string
+          lift_reason?: string | null
+          lifted_at?: string | null
+          lifted_by?: string | null
+          lifted_by_signal_id?: string | null
+          person_id?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       signals: {
         Row: {
+          voided_at: string | null
+          void_reason: string | null
+          allegation: Json | null
+          allegation_held: boolean
+          hidden_at: string | null
+          hide_reason: string | null
           created_at: string
           data_source_id: string
           dedupe_key: string | null
@@ -2104,6 +2155,12 @@ export type Database = {
           tier: number | null
         }
         Insert: {
+          voided_at?: string | null
+          void_reason?: string | null
+          allegation?: Json | null
+          allegation_held?: boolean
+          hidden_at?: string | null
+          hide_reason?: string | null
           created_at?: string
           data_source_id: string
           dedupe_key?: string | null
@@ -2120,6 +2177,12 @@ export type Database = {
           tier?: number | null
         }
         Update: {
+          voided_at?: string | null
+          void_reason?: string | null
+          allegation?: Json | null
+          allegation_held?: boolean
+          hidden_at?: string | null
+          hide_reason?: string | null
           created_at?: string
           data_source_id?: string
           dedupe_key?: string | null
@@ -2722,6 +2785,31 @@ export type Database = {
         }
         Relationships: []
       }
+      allegation_review: {
+        Row: {
+          category: string | null
+          claim_id: string | null
+          claim_lifted_at: string | null
+          claim_status: string | null
+          headline: string | null
+          held: boolean | null
+          hidden_at: string | null
+          hide_reason: string | null
+          impact_score: number | null
+          method: string | null
+          occurred_at: string | null
+          person_id: string | null
+          person_name: string | null
+          person_slug: string | null
+          publisher_domain: string | null
+          qualifying: boolean | null
+          signal_id: string | null
+          source: string | null
+          tier: number | null
+          voided: boolean | null
+        }
+        Relationships: []
+      }
       source_health: {
         Row: {
           avg_latency_ms_24h: number | null
@@ -2881,8 +2969,24 @@ export type Database = {
         Args: { p_alert_id?: string; p_narrative_id: string; p_reason: string }
         Returns: Json
       }
+      admin_hide_signal: {
+        Args: { p_alert_id?: string; p_reason: string; p_signal_id: string }
+        Returns: Json
+      }
+      admin_lift_allegation_hold: {
+        Args: { p_alert_id?: string; p_reason: string; p_signal_id: string }
+        Returns: Json
+      }
+      admin_unhide_signal: {
+        Args: { p_alert_id?: string; p_reason: string; p_signal_id: string }
+        Returns: Json
+      }
       admin_void_signal: {
         Args: { p_alert_id?: string; p_reason: string; p_signal_id: string }
+        Returns: Json
+      }
+      record_allegation_holds: {
+        Args: { p_rows: Json }
         Returns: Json
       }
       admin_user_list: {

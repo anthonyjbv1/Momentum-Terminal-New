@@ -42,7 +42,7 @@ function scored(outcome: ScoringOutcome): SentimentResult {
   return outcome;
 }
 
-type Assessment = { label?: string; confidence?: number; anomaly?: string };
+type Assessment = { label?: string; confidence?: number; anomaly?: string; allegation?: string };
 
 /** Fake completion: answers for every id it finds in the prompt. */
 function fakeComplete(assess: (id: string) => Assessment = () => ({}), narrative = "Momentum shifted on fresh news.") {
@@ -492,5 +492,22 @@ describe("the neutral go-live (GO_LIVE_NEUTRAL_ENABLED)", () => {
     // Switch off, the line reads as it did on 10-09 and the model judges it, exactly as before.
     await scorer.scoreSignal(signal("g2", "p-kai", 'Kai Cenat is live on Twitch playing Just Chatting to 0 viewers: "LEAVE ME ALONE".', { kind: "stream", stream_id: "320669987804", viewer_count: 0 }));
     expect(complete).toHaveBeenCalled();
+  });
+});
+
+describe("the allegation label (2026-10-09, version 2)", () => {
+  it("passes the model's label through under version 2, reads an absent or unknown one as none, and carries none under version 1", async () => {
+    const complete = fakeComplete((id) => (id === "k1" ? ({ allegation: "minors" } as Assessment) : id === "k2" ? ({ allegation: "bogus" } as Assessment) : {}));
+    const { scorer } = makeScorer(complete, { promptVersion: 2 });
+    const [labelled, unknown, absent] = await Promise.all([
+      scorer.scoreSignal(signal("k1", "p-drake", "Reggie Accuses Drake of Grooming in Streaming Feud", { kind: "article" })),
+      scorer.scoreSignal(signal("k2", "p-drake", "Drake drops surprise album", { kind: "article" })),
+      scorer.scoreSignal(signal("k3", "p-drake", "Drake tour sells out", { kind: "article" })),
+    ]);
+    expect(scored(labelled).allegation).toBe("minors");
+    expect(scored(unknown).allegation).toBe("none");
+    expect(scored(absent).allegation).toBe("none");
+    const v1 = makeScorer(fakeComplete((id) => (id === "k1" ? ({ allegation: "minors" } as Assessment) : {})));
+    expect(scored(await v1.scorer.scoreSignal(signal("k1", "p-drake", "Reggie Accuses Drake of Grooming in Streaming Feud", { kind: "article" }))).allegation).toBeUndefined();
   });
 });

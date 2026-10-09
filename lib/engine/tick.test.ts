@@ -827,3 +827,21 @@ describe("Engine tick — Gravity's rate as a logged parameter", () => {
     }
   });
 });
+
+describe("the allegation hold in the tick (2026-10-09)", () => {
+  it("classifies a story by the terms backstop under the rules scorer, scores it exactly as before, and records the hold for the database", async () => {
+    const held: EngineSignal = { id: "s-x", personId: "p-mrbeast", headline: "Reggie Accuses MrBeast of Grooming in Streaming Feud", rawPayload: { kind: "article", publisher_domain: "x.com", publisher_tier: 5 }, sourceName: "rss", sourceTier: 3, occurredAt: NOW, createdAt: NOW };
+    const plain: EngineSignal = { id: "s-p", personId: "p-mrbeast", headline: "MrBeast crosses 400M subscribers on YouTube", rawPayload: { kind: "article", publisher_domain: "variety.com", publisher_tier: 2 }, sourceName: "rss", sourceTier: 3, occurredAt: NOW, createdAt: NOW };
+    const store = createMemoryEngineStore(seed({ signals: [held, plain] }));
+    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW });
+    const flagged = summary.signals.find((s) => s.id === "s-x")!;
+    expect(flagged.allegation).toEqual({ category: "minors", method: "terms", term: "grooming", publisherDomain: "x.com", publisherTier: 5, qualifying: false, held: true });
+    expect(summary.signals.find((s) => s.id === "s-p")!.allegation).toBeUndefined();
+    expect(store.allegationHolds).toEqual([{ signalId: "s-x", category: "minors", method: "terms", publisherDomain: "x.com", publisherTier: 5, qualifying: false }]);
+    // The same story scored without the hold: byte-identical impact.
+    const bare = createMemoryEngineStore(seed({ signals: [{ ...held, headline: "Reggie Accuses MrBeast of Grooming in Streaming Feud" }, plain] }));
+    const again = await runEngineTick({ store: bare, scorer: rulesBasedScorer, now: NOW });
+    expect(again.signals.find((s) => s.id === "s-x")!.impact).toBe(flagged.impact);
+    expect(store.processedSignals.find((s) => s.id === "s-x")).toEqual(bare.processedSignals.find((s) => s.id === "s-x"));
+  });
+});

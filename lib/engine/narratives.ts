@@ -212,7 +212,7 @@ export interface NarrativeBuild {
    * a sentence carrying a term of the grave-claim list is stored as the
    * neutral line and the original is logged here for review.
    */
-  replaced: Array<{ personId: string; reason: "direction" | "voice" | "grave_claim" | "go_live"; text: string; term?: string }>;
+  replaced: Array<{ personId: string; reason: "direction" | "voice" | "grave_claim" | "go_live" | "allegation"; text: string; term?: string }>;
 }
 
 export function buildNarrativesDetailed(summary: TickSummary, config: EngineConfig["narratives"], quality?: EngineConfig["signalQuality"]): NarrativeBuild {
@@ -245,11 +245,20 @@ export function buildNarrativesDetailed(summary: TickSummary, config: EngineConf
       text = goLiveNarrative(person, goLive.goLiveTitle as string);
       useLlm = false;
     }
-    // THE INTERIM GRAVE-CLAIM GUARD (2026-10-09, until the allegation hold
-    // ships): every sentence, the model's or the template's, is run through
-    // the grave-claim list before it is stored. On a match the neutral line
-    // is stored instead and the original goes to the log for review. The
-    // score moves exactly as published; only what the platform says changes.
+    // THE ALLEGATION HOLD (2026-10-09): a tick that carries a serious-crime
+    // allegation about the person, held or lifted, gets the neutral line.
+    // The Engine's own voice never states an allegation; only an attributed
+    // story card can. The score moves exactly as published.
+    const allegation = signalsFor(summary, person.slug).find((signal) => signal.allegation !== undefined);
+    if (allegation && !goLive) {
+      replaced.push({ personId: person.id, reason: "allegation", text, term: allegation.allegation?.category });
+      text = neutralNarrative(person);
+      useLlm = false;
+    }
+    // THE 59-TERM GUARD, as the backstop: every sentence, the model's or the
+    // template's, is run through the grave-claim list before it is stored.
+    // On a match the neutral line is stored instead and the original goes
+    // to the log for review. The score moves exactly as published.
     const term = graveClaimTerm(text);
     if (term) {
       replaced.push({ personId: person.id, reason: "grave_claim", text, term });

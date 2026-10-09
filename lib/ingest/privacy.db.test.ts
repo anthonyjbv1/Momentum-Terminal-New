@@ -638,7 +638,8 @@ describe("the application", () => {
     // the rows board.ts selected and projects them the same way; no read and
     // no field was added.
     const root = join(__dirname, "..", "..");
-    const allowed = ["lib/feed/enrich.ts", "lib/home/board.ts", "lib/home/feed-preview-model.ts", "lib/person/profile-model.ts", "lib/person/profile.ts"];
+    // The allegation scan (2026-10-09) reads a story's publisher fields from the payload to say what the rule would hold; it renders no level.
+    const allowed = ["app/api/admin/allegation-scan/route.ts", "lib/feed/enrich.ts", "lib/home/board.ts", "lib/home/feed-preview-model.ts", "lib/person/profile-model.ts", "lib/person/profile.ts"];
     const selectors = sourceFiles(root)
       .filter((file) => /^(app|components|lib\/(feed|person|home|portfolio))\//.test(relative(root, file)))
       .filter((file) => /raw_payload|rawPayload/.test(readFileSync(file, "utf8")))
