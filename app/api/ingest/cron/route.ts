@@ -77,7 +77,7 @@ export async function GET(request: NextRequest) {
     let identities: Awaited<ReturnType<typeof resolveIdentities>> | { error: string } = { error: "skipped" };
     if (result.status === "ran") {
       try {
-        identities = await resolveIdentities({ client: createSupabaseAdminClient() });
+        identities = await resolveIdentities({ client: createSupabaseAdminClient(), limit: 32 });
       } catch (error) {
         identities = { error: error instanceof Error ? error.message : String(error) };
         console.warn("[ingest/cron] identity resolution failed:", identities.error);

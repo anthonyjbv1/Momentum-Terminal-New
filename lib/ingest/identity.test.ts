@@ -108,7 +108,8 @@ describe("resolveIdentities", () => {
     expect(by("m2").identity).toMatchObject({ twitch: { id: "411377640", last_live_at: null }, youtube: { channel_id: "UC6BfARTPllDG1IjDJvM7dMg", title: "Jynxzi" } });
     expect(by("m3").identity).toMatchObject({ apisports: { season: 2026, team_id: 23, players: [{ id: 3771, name: "Jaxon Smith-Njigba", position: "WR", group: "Offense", number: 11 }], teams: [{ id: 23, name: "Seattle Seahawks" }, { id: 611, name: "Seattle U" }], player_errors: null, team_errors: null } });
     expect(calls.some((url) => url.includes("/players?search=Smith-Njigba"))).toBe(false);
-    expect(by("m4").identity).toMatchObject({ feed: { items: 2, newer_than_7d: 1, first_titles: ["Fresh one", "Old one"] } });
+    expect(by("m4").identity).toMatchObject({ feed: { items: 2, newer_than_24h: 1, newer_than_7d: 1, first_titles: ["Fresh one", "Old one"] } });
+    expect((by("m4").identity as { feed: { dates: string[] } }).feed.dates).toHaveLength(2);
     // The keys travel in the right place and never in a message.
     expect(calls.some((url) => url.includes("key=yt-key"))).toBe(true);
     expect(JSON.stringify(updates)).not.toContain("yt-key");

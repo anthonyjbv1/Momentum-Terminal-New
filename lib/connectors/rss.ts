@@ -3,6 +3,7 @@ import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { EMPTY_DISAMBIGUATION, applyQueryExclusions, exclusionSubject, excludeReason, obituaryReason, readDisambiguation, type ExclusionVerdict } from "@/lib/ingest/disambiguation";
 import { publisherDomainOf, type PublisherPolicy } from "@/lib/ingest/publishers";
 import { collapseStories, personNames, storyTokens, stripOutletSuffix } from "@/lib/ingest/stories";
+import { isGoogleNewsFreshEnabled } from "@/lib/env";
 import type { Person } from "@/types";
 import type { Json } from "@/types/database";
 
@@ -73,6 +74,29 @@ export function feedUrlFor(identifier: string): string {
   url.searchParams.set("gl", "US");
   url.searchParams.set("ceid", "US:en");
   return url.toString();
+}
+
+/** Google News's own recency operator, as the fresh switch appends it to a search query. */
+export const GOOGLE_NEWS_FRESH_WINDOW = "when:7d";
+
+/**
+ * The query with `when:7d` appended (GOOGLE_NEWS_FRESH_ENABLED): only a
+ * Google News SEARCH feed, and only when the query carries no `when:`
+ * operator of its own, so a hand-tuned query is never doubled up. Any other
+ * feed address is returned as it is.
+ */
+export function freshGoogleNewsUrl(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  if (parsed.hostname !== "news.google.com" || !parsed.pathname.startsWith("/rss/search")) return url;
+  const query = parsed.searchParams.get("q");
+  if (query === null || /\bwhen:\d+[hdmy]\b/i.test(query)) return url;
+  parsed.searchParams.set("q", `${query} ${GOOGLE_NEWS_FRESH_WINDOW}`);
+  return parsed.toString();
 }
 
 export interface FeedItem {
@@ -345,7 +369,8 @@ async function loadFeed(person: Person, identifier: string, context: ConnectorCo
   const rules = readDisambiguation(context.personConfig);
   // Query level first: what the feed never sends costs nothing to discard, and
   // it leaves room in a fixed-size window for items that are about the subject.
-  const url = applyQueryExclusions(feedUrlFor(identifier), rules);
+  const base = applyQueryExclusions(feedUrlFor(identifier), rules);
+  const url = isGoogleNewsFreshEnabled() ? freshGoogleNewsUrl(base) : base;
   const key = `${url}|${context.now.toISOString()}`;
   const cached = feedCache.get(key);
   if (cached && Date.now() - cached.at < FEED_CACHE_TTL_MS) return cached.feed;

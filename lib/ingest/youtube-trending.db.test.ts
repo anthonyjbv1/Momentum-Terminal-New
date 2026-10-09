@@ -109,6 +109,8 @@ describe("the mappings", () => {
       caedrel: ["UCOFiUtKui6-x4T-J7_DgCag"],
       // Main channel verified by id ("Asmongold TV", @asmontv), clips by handle.
       asmongold: ["UCQeRaTukNYft1_6AZPACnog", "UCMwJJL5FJFuTRT55ksbQ4GQ"],
+      // The live answer for @Jynxzi (7.0M), ruled over the prep's unverified guess.
+      jynxzi: ["UCjiXtODGCCulmhwypZAWSag"],
     });
     // The singular key is gone (the connector reads a set) and every id is well formed.
     for (const row of rows) {
@@ -190,6 +192,7 @@ describe("the mappings", () => {
       // channel_id from his youtube mapping; this puts the set back.
       "20261009140000_roster_ids_resolved.sql",
       "20261009150000_roster_ids_resolved_two.sql",
+      "20261009160000_roster_jynxzi_channel.sql",
     ]) {
       await database.exec(readFileSync(join(__dirname, "..", "..", "supabase", "migrations", file), "utf8"));
     }

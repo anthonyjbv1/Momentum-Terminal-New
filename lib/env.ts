@@ -192,6 +192,7 @@ export function getEngineEnvOverrides(): {
   signalQualityEnabled: string | undefined;
   newsVolumeTuneEnabled: string | undefined;
   companyNewsTuneEnabled: string | undefined;
+  googleNewsFreshEnabled: string | undefined;
 } {
   return {
     tradingMinPopulatedWindows: process.env.ENGINE_TRADING_MIN_POPULATED_WINDOWS,
@@ -202,6 +203,7 @@ export function getEngineEnvOverrides(): {
     signalQualityEnabled: process.env.SIGNAL_QUALITY_ENABLED,
     newsVolumeTuneEnabled: process.env.NEWS_VOLUME_TUNE_ENABLED,
     companyNewsTuneEnabled: process.env.COMPANY_NEWS_TUNE_ENABLED,
+    googleNewsFreshEnabled: process.env.GOOGLE_NEWS_FRESH_ENABLED,
   };
 }
 
@@ -234,6 +236,18 @@ export function isNewsVolumeTuneEnabled(): boolean {
  */
 export function isCompanyNewsTuneEnabled(): boolean {
   return process.env.COMPANY_NEWS_TUNE_ENABLED?.trim() === "true";
+}
+
+/**
+ * GOOGLE_NEWS_FRESH_ENABLED (2026-10-09): every Google News search query
+ * carries `when:7d`, so the feed serves the last week rather than whatever
+ * ranks (which on most subjects was 99% items older than the stale cut).
+ * Exactly "true" turns it on; it ships unset, which is off. The volume
+ * metric and the signals read the same feed, so both change together; the
+ * metric's baseline re-forms from the new feed (see the README).
+ */
+export function isGoogleNewsFreshEnabled(): boolean {
+  return process.env.GOOGLE_NEWS_FRESH_ENABLED?.trim() === "true";
 }
 
 /**

@@ -167,11 +167,16 @@ async function probeFeed(url: string, fetchImpl: typeof fetch): Promise<Json> {
     .map((raw) => (raw ? Date.parse(raw) : Number.NaN))
     .filter((time) => Number.isFinite(time));
   const titles = items.slice(0, 3).map((item) => (/<title>(?:<!\[CDATA\[)?([^<\]]+)/.exec(item)?.[1] ?? "").trim());
+  // Every item's date, newest first, so a replay can count the trailing-24h
+  // window at any moment of the last week from this one read.
+  const sorted = [...dates].sort((a, b) => b - a);
   return {
     items: items.length,
-    newest_at: dates.length > 0 ? new Date(Math.max(...dates)).toISOString() : null,
-    oldest_at: dates.length > 0 ? new Date(Math.min(...dates)).toISOString() : null,
-    newer_than_7d: dates.filter((time) => Date.now() - time < 7 * 86_400_000).length,
+    newest_at: sorted.length > 0 ? new Date(sorted[0]).toISOString() : null,
+    oldest_at: sorted.length > 0 ? new Date(sorted[sorted.length - 1]).toISOString() : null,
+    newer_than_24h: sorted.filter((time) => Date.now() - time < 86_400_000).length,
+    newer_than_7d: sorted.filter((time) => Date.now() - time < 7 * 86_400_000).length,
+    dates: sorted.slice(0, 100).map((time) => new Date(time).toISOString()),
     first_titles: titles,
   };
 }

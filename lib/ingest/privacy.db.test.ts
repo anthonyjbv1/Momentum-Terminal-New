@@ -291,12 +291,6 @@ describe("the registry", () => {
     // API-Sports mappings went live with the ids the platform answered
     // (20261009140000, 20261009150000). The two youtube mappings (Asmongold's
     // main channel, Caedrel) are channel statistics only, commentary off.
-    const streamer = (slug: string, name: string, login: string) => [
-      { slug, source: "publisher_rss", identifier: name },
-      { slug, source: "rss", identifier: expect.stringContaining(`news.google.com/rss/search?q=%22${name.replace(/ /g, "+")}%22`) },
-      { slug, source: "twitch", identifier: login },
-      ...trending(slug, name),
-    ];
     expect(mappings).toEqual([
       ...news("adin-ross", "Adin Ross"),
       ...news("anthony-baptiste", "Anthony Baptiste"),
@@ -331,7 +325,11 @@ describe("the registry", () => {
       ...executive("jensen-huang", "Jensen Huang", "NVDA"),
       { slug: "josh-allen", source: "apisports", identifier: "1414" },
       ...news("josh-allen", "Josh Allen"),
-      ...streamer("jynxzi", "Jynxzi", "jynxzi"),
+      { slug: "jynxzi", source: "publisher_rss", identifier: "Jynxzi" },
+      { slug: "jynxzi", source: "rss", identifier: expect.stringContaining("news.google.com/rss/search?q=%22Jynxzi%22") },
+      { slug: "jynxzi", source: "twitch", identifier: "jynxzi" },
+      { slug: "jynxzi", source: "youtube", identifier: "UCjiXtODGCCulmhwypZAWSag" },
+      ...trending("jynxzi", "Jynxzi"),
       // Phase 10: a creator whose primary platform is Twitch, and an athlete on
       // a weekly schedule — two data shapes the first two subjects do not have.
       { slug: "kai-cenat", source: "publisher_rss", identifier: "Kai Cenat" },
@@ -522,8 +520,8 @@ describe("observability", () => {
     `);
     const [health] = await database.rows<Record<string, unknown>>("select * from public.source_health where name = 'youtube'");
     expect(health).toMatchObject({ name: "youtube", last_error: "quota", last_skip_reason: "inactive: YOUTUBE_API_KEY is not set" });
-    // Three people on the youtube source since 2026-10-09: MrBeast, Asmongold and Caedrel.
-    expect([health.people_mapped, health.polls_24h, health.errors_24h, health.signals_24h].map(Number)).toEqual([3, 3, 1, 3]);
+    // Four people on the youtube source since 2026-10-09: MrBeast and the three streamers.
+    expect([health.people_mapped, health.polls_24h, health.errors_24h, health.signals_24h].map(Number)).toEqual([4, 3, 1, 3]);
     // The Phase 8 counters: what the trailing day dropped as blocked and collapsed as duplicates.
     expect([health.blocked_24h, health.collapsed_24h].map(Number)).toEqual([1, 6]);
     expect(Number(health.error_rate_24h)).toBeCloseTo(1 / 3, 4);

@@ -5,7 +5,7 @@ import { fakeFetchRoutes, makePerson, makeSource } from "@/lib/__tests__/fixture
 import { buildPublisherPolicy } from "@/lib/ingest/publishers";
 import { personNames } from "@/lib/ingest/stories";
 
-import { EARLIEST_PLAUSIBLE_PUBLISHED_AT, FUTURE_TOLERANCE_MS, LEAD_MAX_CHARS, articleSignal, feedUrlFor, leadParagraph, hasBelievableDate, isStaleItem, newsVolume, parseFeed, readRssConfig, resetFeedCache, rssConnector, type FeedItem } from "./rss";
+import { EARLIEST_PLAUSIBLE_PUBLISHED_AT, FUTURE_TOLERANCE_MS, LEAD_MAX_CHARS, articleSignal, feedUrlFor, freshGoogleNewsUrl, leadParagraph, hasBelievableDate, isStaleItem, newsVolume, parseFeed, readRssConfig, resetFeedCache, rssConnector, type FeedItem } from "./rss";
 import { ConnectorError } from "./types";
 
 const NOW = new Date("2026-09-12T12:00:00.000Z");
@@ -50,6 +50,46 @@ const ATOM = `<?xml version="1.0" encoding="utf-8"?>
     <source><title>Outlet</title></source>
   </entry>
 </feed>`;
+
+describe("freshGoogleNewsUrl (GOOGLE_NEWS_FRESH_ENABLED)", () => {
+  it("appends when:7d to a Google News search query, once, and leaves every other address alone", () => {
+    const live = "https://news.google.com/rss/search?q=%22Adin+Ross%22&hl=en-US&gl=US&ceid=US%3Aen";
+    const fresh = freshGoogleNewsUrl(live);
+    expect(new URL(fresh).searchParams.get("q")).toBe('"Adin Ross" when:7d');
+    expect(new URL(fresh).searchParams.get("ceid")).toBe("US:en");
+    // Already windowed by hand: not doubled.
+    expect(freshGoogleNewsUrl(fresh)).toBe(fresh);
+    expect(new URL(freshGoogleNewsUrl("https://news.google.com/rss/search?q=%22Drake%22+when%3A1d")).searchParams.get("q")).toBe('"Drake" when:1d');
+    // The exclusions the query already carries stay in front of the window.
+    expect(new URL(freshGoogleNewsUrl("https://news.google.com/rss/search?q=%22Drake%22+-%22Drake+Maye%22")).searchParams.get("q")).toBe('"Drake" -"Drake Maye" when:7d');
+    // Not a Google News search: an outlet feed, a topic feed, a non-URL.
+    for (const other of ["https://outlet.example/feed.xml", "https://news.google.com/rss/topics/abc?hl=en-US", "not a url"]) {
+      expect(freshGoogleNewsUrl(other)).toBe(other);
+    }
+  });
+
+  it("is read by the connector at fetch time: the fetched address carries the window only while the switch is on", async () => {
+    const saved = process.env.GOOGLE_NEWS_FRESH_ENABLED;
+    const body = `<?xml version="1.0"?><rss version="2.0"><channel><title>"Drake" - Google News</title></channel></rss>`;
+    const context = (fetch: typeof globalThis.fetch) => ({ source: makeSource({ name: "rss" }), config: {} as Record<string, never>, snapshots: { latest: async () => null, record: () => undefined }, now: NOW, fetch });
+    try {
+      resetFeedCache();
+      process.env.GOOGLE_NEWS_FRESH_ENABLED = "true";
+      const on = fakeFetchRoutes([{ match: "news.google.com/rss/search", body }]);
+      await rssConnector.fetchMetrics!(person, feedUrlFor('"Drake"'), context(on));
+      expect(on.calls.some((url) => decodeURIComponent(url).includes("when:7d"))).toBe(true);
+      resetFeedCache();
+      process.env.GOOGLE_NEWS_FRESH_ENABLED = "false";
+      const off = fakeFetchRoutes([{ match: "news.google.com/rss/search", body }]);
+      await rssConnector.fetchMetrics!(person, feedUrlFor('"Drake"'), context(off));
+      expect(off.calls.some((url) => decodeURIComponent(url).includes("when:7d"))).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env.GOOGLE_NEWS_FRESH_ENABLED;
+      else process.env.GOOGLE_NEWS_FRESH_ENABLED = saved;
+      resetFeedCache();
+    }
+  });
+});
 
 describe("feedUrlFor", () => {
   it("keeps a URL and builds a Google News query from a term", () => {
