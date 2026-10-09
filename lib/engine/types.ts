@@ -68,11 +68,14 @@ export interface ScoredSignal {
   story?: StoryConfirmation;
   /** Set on a news-volume firing while the tune is on (variant C, 2026-10-02): the reading behind the impact. */
   newsVolume?: NewsVolumeDetail;
+  /** The follower tune's working (2026-10-09), present on a follower_count firing while the tune is on. */
+  followerGrowth?: FollowerGrowthDetail;
   /** The allegation hold's classification (2026-10-09): display and narrative only; the impact is untouched. */
   allegation?: AllegationFlag;
 }
 
-import type { NewsVolumeContext, NewsVolumeDetail } from "./news-volume";
+import type { FollowerGrowthDetail } from "./follower-growth";
+import type { NewsVolumeContext, NewsVolumeDayState, NewsVolumeDetail } from "./news-volume";
 import type { StoryClusterRecord } from "./story-records";
 
 /** How a confirming copy of an already-scored story was bounded (Phase 31). */
@@ -140,6 +143,8 @@ export interface TickContext {
   newsVolumeByPerson?: Map<string, NewsVolumeContext>;
   /** The company-news tune's inputs per person (2026-10-09): the same window's stories and the company-news day state. Loaded only while that tune is on. */
   companyNewsVolumeByPerson?: Map<string, NewsVolumeContext>;
+  /** The follower tune's day state per person (2026-10-09), loaded only while the tune is on. */
+  followerGrowthByPerson?: Map<string, NewsVolumeDayState>;
   /**
    * The logged Engine parameters (2026-10-09), read from engine_parameters
    * each tick: Gravity's rate per hour. Null when the row is absent or
@@ -298,6 +303,7 @@ export interface TickSummary {
     story?: StoryConfirmation;
     /** The news-volume tune's reading behind a news-volume firing's impact (variant C, 2026-10-02). */
     newsVolume?: NewsVolumeDetail;
+    followerGrowth?: FollowerGrowthDetail;
     /** Set on a neutral go-live (GO_LIVE_NEUTRAL_ENABLED): the stream title the narrative template quotes, and nothing else. */
     goLiveTitle?: string;
     /** The allegation hold (2026-10-09): the story carries a serious-crime allegation; held unless a tier 1-2 publisher's. Narratives never mention it either way. */

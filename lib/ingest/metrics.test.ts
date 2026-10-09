@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { REGISTER_HYSTERESIS_SIGMA, registerFor } from "@/lib/signals/register";
 
-import { DEFAULT_THRESHOLD_STD_DEVS, METRIC_PAYLOAD_KEYS, UNCHANGED_RELATIVE_EPSILON, deriveMetric, seriesReadFrom, describeWindow, formatSigma, isUnchangedObservation, metricSignal, observationSeries, observeMetric, outcomeReported, readMetricConfigs, type MetricConfig, type PreviousObservation, type SnapshotPoint } from "./metrics";
+import { DEFAULT_THRESHOLD_STD_DEVS, METRIC_PAYLOAD_KEYS, UNCHANGED_RELATIVE_EPSILON, deriveMetric, seriesReadFrom, describeWindow, formatSigma, isUnchangedObservation, metricSignal, observationSeries, observeMetric, outcomeReported, readMetricConfigs, withPersonMetricOverrides, type MetricConfig, type PreviousObservation, type SnapshotPoint } from "./metrics";
 
 /**
  * The metric pipeline's pure half: configuration is strict, observations are
@@ -558,5 +558,18 @@ describe("the baseline cut (baseline_since, 2026-10-09)", () => {
     expect(seriesReadFrom("news_volume_24h", configs, later)).toEqual(later);
     expect(seriesReadFrom("other", configs, lookback)).toEqual(lookback);
     expect(seriesReadFrom("unknown", configs, lookback)).toEqual(lookback);
+  });
+});
+
+describe("the mapping's own metric overrides (2026-10-09)", () => {
+  it("lays a person's min_samples over the source's declaration for that person alone, and ignores anything else", () => {
+    const configs = readMetricConfigs({ metrics: { follower_count: { label: "x", delta: "relative_rate", polarity: 1, baseline_window_hours: 168, min_samples: 24, sd_floor: 0.00001, scale: 1 } } });
+    const held = withPersonMetricOverrides(configs, { metrics: { follower_count: { min_samples: 100000 } } });
+    expect(held.metrics[0].minSamples).toBe(100000);
+    expect(configs.metrics[0].minSamples).toBe(24);
+    expect(withPersonMetricOverrides(configs, undefined)).toBe(configs);
+    expect(withPersonMetricOverrides(configs, { metrics: { follower_count: { min_samples: 1 } } })).toBe(configs);
+    expect(withPersonMetricOverrides(configs, { metrics: { follower_count: { sd_floor: 5 } } })).toBe(configs);
+    expect(withPersonMetricOverrides(configs, { metrics: { other: { min_samples: 50 } } })).toBe(configs);
   });
 });

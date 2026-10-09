@@ -192,6 +192,7 @@ export function getEngineEnvOverrides(): {
   signalQualityEnabled: string | undefined;
   newsVolumeTuneEnabled: string | undefined;
   companyNewsTuneEnabled: string | undefined;
+  followerTuneEnabled: string | undefined;
   googleNewsFreshEnabled: string | undefined;
   goLiveNeutralEnabled: string | undefined;
 } {
@@ -204,6 +205,7 @@ export function getEngineEnvOverrides(): {
     signalQualityEnabled: process.env.SIGNAL_QUALITY_ENABLED,
     newsVolumeTuneEnabled: process.env.NEWS_VOLUME_TUNE_ENABLED,
     companyNewsTuneEnabled: process.env.COMPANY_NEWS_TUNE_ENABLED,
+    followerTuneEnabled: process.env.FOLLOWER_TUNE_ENABLED,
     googleNewsFreshEnabled: process.env.GOOGLE_NEWS_FRESH_ENABLED,
     goLiveNeutralEnabled: process.env.GO_LIVE_NEUTRAL_ENABLED,
   };

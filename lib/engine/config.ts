@@ -572,6 +572,13 @@ export interface EngineConfig {
    */
   newsVolume: NewsVolumeTuneConfig;
   /**
+   * THE FOLLOWER TUNE (2026-10-09, FOLLOWER_TUNE_ENABLED): the variant C
+   * shape on Twitch follower_count without the direction rule: upward only,
+   * each firing capped at ceilingPoints, peak-only per person per UTC day
+   * (lib/engine/follower-growth.ts). Off, the metric scorer's reading stands.
+   */
+  followerGrowth: FollowerGrowthTuneConfig;
+  /**
    * THE COMPANY-NEWS TUNE (2026-10-09): the same rule, unchanged, applied to
    * the Finnhub company_news_volume_24h metric behind its own switch
    * (COMPANY_NEWS_TUNE_ENABLED). The metric counts the company's stories,
@@ -587,6 +594,15 @@ export interface EngineConfig {
 }
 
 /** The news-volume tune's tunables (variant C), shared by the news-volume and company-news switches. */
+export interface FollowerGrowthTuneConfig {
+  /** The switch. Ships false. */
+  enabled: boolean;
+  /** The metric key the tune replaces. */
+  metric: string;
+  /** The cap on one firing's reading and on the day's total. */
+  ceilingPoints: number;
+}
+
 export interface NewsVolumeTuneConfig {
   /** The switch. Ships false. The metric's own environment switch turns it on deliberately. */
   enabled: boolean;
@@ -705,6 +721,11 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     minSignedStories: 3,
     ceilingPoints: 0.75,
   },
+  followerGrowth: {
+    enabled: false,
+    metric: "follower_count",
+    ceilingPoints: 0.75,
+  },
   companyNewsVolume: {
     enabled: false,
     metric: "company_news_volume_24h",
@@ -804,6 +825,8 @@ export interface EngineEnvOverrides {
    * it off.
    */
   companyNewsTuneEnabled?: string | undefined;
+  /** FOLLOWER_TUNE_ENABLED: the follower tune (followerGrowth.enabled, default false). Only the exact string "true" turns it on. */
+  followerTuneEnabled?: string | undefined;
   /** GO_LIVE_NEUTRAL_ENABLED: the neutral go-live (narratives.goLiveNeutral, default false). Only the exact string "true" turns it on. */
   goLiveNeutralEnabled?: string | undefined;
 }
@@ -841,6 +864,7 @@ export function engineConfigFromEnv(env: EngineEnvOverrides, base: EngineConfig 
   if (parseExactTrue(env.signalQualityEnabled)) overrides.signalQuality = { ...base.signalQuality, enabled: true };
   if (parseExactTrue(env.newsVolumeTuneEnabled)) overrides.newsVolume = { ...base.newsVolume, enabled: true };
   if (parseExactTrue(env.companyNewsTuneEnabled)) overrides.companyNewsVolume = { ...base.companyNewsVolume, enabled: true };
+  if (parseExactTrue(env.followerTuneEnabled)) overrides.followerGrowth = { ...base.followerGrowth, enabled: true };
   if (parseExactTrue(env.goLiveNeutralEnabled)) overrides.narratives = { ...base.narratives, goLiveNeutral: true };
   const volumeReference = parsePositiveNumber(env.volumeReference);
   // withEngineConfig merges ONE level deep, so a nested section has to be

@@ -3,7 +3,8 @@ import type { EngineConfig } from "@/lib/engine/config";
 import type { MoodWindowHistory } from "@/lib/engine/forces/market-mood";
 import { isFreeSignal } from "@/lib/engine/selection";
 import { LIVE_MOMENT_KIND } from "@/lib/engine/sentiment/prescored";
-import { dayStateFromSignals, type NewsVolumeContext, type WindowStory } from "@/lib/engine/news-volume";
+import { followerGrowthDayStates } from "@/lib/engine/follower-growth";
+import { dayStateFromSignals, type NewsVolumeContext, type NewsVolumeDayState, type WindowStory } from "@/lib/engine/news-volume";
 import { readSignalVolumeRow, type PersonSignalVolume, type PersonSignalVolumeRow } from "@/lib/engine/signal-volume";
 import { VOIDED_COLUMN_PATH } from "@/lib/signals/voided";
 import type {
@@ -265,6 +266,23 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         if (config.companyNewsVolume.enabled) companyNewsVolumeByPerson = groupNewsVolumeContext(windowStories.data ?? [], (todaysCompanyFirings.data ?? []) as FiringRow[], activeIds, now);
       }
 
+      // The follower tune's day state (2026-10-09): today's processed follower_count firings, only while the tune is on.
+      let followerGrowthByPerson: Map<string, NewsVolumeDayState> | undefined;
+      if (config.followerGrowth.enabled) {
+        const dayStart = `${now.toISOString().slice(0, 10)}T00:00:00.000Z`;
+        const firings = await client
+          .from("signals")
+          .select("person_id, impact_score, occurred_at, sigma:raw_payload->sigma")
+          .eq("processed", true)
+          .is(VOIDED_COLUMN_PATH, null)
+          .eq("raw_payload->>metric", config.followerGrowth.metric)
+          .gte("occurred_at", dayStart)
+          .in("person_id", [...activeIds])
+          .limit(2_000);
+        if (firings.error) throw new Error(`Engine failed to load follower-growth firings: ${firings.error.message}`);
+        followerGrowthByPerson = followerGrowthDayStates((firings.data ?? []) as Array<{ person_id: string; impact_score: number | string | null; occurred_at: string; sigma: number | string | null }>, activeIds, now);
+      }
+
       // The logged Engine parameters (2026-10-09): Gravity's rate, read every
       // tick so an audited change takes effect on the next tick.
       const parameters = await client.from("engine_parameters").select("key, value");
@@ -304,6 +322,7 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         ...(recentStoriesByPerson ? { recentStoriesByPerson } : {}),
         ...(newsVolumeByPerson ? { newsVolumeByPerson } : {}),
         ...(companyNewsVolumeByPerson ? { companyNewsVolumeByPerson } : {}),
+        ...(followerGrowthByPerson ? { followerGrowthByPerson } : {}),
         engineParameters,
         tradeEvents,
         moodWindow: readMoodWindowHistory(moodEvents.data ?? [], activeIds),
@@ -505,6 +524,17 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
           : {}),
         // The news-volume tune's inputs (variant C), from what this store has scored, as the Supabase store reads them back.
         ...(config.companyNewsVolume.enabled ? { companyNewsVolumeByPerson: tuneContext(config.companyNewsVolume.metric, config.companyNewsVolume.windowHours) } : {}),
+        ...(config.followerGrowth.enabled
+          ? {
+              followerGrowthByPerson: followerGrowthDayStates(
+                signals
+                  .filter((s) => s.processed && activeIds.has(s.personId) && metricKey(s.rawPayload) === config.followerGrowth.metric)
+                  .map((s) => ({ person_id: s.personId, impact_score: processedSignals.find((p) => p.id === s.id)?.impactScore ?? 0, occurred_at: s.occurredAt.toISOString(), sigma: metricSigma(s.rawPayload) })),
+                activeIds,
+                now,
+              ),
+            }
+          : {}),
         engineParameters: readEngineParameters(Object.entries(seed.engineParameters ?? {}).map(([key, value]) => ({ key, value }))),
         ...(config.newsVolume.enabled
           ? {

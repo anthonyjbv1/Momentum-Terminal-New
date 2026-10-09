@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const admin = createSupabaseAdminClient();
-    const [sources, recentRuns, llmCost, apisportsPoll, sourceConfigs, ledgerFirst, recentTicks, apisportsNbaPoll] = await Promise.all([
+    const [sources, recentRuns, llmCost, apisportsPoll, sourceConfigs, ledgerFirst, recentTicks, metricHoldRows, apisportsNbaPoll] = await Promise.all([
       admin.from("source_health").select("*").order("name"),
       admin.from("ingest_runs").select("*").order("started_at", { ascending: false }).limit(runs),
       admin.from("llm_cost_per_tick").select("*").order("tick_number", { ascending: false, nullsFirst: false }).limit(ticks),
@@ -62,10 +62,12 @@ export async function GET(request: NextRequest) {
       admin.from("raw_video_view_samples").select("recorded_at").order("recorded_at", { ascending: true }).limit(1).maybeSingle(),
       // The recent ticks' scoring accounts, for the fallback warning (2026-10-09): a tick that scored by the rules instead of the model.
       admin.from("engine_ticks").select("tick_number, started_at, scoring:summary->scoring").order("tick_number", { ascending: false }).limit(ticks),
+      // The mappings carrying a metric hold (2026-10-09): a person's own min_samples laid over the source's.
+      admin.from("person_data_sources").select("config, people!inner(slug), data_sources!inner(name)").not("config->metrics", "is", null).limit(100),
       // The newest API-NBA poll's account of ITS subscription (a separate plan on the same key, 2026-10-09).
       admin.from("source_polls").select("started_at, detail, data_sources!inner(name)").eq("data_sources.name", "apisports_nba").not("detail->apisports_nba", "is", null).order("started_at", { ascending: false }).limit(1).maybeSingle(),
     ]);
-    for (const [label, result] of Object.entries({ sources, recentRuns, llmCost, apisportsPoll, sourceConfigs, ledgerFirst, recentTicks, apisportsNbaPoll })) {
+    for (const [label, result] of Object.entries({ sources, recentRuns, llmCost, apisportsPoll, sourceConfigs, ledgerFirst, recentTicks, metricHoldRows, apisportsNbaPoll })) {
       if (result.error) throw new Error(`${label}: ${result.error.message}`);
     }
     // The daily subscription check: the plan and its end as the last poll read them, and
@@ -114,6 +116,17 @@ export async function GET(request: NextRequest) {
     // The age-matched pace: when the ledger holds two weeks, so the switch day is tracked (2026-10-09).
     const videoPace = videoPaceStatus({ firstRecordedAt: ledgerFirst.data?.recorded_at ? new Date(ledgerFirst.data.recorded_at) : null, switchOn: isYouTubePaceAgeMatchedEnabled() }, new Date());
     warnings.push(...videoPace.warnings);
+    // The metric holds: every mapping whose own min_samples overrides the source's, so a hold is never forgotten.
+    const metricHolds = ((metricHoldRows.data ?? []) as unknown as Array<{ config: Record<string, unknown> | null; people: { slug: string } | null; data_sources: { name: string } | null }>).flatMap((row) => {
+      const metrics = row.config?.metrics;
+      if (!metrics || typeof metrics !== "object" || Array.isArray(metrics)) return [];
+      const hold = row.config?.hold && typeof row.config.hold === "object" && !Array.isArray(row.config.hold) ? (row.config.hold as Record<string, unknown>) : null;
+      return Object.entries(metrics as Record<string, unknown>).flatMap(([metric, entry]) => {
+        const minSamples = entry && typeof entry === "object" && !Array.isArray(entry) ? (entry as Record<string, unknown>).min_samples : undefined;
+        return typeof minSamples === "number" ? [{ person: row.people?.slug ?? "?", source: row.data_sources?.name ?? "?", metric, minSamples, reason: typeof hold?.reason === "string" ? hold.reason : null, setAt: typeof hold?.set_at === "string" ? hold.set_at : null, restoreTo: typeof hold?.restore_min_samples === "number" ? hold.restore_min_samples : null }] : [];
+      });
+    });
+    for (const hold of metricHolds) warnings.push(`${hold.source}.${hold.metric} for ${hold.person}: held at min_samples ${hold.minSamples}${hold.reason ? ` (${hold.reason})` : ""}${hold.restoreTo !== null ? `, back to ${hold.restoreTo} when the hold lifts` : ""}`);
     // The fallback warning: every recent tick that scored by the rules fallback, with the failed calls' reasons from the usage ledger.
     const tickRows: TickScoringRow[] = (recentTicks.data ?? []).map((row) => ({ tickNumber: Number(row.tick_number), startedAt: String(row.started_at), scoring: (row.scoring ?? null) as TickScoringRow["scoring"] }));
     const fallbackTickNumbers = tickRows.filter((row) => (row.scoring?.fallbacks ?? 0) > 0).map((row) => row.tickNumber);
@@ -166,6 +179,7 @@ export async function GET(request: NextRequest) {
       youtubePaceAgeMatched: isYouTubePaceAgeMatchedEnabled(),
       twitchRampUp: isTwitchRampUpEnabled(),
       videoPace,
+      metricHolds,
       fallbacks: { ticksRead: tickRows.length, ticks: fallbacks.ticks },
       rebaseline: { holdDays: REBASELINE_HOLD_DAYS, minSamplesAfterHold: DEFAULT_MIN_SAMPLES_AFTER_CUT, metrics: rebaseline.metrics },
       llm,

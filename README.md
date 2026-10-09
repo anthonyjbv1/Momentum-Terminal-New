@@ -3740,6 +3740,26 @@ Three items; the first two behind their own switches, shipped off; the third liv
 
 **Twitch follower growth, read-only (30 days).** Kai Cenat alone has a baseline (the three mapped 10-09 are at 18 of 24 samples). Seven firings, every one upward: +1.1σ on 09-18 (0.57 points); +11.1σ on 09-21 (1.50); +2.7σ then +9.2σ an hour later on 09-30 (1.37, 1.50); +2.6σ then +12.0σ an hour later on 10-09 00:15 and 01:15 (1.28, 1.50); +3.1σ on 10-09 18:15 (1.50): 9.2 points in thirty days from one metric, 538 readings inside the band, nine held as the same register. **No lull side has fired**: the series is a relative rate of a count that only rises, its mean is 0.00001 an hour against a floor of 0.00001, and the lowest reading in the window was −0.85σ: a lull cannot reach −2σ, so the metric is one-sided in practice. **It repeats**: an hourly rate that spikes (a raid, a record stream) crosses the register rule twice an hour apart (elevated, then spiking), so one event is two firings at the cap. Against variant C (the news-volume tune: one read a day, signed by its stories, capped), this metric reads every hour, is unsigned, and has no daily cap: the same shape the tune fixed for news volume. Nothing changed; the pattern is recorded here for the decision.
 
+## The follower tune (2026-10-09, `FOLLOWER_TUNE_ENABLED`, ships off) and the hold
+
+**The hold, now.** Asmongold, Jynxzi and Caedrel are held out of `follower_count` firing until the tune ships: their Twitch mappings carry `metrics.follower_count.min_samples = 100000` (a mapping's own min_samples lays over the source's for that person alone, `withPersonMetricOverrides`, `lib/ingest/metrics.ts`; nothing else on the declaration is overridable), with a `hold` block naming the reason, the time, who set it (Claude Code, on the operator's instruction) and the value to restore (24). The health check lists every such hold as a warning until it is lifted. Kai Cenat is unchanged. The three go back to 24 when the switch flips.
+
+**The tune** (`lib/engine/follower-growth.ts`): the variant C shape without the direction rule, because following is a positive act and there are no stories to sign a surge by. Upward only (a lull reads as nothing); each firing's reading is the metric scorer's impact capped at 0.75; peak-only per person per UTC day (only a firing that reaches the day's peak sigma moves the day, to its own reading, never negative), so the day's total is its peak firing's capped reading and a spike that crosses the register rule twice an hour apart adds only once. The day's state is read back from the day's processed firings, as the news-volume tune's is; nothing new is written. Off, the metric scorer's reading stands exactly as before.
+
+**Replay, Kai Cenat's thirty days** (`follower-growth.test.ts`, each firing in its own tick with the day read back): live 9.21 points, tuned 2.82.
+
+| Firing (UTC) | σ | Live | Tuned | Why |
+|---|---|---|---|---|
+| 09-18 10:15 | +1.13 | 0.57 | 0.57 | under the cap |
+| 09-21 08:15 | +11.06 | 1.50 | 0.75 | capped |
+| 09-30 21:15 | +2.73 | 1.37 | 0.75 | capped |
+| 09-30 22:15 | +9.16 | 1.50 | 0 | the day already given |
+| 10-09 00:15 | +2.56 | 1.28 | 0.75 | capped |
+| 10-09 01:15 | +12.01 | 1.50 | 0 | the day already given |
+| 10-09 18:15 | +3.08 | 1.50 | 0 | not the day's peak |
+
+It flips with the live-moment, pace and ramp-up switches; the three holds lift then.
+
 ## The NBA connector (2026-10-09, `apisports_nba`; mappings inactive until the plan is bought)
 
 **Which API.** API-Sports sells API-NBA and API-Basketball separately, and both carry per-player, per-game lines for the NBA: API-NBA's `/players/statistics` (filters `id`, `game`, `team`, `season`; points, `min`, `totReb`, `assists`, shooting, `plusMinus`, and a `comment` that names a DNP) and API-Basketball's `/games/statistics/players` (filters `ids` up to twenty games, `player`, `season`; added in its 1.5.6 release, with per-league-season coverage flags). **The connector is built against API-NBA** (`v2.nba.api-sports.io`): the NBA-specific product, stable player ids across seasons, the minutes and the DNP comment on the line, one league with no coverage flag to check. The documentation host is unreachable from the network this was written on, so the paths and field names are configuration on the row, as the NFL connector's are; the first live poll confirms them, and a name that turns out wrong is a row update.

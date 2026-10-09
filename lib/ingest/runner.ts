@@ -4,7 +4,7 @@ import type { DataSource } from "@/types";
 import type { Json } from "@/types/database";
 
 import { admitEvents, recentSince } from "./events";
-import { deriveMetric, metricSignal, observeMetric, readMetricConfigs, type MetricConfigs, type MetricObservation, type PreviousObservation, type SnapshotPoint, seriesReadFrom } from "./metrics";
+import { deriveMetric, metricSignal, observeMetric, readMetricConfigs, type MetricConfigs, type MetricObservation, type PreviousObservation, type SnapshotPoint, seriesReadFrom, withPersonMetricOverrides } from "./metrics";
 import { buildPublisherPolicy } from "./publishers";
 import { withProposedTiers } from "./publishers-proposed";
 import type { FeedHealthRow, IngestStore, IngestTrigger, ObservationRow, PollRow, PollStatus, SignalRow, SnapshotRow, VideoViewRow } from "./store";
@@ -628,8 +628,10 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         // once rather than every quarter of an hour (Phase 21).
         const previousObservations = current.size > 0 ? await store.lastObservations(person.id, source.id) : new Map<string, PreviousObservation>();
         const observations: Array<{ observation: MetricObservation; signal: RawSignal | null }> = [];
+        // The mapping's own min_samples, when it carries one (2026-10-09): a hold for this person alone.
+        const personConfigs = withPersonMetricOverrides(configs, personConfig);
         for (const [metricKey, point] of current) {
-          const metricConfig = configs.metrics.find((m) => m.metricKey === metricKey) ?? null;
+          const metricConfig = personConfigs.metrics.find((m) => m.metricKey === metricKey) ?? null;
           const observation = observeMetric({
             metricKey,
             config: metricConfig,

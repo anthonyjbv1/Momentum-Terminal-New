@@ -735,3 +735,29 @@ export function metricSignal(input: {
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
+
+
+/**
+ * THE MAPPING'S OWN METRIC OVERRIDES (2026-10-09). A person's mapping may
+ * carry `metrics: { <key>: { min_samples } }`, laid over the source's
+ * declaration for that person alone: the hold that keeps a newly mapped
+ * channel out of firing until a tune ships (Asmongold, Jynxzi and Caedrel on
+ * follower_count), without touching anyone else. Only min_samples is
+ * overridable; everything else is the source's. An override that is not an
+ * integer of at least 2 is ignored.
+ */
+export function withPersonMetricOverrides(configs: MetricConfigs, personConfig: Record<string, Json | undefined> | undefined): MetricConfigs {
+  const raw = personConfig?.metrics;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return configs;
+  const overrides = raw as Record<string, Json | undefined>;
+  let changed = false;
+  const metrics = configs.metrics.map((metric) => {
+    const entry = overrides[metric.metricKey];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return metric;
+    const minSamples = (entry as Record<string, Json | undefined>).min_samples;
+    if (typeof minSamples !== "number" || !Number.isInteger(minSamples) || minSamples < 2 || minSamples === metric.minSamples) return metric;
+    changed = true;
+    return { ...metric, minSamples };
+  });
+  return changed ? { ...configs, metrics } : configs;
+}
