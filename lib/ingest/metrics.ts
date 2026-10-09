@@ -65,6 +65,16 @@ export interface MetricConfig {
   scale: number;
   thresholdStdDevs: number;
   /**
+   * THE BASELINE CUT (2026-10-09). Snapshots recorded before this moment are
+   * not part of the baseline: the series is read from here. Set on a metric
+   * whose feed changed shape (the Google News `when:7d` switch multiplied
+   * every subject's news_volume_24h count), so the new feed is judged against
+   * itself and not against two weeks of the old one. History is untouched; a
+   * derived metric that reads this metric's series inherits the cut. Absent
+   * or null, the window alone bounds the series, exactly as before.
+   */
+  baselineSince?: Date | null;
+  /**
    * Whether this metric's OBSERVED QUANTITY may reach a reader (Phase 21+).
    *
    * EXPLICIT, AND FALSE UNLESS DECLARED. A count of news stories and a
@@ -221,6 +231,11 @@ export function readMetricConfigs(config: Record<string, Json | undefined>): Met
         const sdFloor = nonNegativeNumber(entry.sd_floor);
         const scale = positiveNumber(entry.scale);
         const thresholdStdDevs = entry.threshold_std_devs === undefined ? DEFAULT_THRESHOLD_STD_DEVS : positiveNumber(entry.threshold_std_devs);
+        const baselineSince = entry.baseline_since === undefined || entry.baseline_since === null ? null : typeof entry.baseline_since === "string" ? new Date(entry.baseline_since) : new Date(Number.NaN);
+        if (baselineSince !== null && !Number.isFinite(baselineSince.getTime())) {
+          problem("baseline_since must be an ISO 8601 timestamp");
+          continue;
+        }
         if (baselineWindowHours === null) {
           problem("baseline_window_hours must be a positive number");
           continue;
@@ -251,6 +266,7 @@ export function readMetricConfigs(config: Record<string, Json | undefined>): Met
           sdFloor,
           scale,
           thresholdStdDevs,
+          baselineSince,
           // Exactly true opts in. Anything else — absent, "true", 1, null —
           // is off, because a privacy default must not be reachable by a typo.
           publishObserved: entry.publish_observed === true,
@@ -358,6 +374,22 @@ export function observationSeries(points: SnapshotPoint[], kind: MetricDeltaKind
     out.push({ observed, at: point.recordedAt, value: point.value, previous: previous.value, delta });
   }
   return out;
+}
+
+/**
+ * The moment a metric's snapshot series is read from: the lookback the
+ * caller computed, or the baseline cut if that is later. For a derived
+ * metric the cut is its SOURCE metric's, since it reads the source's series;
+ * its own metrics entry may also carry one. Where the series is read (the
+ * runner, live mode) and where it is judged (observeMetric) both apply it,
+ * so a cut can never be bypassed by one path loading more than the other.
+ */
+export function seriesReadFrom(metricKey: string, configs: MetricConfigs, lookbackFrom: Date): Date {
+  const own = configs.metrics.find((m) => m.metricKey === metricKey)?.baselineSince ?? null;
+  const sourceKey = configs.derived.find((d) => d.metricKey === metricKey)?.from ?? null;
+  const inherited = sourceKey ? (configs.metrics.find((m) => m.metricKey === sourceKey)?.baselineSince ?? null) : null;
+  const cut = Math.max(own?.getTime() ?? Number.NEGATIVE_INFINITY, inherited?.getTime() ?? Number.NEGATIVE_INFINITY);
+  return Number.isFinite(cut) && cut > lookbackFrom.getTime() ? new Date(cut) : lookbackFrom;
 }
 
 // ---------------------------------------------------------------------------
@@ -485,7 +517,9 @@ export function observeMetric(input: ObserveMetricInput): MetricObservation {
     return { ...base, delta: last ? current.value - last.value : null, deltaKind: null, observed: null, windowHours: null, reading: null, outcome: "no_config", register: null };
   }
 
-  const windowStart = current.recordedAt.getTime() - config.baselineWindowHours * HOUR_MS;
+  // The window, and the baseline cut where one is set: a snapshot from
+  // before baseline_since is history, not baseline.
+  const windowStart = Math.max(current.recordedAt.getTime() - config.baselineWindowHours * HOUR_MS, config.baselineSince?.getTime() ?? Number.NEGATIVE_INFINITY);
   const inWindow = history.filter((point) => point.recordedAt.getTime() >= windowStart && point.recordedAt.getTime() < current.recordedAt.getTime());
   const series = observationSeries([...inWindow, current], config.delta);
   const latest = series.length > 0 && series[series.length - 1].at.getTime() === current.recordedAt.getTime() ? series[series.length - 1] : null;

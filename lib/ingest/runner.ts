@@ -4,7 +4,7 @@ import type { DataSource } from "@/types";
 import type { Json } from "@/types/database";
 
 import { admitEvents, recentSince } from "./events";
-import { deriveMetric, metricSignal, observeMetric, readMetricConfigs, type MetricConfigs, type MetricObservation, type PreviousObservation, type SnapshotPoint } from "./metrics";
+import { deriveMetric, metricSignal, observeMetric, readMetricConfigs, type MetricConfigs, type MetricObservation, type PreviousObservation, type SnapshotPoint, seriesReadFrom } from "./metrics";
 import { buildPublisherPolicy } from "./publishers";
 import { withProposedTiers } from "./publishers-proposed";
 import type { FeedHealthRow, IngestStore, IngestTrigger, ObservationRow, PollRow, PollStatus, SignalRow, SnapshotRow } from "./store";
@@ -587,7 +587,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
             continue;
           }
           current.set(reading.metricKey, { value: reading.value, recordedAt });
-          const since = new Date(recordedAt.getTime() - lookbackHours(reading.metricKey, configs) * HOUR_MS);
+          const since = seriesReadFrom(reading.metricKey, configs, new Date(recordedAt.getTime() - lookbackHours(reading.metricKey, configs) * HOUR_MS));
           history.set(
             reading.metricKey,
             (await store.listSnapshots(person.id, source.id, reading.metricKey, since)).map((s) => ({ value: s.value, recordedAt: s.recordedAt })),
@@ -607,7 +607,7 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
             continue;
           }
           current.set(derived.metricKey, { value: result.value, recordedAt: now });
-          const since = new Date(now.getTime() - lookbackHours(derived.metricKey, configs) * HOUR_MS);
+          const since = seriesReadFrom(derived.metricKey, configs, new Date(now.getTime() - lookbackHours(derived.metricKey, configs) * HOUR_MS));
           history.set(
             derived.metricKey,
             (await store.listSnapshots(person.id, source.id, derived.metricKey, since)).map((s) => ({ value: s.value, recordedAt: s.recordedAt })),

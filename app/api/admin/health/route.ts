@@ -2,7 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { authorizeSharedSecret } from "@/lib/api-auth";
 import { apiSportsWarnings } from "@/lib/connectors/apisports";
-import { getEngineSecretOrNull, getIngestSecretOrNull, getScorerName, isEngineCronEnabled } from "@/lib/env";
+import { getEngineSecretOrNull, getIngestSecretOrNull, getScorerName, isEngineCronEnabled, isGoogleNewsFreshEnabled } from "@/lib/env";
+import { DEFAULT_MIN_SAMPLES_AFTER_CUT, REBASELINE_HOLD_DAYS, rebaselineStatus } from "@/lib/ingest/rebaseline";
 import { resolveRoute } from "@/lib/llm/routing";
 import { ANTHROPIC_DEFAULT_MODEL } from "@/lib/llm/providers/anthropic";
 import type { LLMTaskType } from "@/lib/llm/types";
@@ -47,14 +48,16 @@ export async function GET(request: NextRequest) {
 
   try {
     const admin = createSupabaseAdminClient();
-    const [sources, recentRuns, llmCost, apisportsPoll] = await Promise.all([
+    const [sources, recentRuns, llmCost, apisportsPoll, sourceConfigs] = await Promise.all([
       admin.from("source_health").select("*").order("name"),
       admin.from("ingest_runs").select("*").order("started_at", { ascending: false }).limit(runs),
       admin.from("llm_cost_per_tick").select("*").order("tick_number", { ascending: false, nullsFirst: false }).limit(ticks),
       // The newest API-Sports poll's account of the subscription and the day's usage (2026-10-09).
       admin.from("source_polls").select("started_at, detail, data_sources!inner(name)").eq("data_sources.name", "apisports").not("detail->apisports", "is", null).order("started_at", { ascending: false }).limit(1).maybeSingle(),
+      // Every source's metric declarations, for the baseline-cut reminder (2026-10-09).
+      admin.from("data_sources").select("name, config").eq("is_active", true),
     ]);
-    for (const [label, result] of Object.entries({ sources, recentRuns, llmCost, apisportsPoll })) {
+    for (const [label, result] of Object.entries({ sources, recentRuns, llmCost, apisportsPoll, sourceConfigs })) {
       if (result.error) throw new Error(`${label}: ${result.error.message}`);
     }
     // The daily subscription check: the plan and its end as the last poll read them, and
@@ -77,6 +80,10 @@ export async function GET(request: NextRequest) {
     const warnings = [...apisports.warnings];
     const lastRead = apisports.readAt ? Date.parse(apisports.readAt) : Number.NaN;
     if (Number.isFinite(lastRead) && Date.now() - lastRead > 24 * 3_600_000) warnings.push(`API-Sports subscription last read ${apisports.readAt}: more than a day ago`);
+    // The baseline cuts in force, and the date each metric's min_samples is
+    // due back to its everyday value, so the hold is not forgotten.
+    const rebaseline = rebaselineStatus((sourceConfigs.data ?? []).map((row) => ({ name: row.name, config: row.config })), new Date());
+    warnings.push(...rebaseline.warnings);
     const taskTypes: LLMTaskType[] = ["sentiment", "anomaly", "narrative", "memory"];
     const routes = taskTypes.map((taskType) => {
       const route = resolveRoute(taskType);
@@ -116,6 +123,8 @@ export async function GET(request: NextRequest) {
       cronEnabled: isEngineCronEnabled(),
       warnings,
       apisports,
+      googleNewsFresh: isGoogleNewsFreshEnabled(),
+      rebaseline: { holdDays: REBASELINE_HOLD_DAYS, minSamplesAfterHold: DEFAULT_MIN_SAMPLES_AFTER_CUT, metrics: rebaseline.metrics },
       llm,
       sources: sources.data ?? [],
       recentRuns: (recentRuns.data ?? []).map((run) => ({ ...run, summary: undefined, hasSummary: run.summary !== null })),

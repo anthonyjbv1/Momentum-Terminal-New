@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { REGISTER_HYSTERESIS_SIGMA, registerFor } from "@/lib/signals/register";
 
-import { DEFAULT_THRESHOLD_STD_DEVS, METRIC_PAYLOAD_KEYS, UNCHANGED_RELATIVE_EPSILON, deriveMetric, describeWindow, formatSigma, isUnchangedObservation, metricSignal, observationSeries, observeMetric, outcomeReported, readMetricConfigs, type MetricConfig, type PreviousObservation, type SnapshotPoint } from "./metrics";
+import { DEFAULT_THRESHOLD_STD_DEVS, METRIC_PAYLOAD_KEYS, UNCHANGED_RELATIVE_EPSILON, deriveMetric, seriesReadFrom, describeWindow, formatSigma, isUnchangedObservation, metricSignal, observationSeries, observeMetric, outcomeReported, readMetricConfigs, type MetricConfig, type PreviousObservation, type SnapshotPoint } from "./metrics";
 
 /**
  * The metric pipeline's pure half: configuration is strict, observations are
@@ -49,8 +49,8 @@ describe("readMetricConfigs", () => {
     expect(problems).toEqual([]);
     expect(metrics).toEqual([
       // subscriber_count declares no threshold, so it takes the default; popularity overrides it.
-      { ...SUBSCRIBERS, thresholdStdDevs: DEFAULT_THRESHOLD_STD_DEVS },
-      { metricKey: "popularity", label: "popularity", polarity: 1, delta: "level", baselineWindowHours: 720, minSamples: 48, sdFloor: 0.1, scale: 1, thresholdStdDevs: 1.5, publishObserved: false },
+      { ...SUBSCRIBERS, thresholdStdDevs: DEFAULT_THRESHOLD_STD_DEVS, baselineSince: null },
+      { metricKey: "popularity", label: "popularity", polarity: 1, delta: "level", baselineWindowHours: 720, minSamples: 48, sdFloor: 0.1, scale: 1, thresholdStdDevs: 1.5, baselineSince: null, publishObserved: false },
     ]);
     expect(derived).toEqual([{ metricKey: "upload_rate", from: "video_count", kind: "rate", windowHours: 168, perHours: 24, minSpanHours: 24, spikeStdDevs: 2, spikeSdFloor: 0.5, minSourceSamples: 24 }]);
   });
@@ -472,5 +472,91 @@ describe("declared inputs", () => {
       derived: { viral_moment_rate: { from: "news_volume_24h", kind: "spike_count", window_hours: 168, spike_std_devs: 2, spike_sd_floor: 0.5, min_source_samples: 24 } },
     });
     expect(declared.inputs).toEqual({});
+  });
+});
+
+describe("the baseline cut (baseline_since, 2026-10-09)", () => {
+  // A window wide enough that the hourly fixtures below never fall out of it: the cut is what is under test.
+  const LEVEL: MetricConfig = { metricKey: "news_volume_24h", label: "news volume", polarity: 1, delta: "level", baselineWindowHours: 2000, minSamples: 24, sdFloor: 0.5, scale: 0.7, thresholdStdDevs: 2, publishObserved: true };
+  /** Hourly level snapshots: `before` hours at the old level, then `after` hours at the new one. */
+  const stepped = (before: number, oldLevel: number, after: number, newLevel: number): SnapshotPoint[] => [
+    ...Array.from({ length: before }, (_, i) => ({ value: oldLevel, recordedAt: hour(i) })),
+    ...Array.from({ length: after }, (_, i) => ({ value: newLevel, recordedAt: hour(before + i) })),
+  ];
+
+  it("is read from the source row as an ISO timestamp, absent means none, and anything else is a configuration problem", () => {
+    const base = { polarity: 1, delta: "level", baseline_window_hours: 336, min_samples: 24, sd_floor: 0.5, scale: 0.7 };
+    const set = readMetricConfigs({ metrics: { news_volume_24h: { ...base, baseline_since: "2026-10-09T12:00:00Z" } } });
+    expect(set.problems).toEqual([]);
+    expect(set.metrics[0].baselineSince?.toISOString()).toBe("2026-10-09T12:00:00.000Z");
+    const unset = readMetricConfigs({ metrics: { news_volume_24h: base } });
+    expect(unset.metrics[0].baselineSince).toBeNull();
+    expect(readMetricConfigs({ metrics: { news_volume_24h: { ...base, baseline_since: null } } }).metrics[0].baselineSince).toBeNull();
+    const bad = readMetricConfigs({ metrics: { news_volume_24h: { ...base, baseline_since: "yesterday" } } });
+    expect(bad.metrics).toEqual([]);
+    expect(bad.problems).toEqual(["metrics.news_volume_24h: baseline_since must be an ISO 8601 timestamp"]);
+    expect(readMetricConfigs({ metrics: { news_volume_24h: { ...base, baseline_since: 17 } } }).problems).toHaveLength(1);
+  });
+
+  it("excludes every sample recorded before the cut: the new feed is judged against itself, not against the old one", () => {
+    // 200 hours at 5, then 30 hours at 40: a step the old baseline reads as a surge of many sigma.
+    const history = stepped(200, 5, 30, 40);
+    const current = { value: 40, recordedAt: hour(230) };
+    const uncut = observeMetric({ metricKey: LEVEL.metricKey, config: LEVEL, history, current });
+    expect(uncut.outcome).not.toBe("inside_band");
+    expect(uncut.reading!.sigma).toBeGreaterThan(2);
+    // Cut at the step: the 30 post-cut samples at 40 are the whole baseline, and 40 sits on it.
+    const cut = observeMetric({ metricKey: LEVEL.metricKey, config: { ...LEVEL, baselineSince: hour(200) }, history, current });
+    expect(cut.reading!.samples).toBe(31);
+    expect(cut.reading!.mean).toBe(40);
+    expect(cut.outcome).toBe("inside_band");
+    // A cut a day inside the new regime drops those first samples too: the count says exactly what was read.
+    expect(observeMetric({ metricKey: LEVEL.metricKey, config: { ...LEVEL, baselineSince: hour(224) }, history, current }).reading!.samples).toBe(7);
+  });
+
+  it("with min_samples 672 emits nothing until 672 post-cut samples exist, however loud the old history", () => {
+    const held: MetricConfig = { ...LEVEL, minSamples: 672, baselineSince: hour(200) };
+    const spikeAt = (postCutHours: number) => {
+      const history = stepped(200, 5, postCutHours, 40);
+      return observeMetric({ metricKey: LEVEL.metricKey, config: held, history, current: { value: 400, recordedAt: hour(200 + postCutHours) } });
+    };
+    // 670 post-cut snapshots plus the reading itself is 671 samples, one short; 671 plus the reading is 672.
+    expect(spikeAt(670).outcome).toBe("insufficient_baseline");
+    expect(spikeAt(670).reading!.samples).toBe(671);
+    const enough = spikeAt(671);
+    expect(enough.reading!.samples).toBe(672);
+    expect(enough.outcome).toBe("emitted");
+    // The same reading judged against 1,000 pre-cut samples alone would have emitted long before.
+    expect(observeMetric({ metricKey: LEVEL.metricKey, config: LEVEL, history: stepped(200, 5, 300, 40), current: { value: 400, recordedAt: hour(500) } }).outcome).toBe("emitted");
+  });
+
+  it("with neither key set behaves exactly as before: the same observation, sample for sample", () => {
+    const history = stepped(200, 5, 30, 40);
+    const current = { value: 40, recordedAt: hour(230) };
+    const before = observeMetric({ metricKey: LEVEL.metricKey, config: LEVEL, history, current });
+    const withNull = observeMetric({ metricKey: LEVEL.metricKey, config: { ...LEVEL, baselineSince: null }, history, current });
+    const parsed = readMetricConfigs({ metrics: { news_volume_24h: { polarity: 1, delta: "level", baseline_window_hours: 2000, min_samples: 24, sd_floor: 0.5, scale: 0.7, label: "news volume", publish_observed: true } } }).metrics[0];
+    const fromRow = observeMetric({ metricKey: LEVEL.metricKey, config: parsed, history, current });
+    // The observation carries its config; compare everything the config decides.
+    const judged = (o: ReturnType<typeof observeMetric>) => ({ ...o, config: undefined });
+    expect(judged(withNull)).toEqual(judged(before));
+    expect(judged(fromRow)).toEqual(judged(before));
+    expect(before.reading!.samples).toBe(231);
+  });
+
+  it("is honoured where the series is read: the runner's read-from moment is the later of the lookback and the cut, and a derived metric inherits its source's", () => {
+    const configs = readMetricConfigs({
+      metrics: { news_volume_24h: { polarity: 1, delta: "level", baseline_window_hours: 336, min_samples: 24, sd_floor: 0.5, scale: 0.7, baseline_since: "2026-10-09T12:00:00Z" }, other: { polarity: 1, delta: "level", baseline_window_hours: 24, min_samples: 2, sd_floor: 0, scale: 1 } },
+      derived: { viral_moment_rate: { from: "news_volume_24h", kind: "spike_count", window_hours: 168, spike_std_devs: 2, spike_sd_floor: 0.5, min_source_samples: 24 } },
+    });
+    expect(configs.problems).toEqual([]);
+    const lookback = new Date("2026-10-01T00:00:00Z");
+    expect(seriesReadFrom("news_volume_24h", configs, lookback).toISOString()).toBe("2026-10-09T12:00:00.000Z");
+    expect(seriesReadFrom("viral_moment_rate", configs, lookback).toISOString()).toBe("2026-10-09T12:00:00.000Z");
+    // A lookback already inside the cut, and a metric without one, read from the lookback.
+    const later = new Date("2026-10-20T00:00:00Z");
+    expect(seriesReadFrom("news_volume_24h", configs, later)).toEqual(later);
+    expect(seriesReadFrom("other", configs, lookback)).toEqual(lookback);
+    expect(seriesReadFrom("unknown", configs, lookback)).toEqual(lookback);
   });
 });

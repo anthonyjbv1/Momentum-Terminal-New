@@ -3,7 +3,7 @@ import type { ConnectorContext, LiveCapability, LiveStatus, LiveStream, RawSigna
 import type { DataSource } from "@/types";
 import type { Json } from "@/types/database";
 
-import { metricSignal, observeMetric, readMetricConfigs, type MetricConfigs } from "../metrics";
+import { metricSignal, observeMetric, readMetricConfigs, seriesReadFrom, type MetricConfigs } from "../metrics";
 import { observationRow } from "../runner";
 import type { ObservationRow, PersonMapping, SignalRow } from "../store";
 import {
@@ -607,7 +607,7 @@ async function closeSession(input: CloseInput): Promise<{ signalsCreated: number
     const rows: Array<{ observation: ReturnType<typeof observeMetric>; signal: RawSignal | null }> = [];
     for (const reading of readings) {
       const metricConfig = metricConfigs.metrics.find((metric) => metric.metricKey === reading.metricKey) ?? null;
-      const since = new Date(endedAt.getTime() - Math.max(1, metricConfig?.baselineWindowHours ?? 1) * HOUR_MS);
+      const since = seriesReadFrom(reading.metricKey, metricConfigs, new Date(endedAt.getTime() - Math.max(1, metricConfig?.baselineWindowHours ?? 1) * HOUR_MS));
       const history = (await store.listSnapshots(mapping.person.id, source.id, reading.metricKey, since)).map((snapshot) => ({ value: snapshot.value, recordedAt: snapshot.recordedAt }));
       const observation = observeMetric({ metricKey: reading.metricKey, config: metricConfig, history, current: { value: reading.value, recordedAt: endedAt } });
       const signal = observation.outcome === "emitted" ? metricSignal({ person: mapping.person, sourceName: source.name, externalIdentifier: mapping.externalIdentifier, observation }) : null;
