@@ -110,6 +110,12 @@ export interface SignalActivity {
   averageConfidence: number;
 }
 
+/** The operator's logged Engine parameters, as the store reads them (engine_parameters). */
+export interface EngineParameters {
+  /** gravity_rate: Gravity's decay rate per hour; null when not set or not a positive number. */
+  gravityRatePerHour: number | null;
+}
+
 /** Everything one tick needs, loaded up front so the math is pure. */
 export interface TickContext {
   now: Date;
@@ -129,6 +135,15 @@ export interface TickContext {
   recentStoriesByPerson?: Map<string, RecentStory[]>;
   /** The news-volume tune's inputs per person (variant C): the window's signed stories and the day's state. Loaded only while the tune is on. */
   newsVolumeByPerson?: Map<string, NewsVolumeContext>;
+  /** The company-news tune's inputs per person (2026-10-09): the same window's stories and the company-news day state. Loaded only while that tune is on. */
+  companyNewsVolumeByPerson?: Map<string, NewsVolumeContext>;
+  /**
+   * The logged Engine parameters (2026-10-09), read from engine_parameters
+   * each tick: Gravity's rate per hour. Null when the row is absent or
+   * malformed, in which case the config default applies and the gravity
+   * row's details say so.
+   */
+  engineParameters?: EngineParameters;
   /** Trade events inside the Trading Activity history window. */
   tradeEvents: TradeEvent[];
   /**

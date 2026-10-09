@@ -96,6 +96,7 @@ describe("Phase 14 invariants", () => {
     expect(parseExactTrue("true")).toBe(true);
     expect(parseExactTrue(undefined)).toBe(false);
     expect(describeEngineOverrides(engineConfigFromEnv({ targetDriftEnabled: "true" }))).toEqual(["targetDrift.enabled = true (default false)"]);
+    expect(describeEngineOverrides(engineConfigFromEnv({ companyNewsTuneEnabled: "true" }))).toEqual(["companyNewsVolume.enabled = true (default false)"]);
   });
 
   /**

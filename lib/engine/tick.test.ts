@@ -734,3 +734,96 @@ describe("Engine tick — the news-volume tune", () => {
     expect(fourth.signals.find((s) => s.id === "nv4")).toMatchObject({ impact: 0, newsVolume: { zeroBecause: "lull" } });
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE COMPANY-NEWS TUNE (2026-10-09), and GRAVITY'S RATE AS A PARAMETER
+// ---------------------------------------------------------------------------
+
+describe("Engine tick — the company-news tune", () => {
+  const minutesBefore = (minutes: number) => new Date(NOW.getTime() - minutes * 60_000);
+  const article = (id: string, headline: string, minutesAgo: number): EngineSignal => ({ id, personId: "p-drake", headline, rawPayload: { kind: "article" }, sourceName: "rss", sourceTier: 2, occurredAt: minutesBefore(minutesAgo), createdAt: NOW });
+  const firing = (id: string, metric: string, sigma: number, at: Date): EngineSignal => ({
+    id,
+    personId: "p-drake",
+    headline: metric === "company_news_volume_24h" ? "Drake's company is in the news more than usual" : "Drake is getting more coverage than usual",
+    rawPayload: { kind: "metric", metric, label: "news volume", sigma, polarity: 1, scale: metric === "company_news_volume_24h" ? 0.5 : 0.7, window_hours: 336, source: metric === "company_news_volume_24h" ? "finnhub" : "rss" },
+    sourceName: metric === "company_news_volume_24h" ? "finnhub" : "rss",
+    sourceTier: 2,
+    occurredAt: at,
+    createdAt: at,
+  });
+  const allegations = [article("a1", "Drake sued over lawsuit claims", 30), article("a2", "Drake scandal deepens as fraud alleged", 20), article("a3", "Drake arrested, charged with fraud", 10)];
+  const quiet = withEngineConfig({ marketMood: { ratePerHour: 0 }, inversePairs: { defaultDampening: 0 } });
+  const companyOn = withEngineConfig({ companyNewsVolume: { enabled: true } }, quiet);
+
+  it("off, the metric scorer's reading stands: a company surge is a positive move whatever the stories say", async () => {
+    const store = createMemoryEngineStore(seed({ signals: [...allegations, firing("cn", "company_news_volume_24h", 3, NOW)] }));
+    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config: quiet });
+    const cn = summary.signals.find((s) => s.id === "cn")!;
+    expect(cn.impact).toBeCloseTo(1.5 * 1 * 0.5, 6);
+    expect(cn.newsVolume).toBeUndefined();
+  });
+
+  it("on, the company firing takes the rule's reading, signed by the person's own stories, and the news-volume firing is left to its own switch", async () => {
+    const store = createMemoryEngineStore(seed({ signals: [...allegations, firing("cn", "company_news_volume_24h", 3, NOW), firing("nv", "news_volume_24h", 3, NOW)] }));
+    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config: companyOn });
+    const stories = summary.signals.filter((s) => s.id.startsWith("a"));
+    const signed = stories.reduce((sum, s) => sum + s.impact, 0);
+    const cn = summary.signals.find((s) => s.id === "cn")!;
+    expect(cn.newsVolume).toMatchObject({ sigma: 3, signedStories: 3, balance: -1, multiplier: 1.5, zeroBecause: null, dayBefore: { peakSigma: null, applied: 0 } });
+    expect(cn.impact).toBeCloseTo(-Math.min(0.75, 0.5 * Math.abs(signed)), 6);
+    // The news-volume metric is untouched by this switch: the scorer's positive reading stands.
+    const nv = summary.signals.find((s) => s.id === "nv")!;
+    expect(nv.newsVolume).toBeUndefined();
+    expect(nv.impact).toBeCloseTo(1.5 * 1 * 0.7, 6);
+    expect(store.processedSignals.find((s) => s.id === "cn")?.impactScore).toBeCloseTo(cn.impact, 6);
+  });
+
+  it("keeps its own day state: the company day's peak is read back from company firings alone", async () => {
+    const store = createMemoryEngineStore(seed({ signals: [...allegations, firing("cn1", "company_news_volume_24h", 3, NOW)] }));
+    const first = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config: companyOn });
+    const applied = first.signals.find((s) => s.id === "cn1")!.impact;
+    expect(applied).toBeLessThan(0);
+    const t2 = new Date(NOW.getTime() + 30_000);
+    store.signals.push(firing("cn2", "company_news_volume_24h", 2.5, t2));
+    const second = await runEngineTick({ store, scorer: rulesBasedScorer, now: t2, config: companyOn });
+    expect(second.signals.find((s) => s.id === "cn2")).toMatchObject({ impact: 0, newsVolume: { zeroBecause: "not_the_peak", dayBefore: { peakSigma: 3, applied: expect.closeTo(applied, 6) } } });
+    // With both switches on, a news-volume firing at the same sigma starts its own day: it is not "not the peak" of the company day.
+    const both = withEngineConfig({ newsVolume: { enabled: true } }, companyOn);
+    const t3 = new Date(NOW.getTime() + 60_000);
+    store.signals.push(firing("nv1", "news_volume_24h", 2.5, t3));
+    const third = await runEngineTick({ store, scorer: rulesBasedScorer, now: t3, config: both });
+    expect(third.signals.find((s) => s.id === "nv1")?.newsVolume).toMatchObject({ dayBefore: { peakSigma: null, applied: 0 } });
+  });
+});
+
+describe("Engine tick — Gravity's rate as a logged parameter", () => {
+  const gravityOf = (summary: Awaited<ReturnType<typeof runEngineTick>>, store: ReturnType<typeof createMemoryEngineStore>) => {
+    const event = store.scoreEvents.find((e) => e.personId === "p-drake" && e.force === "gravity")!;
+    return { impact: summary.people.find((p) => p.slug === "drake")!.forces.gravity, details: event.details as { lambdaPerHour: number; lambdaSource: string; deltaHours: number } };
+  };
+
+  it("without a row, the config default applies and the audit row says so", async () => {
+    const store = createMemoryEngineStore(seed());
+    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW });
+    const gravity = gravityOf(summary, store);
+    expect(gravity.details).toMatchObject({ lambdaPerHour: CONFIG.gravity.lambdaPerHour, lambdaSource: "default" });
+  });
+
+  it("with gravity_rate set, the tick decays at that rate and the audit row names the parameter", async () => {
+    const store = createMemoryEngineStore(seed({ engineParameters: { gravity_rate: 0.08 } }));
+    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW });
+    const gravity = gravityOf(summary, store);
+    expect(gravity.details).toMatchObject({ lambdaPerHour: 0.08, lambdaSource: "parameter" });
+    const expected = 65 + (drake.current_score - 65) * Math.exp(-0.08 * gravity.details.deltaHours) - Number(drake.current_score);
+    expect(gravity.impact).toBeCloseTo(expected, 4);
+  });
+
+  it("a malformed or non-positive value reads as unset", async () => {
+    for (const bad of ["fast", 0, -1, null] as const) {
+      const store = createMemoryEngineStore(seed({ engineParameters: { gravity_rate: bad } }));
+      const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW });
+      expect(gravityOf(summary, store).details).toMatchObject({ lambdaPerHour: CONFIG.gravity.lambdaPerHour, lambdaSource: "default" });
+    }
+  });
+});

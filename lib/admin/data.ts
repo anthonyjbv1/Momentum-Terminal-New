@@ -933,6 +933,8 @@ export interface MarketReport {
   frozen: FrozenAccountRow[];
   people: MarketPersonRow[];
   tiers: TierSettingsRow[];
+  /** The logged Engine parameters (2026-10-09): key, value as stored, when last set. */
+  engineParameters: Array<{ key: string; value: string; updatedAt: string }>;
   /** The detectors' thresholds, from platform_settings, name → value. */
   thresholds: Array<{ name: string; value: string; note: string }>;
   /** The house book, summed by category, all time and the trailing day. Integer cents; positive is a house gain. */
@@ -951,7 +953,7 @@ const HOUSE_ROW_CAP = 20_000;
 export async function readMarket(): Promise<MarketReport> {
   const client = await adminClient();
   const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const [open, closed, events, excluded, frozen, people, tiers, settings, house, audit] = await Promise.all([
+  const [open, closed, events, excluded, frozen, people, tiers, settings, house, audit, engineParameters] = await Promise.all([
     client.from("alerts").select("*").in("status", ["open", "reviewing"]).order("created_at", { ascending: false }).limit(ALERT_LIMIT),
     client.from("alerts").select("*").in("status", ["resolved", "dismissed"]).order("updated_at", { ascending: false }).limit(RECENT_LIMIT),
     client.from("surveillance_events").select("*").order("recorded_at", { ascending: false }).order("id", { ascending: false }).limit(RECENT_LIMIT),
@@ -966,8 +968,9 @@ export async function readMarket(): Promise<MarketReport> {
     client.from("platform_settings").select("*").maybeSingle(),
     client.from("house_ledger").select("category, amount_cents, recorded_at").order("recorded_at", { ascending: false }).limit(HOUSE_ROW_CAP),
     client.from("admin_audit_log").select("*").order("performed_at", { ascending: false }).order("id", { ascending: false }).limit(RECENT_LIMIT),
+    client.from("engine_parameters").select("key, value, updated_at").order("key"),
   ]);
-  for (const [label, result] of Object.entries({ open, closed, events, excluded, frozen, people, tiers, settings, house, audit })) {
+  for (const [label, result] of Object.entries({ open, closed, events, excluded, frozen, people, tiers, settings, house, audit, engineParameters })) {
     if (result.error) throw new Error(`${label}: ${result.error.message}`);
   }
 
@@ -1065,6 +1068,7 @@ export async function readMarket(): Promise<MarketReport> {
         shorting: row.shorting_override,
       },
     })),
+    engineParameters: (engineParameters.data ?? []).map((row) => ({ key: row.key, value: JSON.stringify(row.value), updatedAt: row.updated_at })),
     tiers: (tiers.data ?? []).map((row) => ({
       tier: row.tier,
       pricingMode: row.pricing_mode,

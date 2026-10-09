@@ -28,7 +28,9 @@ import { createSupabaseServerClient } from "@/lib/supabase-server";
  * an object), so the page is one render with no client JavaScript.
  */
 
-const ACTIONS = ["freeze", "unfreeze", "halt", "lift_halt", "set_mode", "exclude", "unexclude", "alert_status", "set_parameter", "set_tier_parameter", "reset_market", "void_signal", "void_narrative"] as const;
+const ACTIONS = ["freeze", "unfreeze", "halt", "lift_halt", "set_mode", "exclude", "unexclude", "alert_status", "set_parameter", "set_tier_parameter", "set_engine_parameter", "reset_market", "void_signal", "void_narrative"] as const;
+/** The logged Engine parameters (2026-10-09). */
+const ENGINE_PARAMETERS = ["gravity_rate"] as const;
 type Action = (typeof ACTIONS)[number];
 
 const PERSON_PARAMETERS = ["tier", "pricing_mode_override", "depth_units_override", "decay_half_life_ticks_override", "premium_cap_cents_override", "shorting_override"] as const;
@@ -164,6 +166,15 @@ export async function marketAction(form: FormData): Promise<void> {
         if (!TIER_PARAMETERS.includes(parameter)) finish("Unknown tier parameter.");
         if (!note) finish("A tier parameter change needs a reason.");
         outcome = await supabase.rpc("admin_set_tier_market_parameter", { p_tier: tier, p_parameter: parameter, p_value: parameterValue(text(form, "value", 40)), p_reason: note, p_alert_id: alertId ?? undefined });
+        break;
+      }
+      case "set_engine_parameter": {
+        const parameter = text(form, "parameter", 40) as (typeof ENGINE_PARAMETERS)[number];
+        const value = parameterValue(text(form, "value", 40));
+        if (!ENGINE_PARAMETERS.includes(parameter)) finish("Unknown Engine parameter.");
+        if (typeof value !== "number") finish("An Engine parameter needs a number.");
+        if (!note) finish("An Engine parameter change needs a reason.");
+        outcome = await supabase.rpc("admin_set_engine_parameter", { p_key: parameter, p_value: value, p_reason: note, p_alert_id: alertId ?? undefined });
         break;
       }
       case "reset_market": {

@@ -191,6 +191,7 @@ export function getEngineEnvOverrides(): {
   moodRatePerHour: string | undefined;
   signalQualityEnabled: string | undefined;
   newsVolumeTuneEnabled: string | undefined;
+  companyNewsTuneEnabled: string | undefined;
 } {
   return {
     tradingMinPopulatedWindows: process.env.ENGINE_TRADING_MIN_POPULATED_WINDOWS,
@@ -200,6 +201,7 @@ export function getEngineEnvOverrides(): {
     moodRatePerHour: process.env.ENGINE_MOOD_RATE_PER_HOUR,
     signalQualityEnabled: process.env.SIGNAL_QUALITY_ENABLED,
     newsVolumeTuneEnabled: process.env.NEWS_VOLUME_TUNE_ENABLED,
+    companyNewsTuneEnabled: process.env.COMPANY_NEWS_TUNE_ENABLED,
   };
 }
 
@@ -223,6 +225,15 @@ export function isSignalQualityEnabled(): boolean {
  */
 export function isNewsVolumeTuneEnabled(): boolean {
   return process.env.NEWS_VOLUME_TUNE_ENABLED?.trim() === "true";
+}
+
+/**
+ * The switch of the company-news tune (2026-10-09): the same rule on the
+ * Finnhub company_news_volume_24h metric. Exactly "true" turns it on; it
+ * ships unset, which is off, and off the metric scorer's reading stands.
+ */
+export function isCompanyNewsTuneEnabled(): boolean {
+  return process.env.COMPANY_NEWS_TUNE_ENABLED?.trim() === "true";
 }
 
 /**

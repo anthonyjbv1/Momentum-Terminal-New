@@ -158,6 +158,22 @@ export function MarketSection({ report, now, notice }: { report: MarketReport; n
             </button>
           </form>
           <form action={marketAction} className="adm-form">
+            <input type="hidden" name="action" value="set_engine_parameter" />
+            <select name="parameter" aria-label="Engine parameter" defaultValue="gravity_rate">
+              {report.engineParameters.map((row) => (
+                <option key={row.key} value={row.key}>
+                  {row.key} (now {row.value})
+                </option>
+              ))}
+              {report.engineParameters.length === 0 ? <option value="gravity_rate">gravity_rate (unset: code default)</option> : null}
+            </select>
+            <input name="value" placeholder="per hour, e.g. 0.35" aria-label="Engine parameter value" style={{ width: 140 }} />
+            <input name="note" placeholder="reason (required)" aria-label="Reason for the Engine parameter change" required />
+            <button type="submit" className="adm-btn">
+              Set Engine parameter
+            </button>
+          </form>
+          <form action={marketAction} className="adm-form">
             <input type="hidden" name="action" value="void_signal" />
             <input name="signal_id" placeholder="signal id (uuid)" aria-label="Signal id to void" required style={{ width: 300 }} />
             <input name="note" placeholder="reason (required)" aria-label="Void reason" required />

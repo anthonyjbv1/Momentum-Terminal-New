@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import companyReplay from "@/lib/engine/__fixtures__/company-news-replay-20261009.json";
 import replay from "@/lib/engine/__fixtures__/news-volume-replay-20261002.json";
 
 import { DEFAULT_ENGINE_CONFIG, describeEngineOverrides, engineConfigFromEnv, withEngineConfig } from "./config";
@@ -311,7 +312,92 @@ describe("the rule, piece by piece", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// THE COMPANY-NEWS TUNE (2026-10-09): the same rule on company_news_volume_24h
+// ---------------------------------------------------------------------------
+
+/**
+ * The fixture is the read-only replay of 2026-10-09 over 09-28 to 10-09:
+ * every company-news firing of the window with its sigma, the live reading
+ * the metric scorer gave it, and the person's signed stories in the 24 hours
+ * before it (as the store loads them). The rule, unchanged, must give the
+ * replay's result: 19 firings, net −0.15, Musk −0.15 and everyone else 0.
+ */
+interface CompanyFiring {
+  slug: string;
+  id: string;
+  occurredAt: string;
+  sigma: number;
+  live: number;
+  stories: Array<{ occurredAt: string; impact: number; confidence: number }>;
+}
+const companyFirings = companyReplay as CompanyFiring[];
+const COMPANY = DEFAULT_ENGINE_CONFIG.companyNewsVolume;
+
+describe("the company-news tune reproduces the 10-09 read-only replay", () => {
+  const byPerson = new Map<string, CompanyFiring[]>();
+  for (const firing of companyFirings) byPerson.set(firing.slug, [...(byPerson.get(firing.slug) ?? []), firing]);
+  const totals = new Map<string, number>();
+  const details = new Map<string, ReturnType<typeof readNewsVolume>["detail"]>();
+  for (const [slug, firings] of byPerson) {
+    let day: NewsVolumeDayState | null = null;
+    let total = 0;
+    for (const firing of [...firings].sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))) {
+      const read = readNewsVolume(
+        { sigma: firing.sigma, at: new Date(firing.occurredAt), stories: firing.stories.map((story) => ({ occurredAt: new Date(story.occurredAt), impact: story.impact, confidence: story.confidence })) },
+        day,
+        COMPANY,
+      );
+      day = read.day;
+      total += read.detail.delta;
+      details.set(firing.id, read.detail);
+    }
+    totals.set(slug, total);
+  }
+
+  it("is the same rule and the same numbers, on the company metric", () => {
+    expect(COMPANY).toEqual({ ...DEFAULT_ENGINE_CONFIG.newsVolume, metric: "company_news_volume_24h" });
+    expect(companyFirings).toHaveLength(19);
+    expect(companyFirings.reduce((sum, firing) => sum + firing.live, 0)).toBeCloseTo(15.81, 2);
+  });
+
+  it("reads 19 firings as net −0.15: Musk −0.15, everyone else 0", () => {
+    const net = [...totals.values()].reduce((sum, total) => sum + total, 0);
+    expect(net).toBeCloseTo(-0.15, 2);
+    expect(totals.get("elon-musk")).toBeCloseTo(-0.15, 2);
+    for (const slug of ["jensen-huang", "larry-page", "sergey-brin", "warren-buffett", "michael-dell"]) expect(totals.get(slug), slug).toBe(0);
+  });
+
+  it("Dell's nine firings (+7.76 live) read 0: never three signed stories in the window", () => {
+    const dell = companyFirings.filter((firing) => firing.slug === "michael-dell");
+    expect(dell).toHaveLength(9);
+    expect(dell.reduce((sum, firing) => sum + firing.live, 0)).toBeCloseTo(7.76, 2);
+    for (const firing of dell) expect(details.get(firing.id)).toMatchObject({ delta: 0, zeroBecause: "too_few_signed" });
+  });
+
+  it("Huang's four read 0 in the dead zone; Page, Brin and Buffett for want of signed stories; Musk's third is not the day's peak", () => {
+    for (const firing of companyFirings.filter((f) => f.slug === "jensen-huang")) expect(details.get(firing.id)).toMatchObject({ delta: 0, zeroBecause: "dead_zone" });
+    for (const firing of companyFirings.filter((f) => ["larry-page", "sergey-brin", "warren-buffett"].includes(f.slug))) expect(details.get(firing.id)).toMatchObject({ delta: 0, zeroBecause: "too_few_signed" });
+    const musk = companyFirings.filter((f) => f.slug === "elon-musk");
+    expect(details.get(musk[0].id)?.delta).toBeCloseTo(-0.014, 3);
+    expect(details.get(musk[1].id)?.delta).toBeCloseTo(-0.136, 3);
+    expect(details.get(musk[2].id)).toMatchObject({ delta: 0, zeroBecause: "not_the_peak" });
+  });
+});
+
 describe("the switch", () => {
+  it("the company-news switch ships off, apart from the news-volume one, and only the exact string \"true\" turns it on", () => {
+    expect(DEFAULT_ENGINE_CONFIG.companyNewsVolume.enabled).toBe(false);
+    for (const raw of [undefined, "", "TRUE", "1", "yes", " false "]) {
+      expect(engineConfigFromEnv({ companyNewsTuneEnabled: raw }).companyNewsVolume.enabled).toBe(false);
+    }
+    const on = engineConfigFromEnv({ companyNewsTuneEnabled: " true " });
+    expect(on.companyNewsVolume).toEqual({ ...DEFAULT_ENGINE_CONFIG.companyNewsVolume, enabled: true });
+    expect(on.newsVolume.enabled).toBe(false);
+    expect(engineConfigFromEnv({ newsVolumeTuneEnabled: "true" }).companyNewsVolume.enabled).toBe(false);
+    expect(describeEngineOverrides(on)).toContain("companyNewsVolume.enabled = true (default false)");
+  });
+
   it("ships off, and only the exact string \"true\" turns it on", () => {
     expect(DEFAULT_ENGINE_CONFIG.newsVolume).toEqual({ enabled: false, metric: "news_volume_24h", windowHours: 24, thresholdSigma: 2, maxMultiplier: 2, deadZone: 0.25, minSignedStories: 3, ceilingPoints: 0.75 });
     for (const raw of [undefined, "", "TRUE", "1", "yes", " false "]) {

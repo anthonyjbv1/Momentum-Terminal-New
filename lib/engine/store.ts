@@ -13,6 +13,7 @@ import type {
   TickPersistence,
   TickPersistenceResult,
   TradeEvent,
+  EngineParameters,
 } from "@/lib/engine/types";
 import type { InversePair, Person, TypedSupabaseClient } from "@/types";
 import type { Json } from "@/types/database";
@@ -222,11 +223,26 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
       // The news-volume tune's inputs (variant C), read only while the tune is
       // on: the signed articles of the trailing window and today's processed
       // news-volume firings (the day's peak sigma and what it was given).
+      // The company-news tune (2026-10-09) reads the same stories with its
+      // own day state, so the stories are read once for whichever is on.
       let newsVolumeByPerson: Map<string, NewsVolumeContext> | undefined;
-      if (config.newsVolume.enabled) {
-        const windowSince = new Date(now.getTime() - config.newsVolume.windowHours * 3600 * 1000).toISOString();
+      let companyNewsVolumeByPerson: Map<string, NewsVolumeContext> | undefined;
+      const tunes = [config.newsVolume, config.companyNewsVolume].filter((tune) => tune.enabled);
+      if (tunes.length > 0) {
+        const windowHours = Math.max(...tunes.map((tune) => tune.windowHours));
+        const windowSince = new Date(now.getTime() - windowHours * 3600 * 1000).toISOString();
         const dayStart = `${now.toISOString().slice(0, 10)}T00:00:00.000Z`;
-        const [windowStories, todaysFirings] = await Promise.all([
+        const firingsOf = (metric: string) =>
+          client
+            .from("signals")
+            .select("person_id, impact_score, occurred_at, sigma:raw_payload->sigma")
+            .eq("processed", true)
+            .is(VOIDED_COLUMN_PATH, null)
+            .eq("raw_payload->>metric", metric)
+            .gte("occurred_at", dayStart)
+            .in("person_id", [...activeIds])
+            .limit(2_000);
+        const [windowStories, todaysFirings, todaysCompanyFirings] = await Promise.all([
           client
             .from("signals")
             .select("person_id, impact_score, sentiment_confidence, occurred_at")
@@ -237,25 +253,22 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
             .gte("occurred_at", windowSince)
             .in("person_id", [...activeIds])
             .limit(2_000),
-          client
-            .from("signals")
-            .select("person_id, impact_score, occurred_at, sigma:raw_payload->sigma")
-            .eq("processed", true)
-            .is(VOIDED_COLUMN_PATH, null)
-            .eq("raw_payload->>metric", config.newsVolume.metric)
-            .gte("occurred_at", dayStart)
-            .in("person_id", [...activeIds])
-            .limit(2_000),
+          config.newsVolume.enabled ? firingsOf(config.newsVolume.metric) : Promise.resolve({ data: [], error: null }),
+          config.companyNewsVolume.enabled ? firingsOf(config.companyNewsVolume.metric) : Promise.resolve({ data: [], error: null }),
         ]);
         if (windowStories.error) throw new Error(`Engine failed to load news-volume stories: ${windowStories.error.message}`);
         if (todaysFirings.error) throw new Error(`Engine failed to load news-volume firings: ${todaysFirings.error.message}`);
-        newsVolumeByPerson = groupNewsVolumeContext(
-          windowStories.data ?? [],
-          (todaysFirings.data ?? []) as Array<{ person_id: string; impact_score: number | string | null; occurred_at: string; sigma: number | string | null }>,
-          activeIds,
-          now,
-        );
+        if (todaysCompanyFirings.error) throw new Error(`Engine failed to load company-news firings: ${todaysCompanyFirings.error.message}`);
+        type FiringRow = { person_id: string; impact_score: number | string | null; occurred_at: string; sigma: number | string | null };
+        if (config.newsVolume.enabled) newsVolumeByPerson = groupNewsVolumeContext(windowStories.data ?? [], (todaysFirings.data ?? []) as FiringRow[], activeIds, now);
+        if (config.companyNewsVolume.enabled) companyNewsVolumeByPerson = groupNewsVolumeContext(windowStories.data ?? [], (todaysCompanyFirings.data ?? []) as FiringRow[], activeIds, now);
       }
+
+      // The logged Engine parameters (2026-10-09): Gravity's rate, read every
+      // tick so an audited change takes effect on the next tick.
+      const parameters = await client.from("engine_parameters").select("key, value");
+      if (parameters.error) throw new Error(`Engine failed to load engine parameters: ${parameters.error.message}`);
+      const engineParameters = readEngineParameters(parameters.data ?? []);
 
       const engineSignals: EngineSignal[] = (signals.data ?? [])
         .filter((row) => activeIds.has(row.person_id))
@@ -289,6 +302,8 @@ export function createSupabaseEngineStore(client: TypedSupabaseClient): EngineSt
         signalVolumeByPerson: new Map(((volume.data ?? []) as PersonSignalVolumeRow[]).map(readSignalVolumeRow)),
         ...(recentStoriesByPerson ? { recentStoriesByPerson } : {}),
         ...(newsVolumeByPerson ? { newsVolumeByPerson } : {}),
+        ...(companyNewsVolumeByPerson ? { companyNewsVolumeByPerson } : {}),
+        engineParameters,
         tradeEvents,
         moodWindow: readMoodWindowHistory(moodEvents.data ?? [], activeIds),
         inversePairs: pairs.data ?? [],
@@ -356,6 +371,8 @@ export interface MemoryEngineSeed {
    * score_events, so a run of ticks behaves as production does.
    */
   moodWindow?: { totalImpact: number; totalByPerson: Record<string, number>; readings: number };
+  /** The engine_parameters rows, key → value (2026-10-09). Absent: the config defaults apply, as when the table is empty. */
+  engineParameters?: Record<string, Json>;
 }
 
 export interface MemoryEngineStore extends EngineStore {
@@ -367,6 +384,17 @@ export interface MemoryEngineStore extends EngineStore {
   readonly scoreHistory: Array<{ personId: string; score: number; tickNumber: number; recordedAt: Date }>;
   readonly scoreEvents: Array<TickPersistence["events"][number] & { tickNumber: number }>;
   readonly processedSignals: TickPersistence["signals"];
+}
+
+/**
+ * The engine_parameters rows as the tick reads them (2026-10-09). A value
+ * that is not a positive finite number reads as unset, so a malformed row
+ * leaves the config default in force rather than stopping the Engine.
+ */
+export function readEngineParameters(rows: Array<{ key: string; value: Json }>): EngineParameters {
+  const gravity = rows.find((row) => row.key === "gravity_rate")?.value;
+  const rate = typeof gravity === "number" ? gravity : typeof gravity === "string" ? Number(gravity) : Number.NaN;
+  return { gravityRatePerHour: Number.isFinite(rate) && rate > 0 ? rate : null };
 }
 
 function isArticlePayload(payload: unknown): boolean {
@@ -408,6 +436,27 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
       const unprocessed = signals
         .filter((s) => !s.processed && activeIds.has(s.personId))
         .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime() || a.id.localeCompare(b.id));
+      const tuneContext = (metric: string, windowHours: number) =>
+        groupNewsVolumeContext(
+          signals
+            .filter((s) => s.processed && activeIds.has(s.personId) && isArticlePayload(s.rawPayload) && s.occurredAt.getTime() >= now.getTime() - windowHours * 3600 * 1000)
+            .map((s) => ({
+              person_id: s.personId,
+              impact_score: processedSignals.find((p) => p.id === s.id)?.impactScore ?? 0,
+              sentiment_confidence: s.sentimentConfidence ?? null,
+              occurred_at: s.occurredAt.toISOString(),
+            })),
+          signals
+            .filter((s) => s.processed && activeIds.has(s.personId) && metricKey(s.rawPayload) === metric)
+            .map((s) => ({
+              person_id: s.personId,
+              impact_score: processedSignals.find((p) => p.id === s.id)?.impactScore ?? 0,
+              occurred_at: s.occurredAt.toISOString(),
+              sigma: metricSigma(s.rawPayload),
+            })),
+          activeIds,
+          now,
+        );
       return {
         now,
         people: people.filter((p) => p.is_active).map((p) => ({ ...p })),
@@ -443,6 +492,8 @@ export function createMemoryEngineStore(seed: MemoryEngineSeed): MemoryEngineSto
             }
           : {}),
         // The news-volume tune's inputs (variant C), from what this store has scored, as the Supabase store reads them back.
+        ...(config.companyNewsVolume.enabled ? { companyNewsVolumeByPerson: tuneContext(config.companyNewsVolume.metric, config.companyNewsVolume.windowHours) } : {}),
+        engineParameters: readEngineParameters(Object.entries(seed.engineParameters ?? {}).map(([key, value]) => ({ key, value }))),
         ...(config.newsVolume.enabled
           ? {
               newsVolumeByPerson: groupNewsVolumeContext(

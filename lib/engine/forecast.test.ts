@@ -63,10 +63,11 @@ describe("the Forecast force weight", () => {
     expect(offenders).toEqual([]);
     // And the store reads exactly the tables it is meant to. score_events
     // joined the set in Phase 19+ for Market Mood's trailing window: the
-    // Signals force's own audit trail, never a vote.
+    // Signals force's own audit trail, never a vote. engine_parameters joined
+    // it on 2026-10-09: the operator's logged Gravity rate, never a vote.
     const store = readFileSync(join(ROOT, "lib", "engine", "store.ts"), "utf8");
     const tables = [...store.matchAll(/\.from\("([a-z_]+)"\)/g)].map((match) => match[1]);
-    expect(new Set(tables)).toEqual(new Set(["people", "signals", "positions", "trade_events", "inverse_pairs", "engine_ticks", "score_events"]));
+    expect(new Set(tables)).toEqual(new Set(["people", "signals", "positions", "trade_events", "inverse_pairs", "engine_ticks", "score_events", "engine_parameters"]));
     const rpcs = [...store.matchAll(/\.rpc\("([a-z_]+)"/g)].map((match) => match[1]);
     expect(new Set(rpcs)).toEqual(new Set(["person_signal_volume", "apply_engine_tick", "record_story_clusters"]));
   });

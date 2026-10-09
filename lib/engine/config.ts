@@ -563,24 +563,40 @@ export interface EngineConfig {
    * window's signed story impact, and the day is capped at ceilingPoints.
    * Off, the metric scorer's reading stands exactly as before.
    */
-  newsVolume: {
-    /** The switch. Ships false. NEWS_VOLUME_TUNE_ENABLED=true turns it on deliberately. */
-    enabled: boolean;
-    /** The metric key the tune replaces. */
-    metric: string;
-    /** The stories driving the surge: the person's articles over this many hours up to the firing (the metric's own window). */
-    windowHours: number;
-    /** The sigma the metric fires at; the multiplier is sigma over this. */
-    thresholdSigma: number;
-    /** The multiplier's cap: four sigma doubles the stories, no surge more than that. */
-    maxMultiplier: number;
-    /** A balance inside ±deadZone is mixed coverage and reads as nothing. */
-    deadZone: number;
-    /** Fewer signed stories than this and the surge has no lean to read. */
-    minSignedStories: number;
-    /** The most a person's news volume moves them in one UTC day, in points, either way. */
-    ceilingPoints: number;
-  };
+  newsVolume: NewsVolumeTuneConfig;
+  /**
+   * THE COMPANY-NEWS TUNE (2026-10-09): the same rule, unchanged, applied to
+   * the Finnhub company_news_volume_24h metric behind its own switch
+   * (COMPANY_NEWS_TUNE_ENABLED). The metric counts the company's stories,
+   * not the person's, and read every above-band poll as a positive move of
+   * 0.75 to 1.04 points (Dell: nine firings, +7.76 points, in two days of
+   * 10-07 and 10-08 with one story about him in his own feed). The sign and
+   * size come from the person's own scored stories in the 24 hours before
+   * the firing, exactly as for news_volume_24h; the day's running peak is
+   * kept apart, read back from the day's processed company-news firings.
+   * Off, the metric scorer's reading stands exactly as before.
+   */
+  companyNewsVolume: NewsVolumeTuneConfig;
+}
+
+/** The news-volume tune's tunables (variant C), shared by the news-volume and company-news switches. */
+export interface NewsVolumeTuneConfig {
+  /** The switch. Ships false. The metric's own environment switch turns it on deliberately. */
+  enabled: boolean;
+  /** The metric key the tune replaces. */
+  metric: string;
+  /** The stories driving the surge: the person's articles over this many hours up to the firing (the metric's own window). */
+  windowHours: number;
+  /** The sigma the metric fires at; the multiplier is sigma over this. */
+  thresholdSigma: number;
+  /** The multiplier's cap: four sigma doubles the stories, no surge more than that. */
+  maxMultiplier: number;
+  /** A balance inside ±deadZone is mixed coverage and reads as nothing. */
+  deadZone: number;
+  /** Fewer signed stories than this and the surge has no lean to read. */
+  minSignedStories: number;
+  /** The most a person's news volume moves them in one UTC day, in points, either way. */
+  ceilingPoints: number;
 }
 
 export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
@@ -682,6 +698,16 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     minSignedStories: 3,
     ceilingPoints: 0.75,
   },
+  companyNewsVolume: {
+    enabled: false,
+    metric: "company_news_volume_24h",
+    windowHours: 24,
+    thresholdSigma: 2,
+    maxMultiplier: 2,
+    deadZone: 0.25,
+    minSignedStories: 3,
+    ceilingPoints: 0.75,
+  },
 };
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
@@ -764,6 +790,13 @@ export interface EngineEnvOverrides {
    * it on; anything else leaves it off.
    */
   newsVolumeTuneEnabled?: string | undefined;
+  /**
+   * COMPANY_NEWS_TUNE_ENABLED. The switch of the company-news tune (the same
+   * rule on company_news_volume_24h; companyNewsVolume.enabled, default
+   * false). Only the exact string "true" turns it on; anything else leaves
+   * it off.
+   */
+  companyNewsTuneEnabled?: string | undefined;
 }
 
 /** A strictly positive integer from a raw environment string, or null. */
@@ -798,6 +831,7 @@ export function engineConfigFromEnv(env: EngineEnvOverrides, base: EngineConfig 
   // Handed over whole, like the volume block below: the section carries nested tunables.
   if (parseExactTrue(env.signalQualityEnabled)) overrides.signalQuality = { ...base.signalQuality, enabled: true };
   if (parseExactTrue(env.newsVolumeTuneEnabled)) overrides.newsVolume = { ...base.newsVolume, enabled: true };
+  if (parseExactTrue(env.companyNewsTuneEnabled)) overrides.companyNewsVolume = { ...base.companyNewsVolume, enabled: true };
   const volumeReference = parsePositiveNumber(env.volumeReference);
   // withEngineConfig merges ONE level deep, so a nested section has to be
   // handed over whole: `{ volume: { referenceSignalsPerDay } }` alone would
@@ -831,6 +865,9 @@ export function describeEngineOverrides(config: EngineConfig, base: EngineConfig
   }
   if (config.newsVolume.enabled !== base.newsVolume.enabled) {
     out.push(`newsVolume.enabled = ${config.newsVolume.enabled} (default ${base.newsVolume.enabled})`);
+  }
+  if (config.companyNewsVolume.enabled !== base.companyNewsVolume.enabled) {
+    out.push(`companyNewsVolume.enabled = ${config.companyNewsVolume.enabled} (default ${base.companyNewsVolume.enabled})`);
   }
   return out;
 }

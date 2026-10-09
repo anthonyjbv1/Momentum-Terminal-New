@@ -217,6 +217,24 @@ export type Database = {
         }
         Relationships: []
       }
+      engine_parameters: {
+        Row: {
+          key: string
+          updated_at: string
+          value: Json
+        }
+        Insert: {
+          key: string
+          updated_at?: string
+          value: Json
+        }
+        Update: {
+          key?: string
+          updated_at?: string
+          value?: Json
+        }
+        Relationships: []
+      }
       engine_ticks: {
         Row: {
           created_at: string
@@ -2815,6 +2833,15 @@ export type Database = {
       }
       admin_revoke_invite: {
         Args: { p_invite_id: string; p_note?: string }
+        Returns: Json
+      }
+      admin_set_engine_parameter: {
+        Args: {
+          p_alert_id?: string
+          p_key: string
+          p_reason: string
+          p_value: Json
+        }
         Returns: Json
       }
       admin_set_person_market_parameter: {

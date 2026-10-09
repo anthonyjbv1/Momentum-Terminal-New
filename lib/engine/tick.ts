@@ -200,6 +200,9 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     // impact becomes the rule's reading, once a day, signed by its stories,
     // capped. Off, the metric scorer's reading stands and nothing is loaded.
     if (config.newsVolume.enabled) scoredSignals = tuneNewsVolume(scoredSignals, context.newsVolumeByPerson?.get(person.id), config.newsVolume);
+    // The company-news tune (2026-10-09): the same rule on the Finnhub
+    // company-news metric, with its own switch and its own day state.
+    if (config.companyNewsVolume.enabled) scoredSignals = tuneNewsVolume(scoredSignals, context.companyNewsVolumeByPerson?.get(person.id), config.companyNewsVolume);
     const signalsEntry = signalsForce(scoredSignals, config.signals, volume);
     const signals = roundForce(quality ? { ...signalsEntry, details: { ...signalsEntry.details, salienceMultipliers: quality.salienceMultipliers, storyClusters } } : signalsEntry);
     // The target: the seed, plus the drift's offset when the drift is on.
@@ -207,11 +210,15 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     const seedTarget = Number(person.revert_target);
     const drift: TargetDriftState = config.targetDrift.enabled ? advanceTargetDrift(readTargetDriftState(person), signals.impact, deltaHours, config.targetDrift) : DORMANT_TARGET_DRIFT;
     const target = effectiveTarget(seedTarget, drift.offset);
-    const gravityEntry = gravityForce(previousScore, target, deltaHours, config.gravity);
+    // Gravity's rate (2026-10-09): the logged parameter when one is set,
+    // else the config default; the audit row names which.
+    const gravityRate = context.engineParameters?.gravityRatePerHour ?? null;
+    const gravityEntry = gravityForce(previousScore, target, deltaHours, gravityRate !== null ? { lambdaPerHour: gravityRate } : config.gravity);
     const gravity = roundForce({
       ...gravityEntry,
       details: {
         ...gravityEntry.details,
+        lambdaSource: gravityRate !== null ? "parameter" : "default",
         seedTarget,
         targetDrift: { enabled: config.targetDrift.enabled, offset: drift.offset, attention: drift.attention, direction: drift.direction, halfLifeHours: config.targetDrift.halfLifeHours, bound: config.targetDrift.bound },
       },
