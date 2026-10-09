@@ -4,6 +4,7 @@ import { authorizeSharedSecret } from "@/lib/api-auth";
 import { apiSportsWarnings } from "@/lib/connectors/apisports";
 import { getEngineSecretOrNull, getIngestSecretOrNull, getScorerName, isEngineCronEnabled, isGoogleNewsFreshEnabled, isTwitchRampUpEnabled, isYouTubePaceAgeMatchedEnabled } from "@/lib/env";
 import { videoPaceStatus } from "@/lib/connectors/youtube-pace";
+import { fallbackStatus, type TickScoringRow } from "@/lib/engine/fallback-health";
 import { DEFAULT_MIN_SAMPLES_AFTER_CUT, REBASELINE_HOLD_DAYS, rebaselineStatus } from "@/lib/ingest/rebaseline";
 import { resolveRoute } from "@/lib/llm/routing";
 import { ANTHROPIC_DEFAULT_MODEL } from "@/lib/llm/providers/anthropic";
@@ -49,7 +50,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const admin = createSupabaseAdminClient();
-    const [sources, recentRuns, llmCost, apisportsPoll, sourceConfigs, ledgerFirst] = await Promise.all([
+    const [sources, recentRuns, llmCost, apisportsPoll, sourceConfigs, ledgerFirst, recentTicks] = await Promise.all([
       admin.from("source_health").select("*").order("name"),
       admin.from("ingest_runs").select("*").order("started_at", { ascending: false }).limit(runs),
       admin.from("llm_cost_per_tick").select("*").order("tick_number", { ascending: false, nullsFirst: false }).limit(ticks),
@@ -59,8 +60,10 @@ export async function GET(request: NextRequest) {
       admin.from("data_sources").select("name, config").eq("is_active", true),
       // The per-video ledger's first row, for the ledger-ready reminder (2026-10-09).
       admin.from("raw_video_view_samples").select("recorded_at").order("recorded_at", { ascending: true }).limit(1).maybeSingle(),
+      // The recent ticks' scoring accounts, for the fallback warning (2026-10-09): a tick that scored by the rules instead of the model.
+      admin.from("engine_ticks").select("tick_number, started_at, scoring:summary->scoring").order("tick_number", { ascending: false }).limit(ticks),
     ]);
-    for (const [label, result] of Object.entries({ sources, recentRuns, llmCost, apisportsPoll, sourceConfigs, ledgerFirst })) {
+    for (const [label, result] of Object.entries({ sources, recentRuns, llmCost, apisportsPoll, sourceConfigs, ledgerFirst, recentTicks })) {
       if (result.error) throw new Error(`${label}: ${result.error.message}`);
     }
     // The daily subscription check: the plan and its end as the last poll read them, and
@@ -90,6 +93,13 @@ export async function GET(request: NextRequest) {
     // The age-matched pace: when the ledger holds two weeks, so the switch day is tracked (2026-10-09).
     const videoPace = videoPaceStatus({ firstRecordedAt: ledgerFirst.data?.recorded_at ? new Date(ledgerFirst.data.recorded_at) : null, switchOn: isYouTubePaceAgeMatchedEnabled() }, new Date());
     warnings.push(...videoPace.warnings);
+    // The fallback warning: every recent tick that scored by the rules fallback, with the failed calls' reasons from the usage ledger.
+    const tickRows: TickScoringRow[] = (recentTicks.data ?? []).map((row) => ({ tickNumber: Number(row.tick_number), startedAt: String(row.started_at), scoring: (row.scoring ?? null) as TickScoringRow["scoring"] }));
+    const fallbackTickNumbers = tickRows.filter((row) => (row.scoring?.fallbacks ?? 0) > 0).map((row) => row.tickNumber);
+    const failedCalls = fallbackTickNumbers.length > 0 ? await admin.from("llm_usage").select("tick_number, error").eq("task_type", "sentiment").eq("status", "failed").in("tick_number", fallbackTickNumbers).limit(200) : { data: [], error: null };
+    if (failedCalls.error) throw new Error(`failedCalls: ${failedCalls.error.message}`);
+    const fallbacks = fallbackStatus(tickRows, (failedCalls.data ?? []).map((row) => ({ tickNumber: row.tick_number === null ? null : Number(row.tick_number), error: row.error })));
+    warnings.push(...fallbacks.warnings);
     const taskTypes: LLMTaskType[] = ["sentiment", "anomaly", "narrative", "memory"];
     const routes = taskTypes.map((taskType) => {
       const route = resolveRoute(taskType);
@@ -134,6 +144,7 @@ export async function GET(request: NextRequest) {
       youtubePaceAgeMatched: isYouTubePaceAgeMatchedEnabled(),
       twitchRampUp: isTwitchRampUpEnabled(),
       videoPace,
+      fallbacks: { ticksRead: tickRows.length, ticks: fallbacks.ticks },
       rebaseline: { holdDays: REBASELINE_HOLD_DAYS, minSamplesAfterHold: DEFAULT_MIN_SAMPLES_AFTER_CUT, metrics: rebaseline.metrics },
       llm,
       sources: sources.data ?? [],
