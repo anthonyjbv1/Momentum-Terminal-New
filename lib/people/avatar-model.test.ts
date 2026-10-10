@@ -149,8 +149,12 @@ describe("a Sleeper headshot (decided 2026-10-10)", () => {
     const allenRetired = { player_id: "100", full_name: "Josh Allen", position: "QB", team: null, active: false };
     expect(findSleeperPlayer([allenLB, allenRetired, allenQB], SLEEPER_PLAYERS["josh-allen"])?.player_id).toBe("4984");
     expect(findSleeperPlayer([allenLB], SLEEPER_PLAYERS["josh-allen"])).toBeNull();
-    // Without Sleeper's own key, the name is keyed the same way; an NBA guard listed under several positions matches any of them.
-    expect(findSleeperPlayer([{ player_id: "7", first_name: "Shai", last_name: "Gilgeous-Alexander", position: "PG", fantasy_positions: ["PG", "G"], team: "OKC" }], SLEEPER_PLAYERS["shai-gilgeous-alexander"])?.player_id).toBe("7");
+    // Without Sleeper's own key, the name is keyed the same way; Sleeper's NBA list names the spot (PG, SF, C; seen 2026-10-10), so a G or F pin matches it.
+    expect(findSleeperPlayer([{ player_id: "7", first_name: "Shai", last_name: "Gilgeous-Alexander", position: "PG", fantasy_positions: ["PG"], team: "OKC" }], SLEEPER_PLAYERS["shai-gilgeous-alexander"])?.player_id).toBe("7");
+    expect(findSleeperPlayer([{ player_id: "8", full_name: "LeBron James", position: "SF", fantasy_positions: ["SF", "PF"], team: "LAL" }], SLEEPER_PLAYERS["lebron-james"])?.player_id).toBe("8");
+    expect(findSleeperPlayer([{ player_id: "9", full_name: "Victor Wembanyama", position: "C", team: "SAS" }], SLEEPER_PLAYERS["victor-wembanyama"])?.player_id).toBe("9");
+    // A one-letter pin never widens a two-letter one: a QB pin does not match a position merely ending in B.
+    expect(findSleeperPlayer([{ player_id: "10", full_name: "Josh Allen", position: "RB", team: "BUF" }], SLEEPER_PLAYERS["josh-allen"])).toBeNull();
     expect(findSleeperPlayer([mahomes], SLEEPER_PLAYERS["lamar-jackson"])).toBeNull();
   });
 

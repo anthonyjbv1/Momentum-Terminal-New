@@ -129,10 +129,18 @@ function playerName(player: SleeperPlayer): string | null {
   return full || null;
 }
 
+/**
+ * Whether a player plays the pinned position. Sleeper's NBA list names the
+ * specific spot (PG, SG, SF, PF, C; seen 2026-10-10: Wembanyama matched as
+ * C, the three guards and forwards did not), so a one-letter pin (G, F)
+ * matches any position that ends in that letter; the NFL's two-letter
+ * codes match exactly.
+ */
 function playsPosition(player: SleeperPlayer, position: string): boolean {
   const wanted = position.toUpperCase();
-  if ((player.position ?? "").toUpperCase() === wanted) return true;
-  return Array.isArray(player.fantasy_positions) && player.fantasy_positions.some((entry) => typeof entry === "string" && entry.toUpperCase() === wanted);
+  const matches = (entry: unknown) => typeof entry === "string" && (entry.toUpperCase() === wanted || (wanted.length === 1 && entry.toUpperCase().endsWith(wanted)));
+  if (matches(player.position)) return true;
+  return Array.isArray(player.fantasy_positions) && player.fantasy_positions.some(matches);
 }
 
 /**
