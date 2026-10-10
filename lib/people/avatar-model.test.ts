@@ -11,9 +11,13 @@ import {
   avatarChannelFor,
   avatarCredit,
   avatarRecordJson,
+  findSleeperPlayer,
   isAvatarStale,
   isAvatarUrl,
   readAvatarRecord,
+  SLEEPER_PLAYERS,
+  sleeperAvatarFrom,
+  sleeperNameKey,
   twitchAvatarFrom,
   youtubeAvatarFrom,
   type AvatarRecord,
@@ -87,7 +91,7 @@ describe("the record", () => {
     expect(isAvatarStale(record, youtube, Date.parse(record.refreshedAt) + AVATAR_REFRESH_HOURS.youtube * 3_600_000 + 1)).toBe(true);
     expect(isAvatarStale(null, youtube, fresh)).toBe(true);
     expect(isAvatarStale(record, { source: "twitch", identifier: "x", mappingSource: "twitch" }, fresh)).toBe(true);
-    expect(AVATAR_REFRESH_HOURS).toEqual({ youtube: 720, twitch: 24, commons: 720, apisports: 720 });
+    expect(AVATAR_REFRESH_HOURS).toEqual({ youtube: 720, twitch: 24, commons: 720, apisports: 720, sleeper: 720 });
   });
 });
 
@@ -117,6 +121,53 @@ describe("an API-Sports headshot", () => {
     expect(apisportsAvatarFrom(undefined, NOW)).toBeNull();
     expect(avatarCredit(record)).toEqual({ platform: "API-Sports", channel: "Patrick Mahomes", url: "https://api-sports.io/" });
     expect(copyViolations("Photo: API-Sports · Patrick Mahomes")).toEqual([]);
+  });
+});
+
+describe("a Sleeper headshot (decided 2026-10-10)", () => {
+  const rss = { source: "rss", externalIdentifier: '"Patrick Mahomes"', config: null };
+  const player = { source: "apisports", externalIdentifier: "1197", config: null };
+  const mahomes = { player_id: "4046", first_name: "Patrick", last_name: "Mahomes", full_name: "Patrick Mahomes", search_full_name: "patrickmahomes", position: "QB", fantasy_positions: ["QB"], team: "KC", active: true, status: "Active" };
+
+  it("outranks the API-Sports headshot for a pinned athlete, kept on their news mapping; the seven NFL players and the NBA four are pinned", () => {
+    expect(avatarChannelFor({ category: "athlete", slug: "patrick-mahomes" }, [player, rss])).toEqual({ source: "sleeper", identifier: "patrick-mahomes", mappingSource: "rss" });
+    expect(avatarChannelFor({ category: "athlete", slug: "stephen-curry" }, [{ source: "publisher_rss", externalIdentifier: "curry", config: null }])).toEqual({ source: "sleeper", identifier: "stephen-curry", mappingSource: "publisher_rss" });
+    // No news mapping to keep the record on: the API-Sports headshot as before.
+    expect(avatarChannelFor({ category: "athlete", slug: "patrick-mahomes" }, [player])).toEqual({ source: "apisports", identifier: "1197", mappingSource: "apisports" });
+    // An athlete who is not pinned is not read from Sleeper.
+    expect(avatarChannelFor({ category: "athlete", slug: "someone-new" }, [player, rss])).toEqual({ source: "apisports", identifier: "1197", mappingSource: "apisports" });
+    expect(Object.keys(SLEEPER_PLAYERS).sort()).toEqual(["bijan-robinson", "jahmyr-gibbs", "jamarr-chase", "jaxon-smith-njigba", "josh-allen", "lamar-jackson", "lebron-james", "patrick-mahomes", "shai-gilgeous-alexander", "stephen-curry", "victor-wembanyama"]);
+    for (const pin of Object.values(SLEEPER_PLAYERS)) expect(["nfl", "nba"]).toContain(pin.sport);
+  });
+
+  it("finds the pinned player by Sleeper's name key and position, preferring an active player on a team over a namesake", () => {
+    expect(sleeperNameKey("Ja'Marr Chase")).toBe("jamarrchase");
+    expect(sleeperNameKey("Jaxon Smith-Njigba")).toBe("jaxonsmithnjigba");
+    expect(sleeperNameKey("Shai Gilgeous-Alexander")).toBe("shaigilgeousalexander");
+    const allenLB = { player_id: "5848", full_name: "Josh Allen", search_full_name: "joshallen", position: "LB", fantasy_positions: ["LB"], team: "JAX", active: true };
+    const allenQB = { player_id: "4984", full_name: "Josh Allen", search_full_name: "joshallen", position: "QB", fantasy_positions: ["QB"], team: "BUF", active: true };
+    const allenRetired = { player_id: "100", full_name: "Josh Allen", position: "QB", team: null, active: false };
+    expect(findSleeperPlayer([allenLB, allenRetired, allenQB], SLEEPER_PLAYERS["josh-allen"])?.player_id).toBe("4984");
+    expect(findSleeperPlayer([allenLB], SLEEPER_PLAYERS["josh-allen"])).toBeNull();
+    // Without Sleeper's own key, the name is keyed the same way; an NBA guard listed under several positions matches any of them.
+    expect(findSleeperPlayer([{ player_id: "7", first_name: "Shai", last_name: "Gilgeous-Alexander", position: "PG", fantasy_positions: ["PG", "G"], team: "OKC" }], SLEEPER_PLAYERS["shai-gilgeous-alexander"])?.player_id).toBe("7");
+    expect(findSleeperPlayer([mahomes], SLEEPER_PLAYERS["lamar-jackson"])).toBeNull();
+  });
+
+  it("takes the headshot on Sleeper's CDN for the sport and id, with the player's name; nothing without an id", () => {
+    const record = sleeperAvatarFrom(mahomes, "nfl", NOW);
+    expect(record).toEqual({ url: "https://sleepercdn.com/content/nfl/players/4046.jpg", source: "sleeper", channel: "Patrick Mahomes", handle: "4046", refreshedAt: NOW.toISOString() });
+    expect(readAvatarRecord({ avatar: avatarRecordJson(record!) })).toEqual(record);
+    expect(sleeperAvatarFrom({ ...mahomes, player_id: 4046 }, "nba", NOW)?.url).toBe("https://sleepercdn.com/content/nba/players/4046.jpg");
+    expect(sleeperAvatarFrom({ ...mahomes, player_id: undefined }, "nfl", NOW)).toBeNull();
+    expect(sleeperAvatarFrom({ ...mahomes, player_id: "../x" }, "nfl", NOW)).toBeNull();
+    expect(sleeperAvatarFrom(undefined, "nfl", NOW)).toBeNull();
+    expect(isAvatarUrl("https://sleepercdn.com/content/nfl/players/4046.jpg", "sleeper")).toBe(true);
+    expect(isAvatarUrl("https://sleepercdn.com/content/nfl/players/4046.png", "sleeper")).toBe(false);
+    expect(isAvatarUrl("https://example.com/content/nfl/players/4046.jpg", "sleeper")).toBe(false);
+    expect(avatarCredit(record)).toEqual({ platform: "Sleeper", channel: "Patrick Mahomes", url: "https://sleeper.com/" });
+    expect(copyViolations("Photo: Sleeper · Patrick Mahomes")).toEqual([]);
+    expect(isAvatarStale({ ...record!, source: "apisports", url: "https://media.api-sports.io/american-football/players/1197.png" }, { source: "sleeper", identifier: "patrick-mahomes", mappingSource: "rss" }, Date.parse(record!.refreshedAt) + 1000)).toBe(true);
   });
 });
 

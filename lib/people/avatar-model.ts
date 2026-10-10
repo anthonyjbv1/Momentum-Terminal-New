@@ -21,7 +21,7 @@ import type { Json } from "@/types/database";
  * itself no longer loads).
  */
 
-export type AvatarSource = "youtube" | "twitch" | "commons" | "apisports";
+export type AvatarSource = "youtube" | "twitch" | "commons" | "apisports" | "sleeper";
 
 /** What is kept about an avatar, on the person's platform mapping. Never the image. */
 export interface AvatarRecord {
@@ -29,7 +29,7 @@ export interface AvatarRecord {
   source: AvatarSource;
   /** The channel's display name, for the credit. */
   channel: string;
-  /** The channel's handle or login, for the credit's link; for a Commons portrait, the file's title; for an API-Sports headshot, the player id. */
+  /** The channel's handle or login, for the credit's link; for a Commons portrait, the file's title; for an API-Sports or Sleeper headshot, the player id. */
   handle: string | null;
   refreshedAt: string;
   /** A Commons portrait's licence, as Commons names it ("CC BY-SA 4.0"), and the licence's page; absent for a platform avatar. */
@@ -40,7 +40,7 @@ export interface AvatarRecord {
 }
 
 /** How old a record may be, per platform, before it is read again. */
-export const AVATAR_REFRESH_HOURS: Readonly<Record<AvatarSource, number>> = { youtube: 30 * 24, twitch: 24, commons: 30 * 24, apisports: 30 * 24 };
+export const AVATAR_REFRESH_HOURS: Readonly<Record<AvatarSource, number>> = { youtube: 30 * 24, twitch: 24, commons: 30 * 24, apisports: 30 * 24, sleeper: 30 * 24 };
 
 /** The categories whose channels are their own: creators and musicians. */
 export const AVATAR_CATEGORIES: ReadonlySet<string> = new Set(["creator", "musician"]);
@@ -52,7 +52,122 @@ const AVATAR_HOSTS: Readonly<Record<AvatarSource, RegExp>> = {
   // Commons serves originals from upload.wikimedia.org and, since 2026-09, scaled thumbnails from thumb.wikimedia.org.
   commons: /^https:\/\/(upload|thumb)\.wikimedia\.org\/wikipedia\/commons\//i,
   apisports: /^https:\/\/media\.api-sports\.io\//i,
+  sleeper: /^https:\/\/sleepercdn\.com\/content\/(nfl|nba)\/players\/[A-Za-z0-9_-]+\.jpg$/i,
 };
+
+// ---------------------------------------------------------------------------
+// Sleeper headshots (decided 2026-10-10)
+// ---------------------------------------------------------------------------
+
+/**
+ * ATHLETES: SLEEPER HEADSHOTS (decided 2026-10-10, the operator overriding
+ * the "no other image source" rule for athletes). The API-Sports headshots
+ * were outdated and small; Sleeper (the fantasy app) serves a current
+ * headshot for every player it lists, from its own CDN
+ * (`sleepercdn.com/content/<sport>/players/<id>.jpg`), and its player list
+ * (`api.sleeper.app/v1/players/<sport>`, no key) names the id. The picture
+ * is not copied here: the CDN URL is kept like every other avatar and
+ * credited "Sleeper" on the profile. Sleeper asks that the player list be
+ * read at most once a day; the refresh reads it once per process per day
+ * and only when a pinned athlete's record is stale (30 days).
+ *
+ * Pinned by slug, with the sport, the name and the position Sleeper lists:
+ * the position tells two players of one name apart (there were two Josh
+ * Allens), and a name that no longer resolves yields nothing, so the last
+ * picture stands. A Sleeper pin outranks every other source.
+ */
+export type SleeperSport = "nfl" | "nba";
+
+export interface SleeperPin {
+  sport: SleeperSport;
+  /** The name as Sleeper lists it; matched after lowercasing and dropping everything but letters. */
+  name: string;
+  position: string;
+}
+
+export const SLEEPER_PLAYERS: Readonly<Record<string, SleeperPin>> = {
+  "patrick-mahomes": { sport: "nfl", name: "Patrick Mahomes", position: "QB" },
+  "josh-allen": { sport: "nfl", name: "Josh Allen", position: "QB" },
+  "lamar-jackson": { sport: "nfl", name: "Lamar Jackson", position: "QB" },
+  "jamarr-chase": { sport: "nfl", name: "Ja'Marr Chase", position: "WR" },
+  "jahmyr-gibbs": { sport: "nfl", name: "Jahmyr Gibbs", position: "RB" },
+  "bijan-robinson": { sport: "nfl", name: "Bijan Robinson", position: "RB" },
+  "jaxon-smith-njigba": { sport: "nfl", name: "Jaxon Smith-Njigba", position: "WR" },
+  "stephen-curry": { sport: "nba", name: "Stephen Curry", position: "G" },
+  "lebron-james": { sport: "nba", name: "LeBron James", position: "F" },
+  "victor-wembanyama": { sport: "nba", name: "Victor Wembanyama", position: "C" },
+  "shai-gilgeous-alexander": { sport: "nba", name: "Shai Gilgeous-Alexander", position: "G" },
+};
+
+/** The public fields of a Sleeper player this reads. */
+export interface SleeperPlayer {
+  player_id?: string | number;
+  first_name?: string;
+  last_name?: string;
+  full_name?: string;
+  /** Sleeper's own search key: the full name lowercased with everything but letters removed. */
+  search_full_name?: string;
+  position?: string | null;
+  /** Sleeper lists several positions for some players (NBA guards and forwards); any of them counts. */
+  fantasy_positions?: string[] | null;
+  team?: string | null;
+  active?: boolean;
+  status?: string | null;
+}
+
+/** A name the way Sleeper's search key spells it: lowercase, letters only ("jamarrchase"). */
+export function sleeperNameKey(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+}
+
+function playerName(player: SleeperPlayer): string | null {
+  const full = text(player.full_name, 200) ?? [player.first_name, player.last_name].filter((part) => typeof part === "string" && part.trim()).join(" ").trim();
+  return full || null;
+}
+
+function playsPosition(player: SleeperPlayer, position: string): boolean {
+  const wanted = position.toUpperCase();
+  if ((player.position ?? "").toUpperCase() === wanted) return true;
+  return Array.isArray(player.fantasy_positions) && player.fantasy_positions.some((entry) => typeof entry === "string" && entry.toUpperCase() === wanted);
+}
+
+/**
+ * The pinned player in Sleeper's list: the name key and the position must
+ * match; among several (a retired namesake), an active player on a team
+ * wins. Null when nobody matches.
+ */
+export function findSleeperPlayer(players: Iterable<SleeperPlayer>, pin: SleeperPin): SleeperPlayer | null {
+  const key = sleeperNameKey(pin.name);
+  const matches: SleeperPlayer[] = [];
+  for (const player of players) {
+    const name = playerName(player);
+    const playerKey = text(player.search_full_name, 200) ?? (name ? sleeperNameKey(name) : "");
+    if (playerKey !== key || !playsPosition(player, pin.position)) continue;
+    matches.push(player);
+  }
+  if (matches.length === 0) return null;
+  const rank = (player: SleeperPlayer) => (player.active === false ? 0 : 2) + (player.team ? 1 : 0);
+  return matches.reduce((best, player) => (rank(player) > rank(best) ? player : best), matches[0]);
+}
+
+/** The headshot URL Sleeper's CDN serves for a player. */
+export function sleeperAvatarUrl(sport: SleeperSport, playerId: string): string {
+  return `https://sleepercdn.com/content/${sport}/players/${encodeURIComponent(playerId)}.jpg`;
+}
+
+/** A Sleeper player's headshot on Sleeper's CDN, with the player's name and id. Null without an id or a name. */
+export function sleeperAvatarFrom(player: SleeperPlayer | undefined, sport: SleeperSport, now: Date): AvatarRecord | null {
+  const id = player?.player_id === undefined || player?.player_id === null ? null : String(player.player_id).trim();
+  const channel = player ? playerName(player) : null;
+  if (!id || !/^[A-Za-z0-9_-]+$/.test(id) || !channel) return null;
+  const url = sleeperAvatarUrl(sport, id);
+  if (!isAvatarUrl(url, "sleeper")) return null;
+  return { url, source: "sleeper", channel, handle: id, refreshedAt: now.toISOString() };
+}
 
 /**
  * ATHLETES: API-SPORTS HEADSHOTS (decided 2026-09-29). An athlete with an
@@ -114,27 +229,27 @@ export interface AvatarMapping {
 
 export interface AvatarChannel {
   source: AvatarSource;
-  /** A YouTube channel id, or a Twitch login / user id. */
+  /** A YouTube channel id, a Twitch login / user id, a Wikipedia article title, an API-Sports player id, or the slug of a Sleeper pin. */
   identifier: string;
   /** The mapping the record is kept on. */
   mappingSource: string;
 }
 
 /**
- * The channel a person's avatar comes from: a pinned Commons portrait
- * first (COMMONS_PORTRAITS, kept on the person's news mapping, which every
- * tracked person has), else their YouTube channel mapping (the channel
+ * The channel a person's avatar comes from: a pinned Sleeper headshot
+ * first (SLEEPER_PLAYERS, the athletes), else a pinned Commons portrait
+ * (COMMONS_PORTRAITS), both kept on the person's news mapping, which every
+ * tracked person has; else their YouTube channel mapping (the channel
  * id), else their Twitch mapping (the login), else the first channel
  * pinned on their YouTube Trending mapping, else an athlete's API-Sports
  * player. Null for anyone outside the creator and musician categories
  * with no pin and no player, and for anyone with no channel of their own.
  */
 export function avatarChannelFor(person: { category: string; slug?: string }, mappings: readonly AvatarMapping[]): AvatarChannel | null {
+  const home = mappings.find((mapping) => mapping.source === "rss") ?? mappings.find((mapping) => mapping.source === "publisher_rss");
+  if (person.slug && SLEEPER_PLAYERS[person.slug] && home) return { source: "sleeper", identifier: person.slug, mappingSource: home.source };
   const title = person.slug ? COMMONS_PORTRAITS[person.slug] : undefined;
-  if (title) {
-    const home = mappings.find((mapping) => mapping.source === "rss") ?? mappings.find((mapping) => mapping.source === "publisher_rss");
-    if (home) return { source: "commons", identifier: title, mappingSource: home.source };
-  }
+  if (title && home) return { source: "commons", identifier: title, mappingSource: home.source };
   const platform = platformChannelFor(person, mappings);
   if (platform) return platform;
   if (APISPORTS_AVATAR_CATEGORIES.has(person.category)) {
@@ -172,7 +287,7 @@ export function readAvatarRecord(config: Record<string, Json | undefined> | null
   const block = config?.avatar;
   if (!block || typeof block !== "object" || Array.isArray(block)) return null;
   const record = block as Record<string, Json | undefined>;
-  const source = record.source === "youtube" || record.source === "twitch" || record.source === "commons" || record.source === "apisports" ? record.source : null;
+  const source = record.source === "youtube" || record.source === "twitch" || record.source === "commons" || record.source === "apisports" || record.source === "sleeper" ? record.source : null;
   const url = text(record.url, 2048);
   const channel = text(record.channel, 200);
   const refreshedAt = text(record.refreshed_at, 40);
@@ -300,19 +415,20 @@ export function commonsAvatarFrom(fileTitle: string | null | undefined, info: Co
 // ---------------------------------------------------------------------------
 
 export interface AvatarCredit {
-  platform: "YouTube" | "Twitch" | "Wikimedia Commons" | "API-Sports";
+  platform: "YouTube" | "Twitch" | "Wikimedia Commons" | "API-Sports" | "Sleeper";
   channel: string;
   /** The channel's page on the platform. */
   url: string;
 }
 
-/** "Photo: YouTube · MrBeast", linked to the channel; "Photo: Wikimedia Commons · Steve Jurvetson (CC BY 2.0)", linked to the file page; "Photo: API-Sports · Patrick Mahomes", linked to API-Sports. */
+/** "Photo: YouTube · MrBeast", linked to the channel; "Photo: Wikimedia Commons · Steve Jurvetson (CC BY 2.0)", linked to the file page; "Photo: API-Sports · Patrick Mahomes", linked to API-Sports; "Photo: Sleeper · Patrick Mahomes", linked to Sleeper. */
 export function avatarCredit(record: AvatarRecord | null): AvatarCredit | null {
   if (!record) return null;
   if (record.source === "commons") {
     return { platform: "Wikimedia Commons", channel: record.license ? `${record.channel} (${record.license})` : record.channel, url: record.pageUrl ?? "https://commons.wikimedia.org/" };
   }
   if (record.source === "apisports") return { platform: "API-Sports", channel: record.channel, url: "https://api-sports.io/" };
+  if (record.source === "sleeper") return { platform: "Sleeper", channel: record.channel, url: "https://sleeper.com/" };
   if (record.source === "youtube") {
     const url = record.handle ? `https://www.youtube.com/${encodeURIComponent(record.handle)}` : "https://www.youtube.com/";
     return { platform: "YouTube", channel: record.channel, url };

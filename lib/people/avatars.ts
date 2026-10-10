@@ -13,8 +13,13 @@ import {
   avatarRecordJson,
   commonsAvatarFrom,
   type CommonsImageInfo,
+  findSleeperPlayer,
   isAvatarStale,
   readAvatarRecord,
+  SLEEPER_PLAYERS,
+  sleeperAvatarFrom,
+  type SleeperPlayer,
+  type SleeperSport,
   twitchAvatarFrom,
   youtubeAvatarFrom,
   type ApiSportsPlayer,
@@ -37,8 +42,8 @@ import {
 
 const AVATAR_SOURCES = ["youtube", "twitch", "youtube_trending", "rss", "publisher_rss", "apisports"] as const;
 
-/** Wikimedia's API etiquette asks for a User-Agent that names the caller. */
-const WIKIMEDIA_UA = "MomentumTerminal/1.0 (https://momentumterminal.app; info@momentumterminal.app)";
+/** Wikimedia's API etiquette asks for a User-Agent that names the caller; Sleeper is sent the same courtesy. */
+const WIKIMEDIA_UA ="MomentumTerminal/1.0 (https://momentumterminal.app; info@momentumterminal.app)";
 /** The thumbnail width asked of Commons: enough for the largest avatar at 2x. */
 const COMMONS_THUMB_WIDTH = 512;
 
@@ -102,6 +107,44 @@ async function readApiSportsAvatar(channel: AvatarChannel, sourceConfig: Json | 
   if (!player) throw new AvatarRefused(`API-Sports lists no player ${channel.identifier} on ${config.host}`);
   const record = apisportsAvatarFrom(player, now);
   if (!record) throw new AvatarRefused(`API-Sports player ${channel.identifier} has no headshot on media.api-sports.io (image ${player.image ?? "none"})`);
+  return record;
+}
+
+/** Sleeper asks that the player list be read at most once a day; one read per sport per process serves every refresh that day. */
+const SLEEPER_PLAYERS_TTL_MS = 24 * 3_600_000;
+const sleeperLists = new Map<SleeperSport, { at: number; players: SleeperPlayer[] }>();
+
+/** Sleeper's player list for a sport (a few megabytes for the NFL), read once a day per process. */
+async function sleeperPlayerList(sport: SleeperSport, fetchImpl: typeof fetch): Promise<SleeperPlayer[]> {
+  const cached = sleeperLists.get(sport);
+  if (cached && Date.now() - cached.at < SLEEPER_PLAYERS_TTL_MS) return cached.players;
+  const response = await fetchImpl(`https://api.sleeper.app/v1/players/${sport}`, { headers: { "user-agent": WIKIMEDIA_UA, accept: "application/json" } });
+  if (!response.ok) throw new Error(`Sleeper responded ${response.status} for /v1/players/${sport}`);
+  const body = (await response.json()) as unknown;
+  const players: SleeperPlayer[] = body && typeof body === "object" ? (Object.values(Array.isArray(body) ? {} : body) as SleeperPlayer[]) : [];
+  if (players.length === 0) throw new Error(`Sleeper listed no ${sport} players`);
+  sleeperLists.set(sport, { at: Date.now(), players });
+  return players;
+}
+
+/**
+ * A pinned Sleeper headshot (decided 2026-10-10): the player found by name
+ * and position in Sleeper's list for the sport, then the headshot on
+ * Sleeper's CDN, kept only when the CDN actually serves an image for that
+ * id (a HEAD request), so a player Sleeper lists without a picture keeps
+ * what they had.
+ */
+async function readSleeperAvatar(channel: AvatarChannel, fetchImpl: typeof fetch, now: Date): Promise<AvatarRecord | null> {
+  const pin = SLEEPER_PLAYERS[channel.identifier];
+  if (!pin) throw new AvatarRefused(`no Sleeper pin for ${channel.identifier}`);
+  const players = await sleeperPlayerList(pin.sport, fetchImpl);
+  const player = findSleeperPlayer(players, pin);
+  if (!player) throw new AvatarRefused(`Sleeper lists no ${pin.sport.toUpperCase()} ${pin.position} named "${pin.name}"`);
+  const record = sleeperAvatarFrom(player, pin.sport, now);
+  if (!record) throw new AvatarRefused(`Sleeper player "${pin.name}" has no usable id (${player.player_id ?? "none"})`);
+  const image = await fetchImpl(record.url, { method: "HEAD", headers: { "user-agent": WIKIMEDIA_UA } });
+  const type = image.headers.get("content-type") ?? "";
+  if (!image.ok || !/^image\//i.test(type)) throw new AvatarRefused(`Sleeper's CDN serves no headshot for ${pin.sport} player ${record.handle} (${image.status}${type ? `, ${type}` : ""})`);
   return record;
 }
 
@@ -182,7 +225,9 @@ export async function refreshPersonAvatars(options: { client: TypedSupabaseClien
             ? await readTwitchAvatar(channel, fetchImpl, now)
             : channel.source === "apisports"
               ? await readApiSportsAvatar(channel, mapping.data_sources?.config ?? null, fetchImpl, now)
-              : await readCommonsAvatar(channel, fetchImpl, now);
+              : channel.source === "sleeper"
+                ? await readSleeperAvatar(channel, fetchImpl, now)
+                : await readCommonsAvatar(channel, fetchImpl, now);
       if (!record) {
         result.failed.push({ slug: person.slug, reason: channel.source === "commons" ? "no free Commons portrait for the article" : "the platform listed no avatar" });
         continue;

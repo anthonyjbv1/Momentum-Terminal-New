@@ -157,7 +157,7 @@ async function resolveApiSports(host: string, playerSearch: string, teamSearch: 
   return result;
 }
 
-async function probeFeed(url: string, fetchImpl: typeof fetch): Promise<Json> {
+async function probeFeed(url: string, fetchImpl: typeof fetch, now: Date): Promise<Json> {
   const response = await fetchImpl(url, { headers: { accept: "application/rss+xml, application/xml, text/xml" } });
   if (!response.ok) throw new Error(`feed responded ${response.status}`);
   const body = await response.text();
@@ -174,8 +174,9 @@ async function probeFeed(url: string, fetchImpl: typeof fetch): Promise<Json> {
     items: items.length,
     newest_at: sorted.length > 0 ? new Date(sorted[0]).toISOString() : null,
     oldest_at: sorted.length > 0 ? new Date(sorted[sorted.length - 1]).toISOString() : null,
-    newer_than_24h: sorted.filter((time) => Date.now() - time < 86_400_000).length,
-    newer_than_7d: sorted.filter((time) => Date.now() - time < 7 * 86_400_000).length,
+    // Counted against the run's clock, not the wall clock, so a replay with a fixed `now` reads the same window (the test tripped on 2026-10-10 once its fixture aged past a day).
+    newer_than_24h: sorted.filter((time) => now.getTime() - time < 86_400_000).length,
+    newer_than_7d: sorted.filter((time) => now.getTime() - time < 7 * 86_400_000).length,
     dates: sorted.slice(0, 100).map((time) => new Date(time).toISOString()),
     first_titles: titles,
   };
@@ -261,7 +262,7 @@ export async function resolveIdentities(options: { client: TypedSupabaseClient; 
         if (apisports !== undefined) block.apisports = apisports;
       }
       if (probeUrl) {
-        const feed = await attempt("feed", () => probeFeed(probeUrl, fetchImpl));
+        const feed = await attempt("feed", () => probeFeed(probeUrl, fetchImpl, now));
         if (feed !== undefined) block.feed = feed;
       }
       if (Object.keys(block).length === 0) throw new Error(errors.join("; "));
