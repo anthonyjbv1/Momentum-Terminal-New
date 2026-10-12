@@ -572,6 +572,11 @@ export async function runIngestion(options: IngestOptions): Promise<IngestSummar
         for (const item of excluded) {
           log({ event: "exclude", run: runId, source: source.name, person: person.slug, reason: item.reason, term: item.term, headline: item.headline });
         }
+        // Onto the poll row as well (2026-10-12): the console keeps only the
+        // first few hundred lines of a cron run, so a person polled late in
+        // the run (Musk) left no trace of what was refused or why. Display
+        // and audit only; nothing here is scored.
+        if (excluded.length > 0) details.refused = excluded.map((item) => ({ headline: item.headline, reason: item.reason, term: item.term }));
         poll.excludedFiltered = excluded.length;
         summary.excludedFiltered += excluded.length;
         poll.blockedDropped = admission.blocked.length;

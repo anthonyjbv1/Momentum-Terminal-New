@@ -92,6 +92,10 @@ describe("one appearance is one signal", () => {
     expect(lines.find((l) => l.event === "poll" && l.person === "warren-buffett")).toMatchObject({ status: "ok", signals: 0, observations: 0 });
     // The refusal is on the record, with the term that decided it.
     expect(lines.find((l) => l.event === "exclude")).toMatchObject({ source: "youtube_trending", person: "drake", reason: "excluded_term", term: "drake university", headline: "Drake vs Iowa State | Full Game Highlights" });
+    // And on the poll row's detail (2026-10-12), since the console keeps only the first few hundred lines of a run; a poll that refused nothing carries no such key.
+    const drakePoll = store.polls.find((p) => p.personId === drake.id && p.dataSourceId === "src-trending")!;
+    expect(drakePoll.detail).toEqual({ refused: [{ headline: "Drake vs Iowa State | Full Game Highlights", reason: "excluded_term", term: "drake university" }] });
+    expect(store.polls.find((p) => p.personId === mrbeast.id)!.detail ?? {}).not.toHaveProperty("refused");
     // No raw level and no observation: nothing here is a metric.
     expect(store.snapshots).toEqual([]);
     expect(store.signals.every((s) => s.rawPayload.kind === "trending")).toBe(true);
