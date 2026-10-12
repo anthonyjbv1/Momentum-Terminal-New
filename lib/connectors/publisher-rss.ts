@@ -1,3 +1,4 @@
+import { boundedDedupeKey } from "@/lib/ingest/dedupe-key";
 import { excludeReason, hasRules, readDisambiguation } from "@/lib/ingest/disambiguation";
 import { normalizeDomain, publisherDomainOf } from "@/lib/ingest/publishers";
 import type { Json } from "@/types/database";
@@ -408,7 +409,7 @@ export function publisherSignal(item: FeedItem & { publishedAt: Date }, entry: F
     story: headline,
     publisherDomain: publisher.domain,
     occurredAt: item.publishedAt,
-    dedupeKey: `pub:${key}`,
+    dedupeKey: boundedDedupeKey("pub", key),
     rawPayload: {
       kind: "article",
       source: PUBLISHER_RSS_SOURCE_NAME,

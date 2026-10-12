@@ -1,5 +1,6 @@
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
+import { boundedDedupeKey } from "@/lib/ingest/dedupe-key";
 import { EMPTY_DISAMBIGUATION, applyQueryExclusions, exclusionSubject, excludeReason, obituaryReason, readDisambiguation, type ExclusionVerdict } from "@/lib/ingest/disambiguation";
 import { publisherDomainOf, type PublisherPolicy } from "@/lib/ingest/publishers";
 import { collapseStories, personNames, storyTokens, stripOutletSuffix } from "@/lib/ingest/stories";
@@ -294,7 +295,7 @@ export function articleSignal(item: FeedItem, now: Date): RawSignal | null {
     story: headline,
     publisherDomain: publisher.domain,
     occurredAt: publishedAt,
-    dedupeKey: `rss:${key}`,
+    dedupeKey: boundedDedupeKey("rss", key),
     rawPayload: {
       kind: "article",
       source: RSS_SOURCE_NAME,
