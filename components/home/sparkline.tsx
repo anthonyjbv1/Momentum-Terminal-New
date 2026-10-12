@@ -20,7 +20,10 @@ const VIEWBOX_HEIGHT = 24;
 const PADDING = 2;
 
 export function sparklinePath(points: number[], width = VIEWBOX_WIDTH, height = VIEWBOX_HEIGHT, padding = PADDING): string | null {
-  const usable = points.filter((point) => Number.isFinite(point));
+  // Read at four decimals (2026-10-12): the box scales to the series' own
+  // range, so under SCORE_PRECISION_8_ENABLED a series flat at four decimals
+  // must not stretch its eighth-place wobble to the full height.
+  const usable = points.filter((point) => Number.isFinite(point)).map((point) => Math.round(point * 10_000) / 10_000);
   if (usable.length < 2) return null;
 
   const min = Math.min(...usable);

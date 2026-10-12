@@ -195,6 +195,7 @@ export function getEngineEnvOverrides(): {
   followerTuneEnabled: string | undefined;
   googleNewsFreshEnabled: string | undefined;
   goLiveNeutralEnabled: string | undefined;
+  scorePrecision8Enabled: string | undefined;
 } {
   return {
     tradingMinPopulatedWindows: process.env.ENGINE_TRADING_MIN_POPULATED_WINDOWS,
@@ -208,7 +209,19 @@ export function getEngineEnvOverrides(): {
     followerTuneEnabled: process.env.FOLLOWER_TUNE_ENABLED,
     googleNewsFreshEnabled: process.env.GOOGLE_NEWS_FRESH_ENABLED,
     goLiveNeutralEnabled: process.env.GO_LIVE_NEUTRAL_ENABLED,
+    scorePrecision8Enabled: process.env.SCORE_PRECISION_8_ENABLED,
   };
+}
+
+/**
+ * SCORE_PRECISION_8_ENABLED (2026-10-12): scores stored and every force
+ * rounded at eight decimals instead of four, so Gravity's pull near the
+ * target is no longer rounded away at gravity_rate 0.08. Exactly "true"
+ * turns it on; off, every tick is byte-identical to before. Display is
+ * untouched either way.
+ */
+export function isScorePrecision8Enabled(): boolean {
+  return process.env.SCORE_PRECISION_8_ENABLED?.trim() === "true";
 }
 
 /**

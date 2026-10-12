@@ -145,6 +145,18 @@ describe("Phase 14 invariants", () => {
     expect(signals.maxAbsImpactPerTick).toBe(10);
   });
 
+  it("stores the score and rounds the forces at eight decimals under SCORE_PRECISION_8_ENABLED, and at four otherwise (2026-10-12)", () => {
+    expect(score).toEqual({ floor: 35, ceiling: 100, decimals: 4, forceDecimals: 4 });
+    expect(engineConfigFromEnv({}).score).toEqual(score);
+    expect(engineConfigFromEnv({ scorePrecision8Enabled: "true" }).score).toEqual({ floor: 35, ceiling: 100, decimals: 8, forceDecimals: 8 });
+    for (const bad of ["", "1", "TRUE", "yes", "false", "on"]) expect(engineConfigFromEnv({ scorePrecision8Enabled: bad }).score, bad).toEqual(score);
+    expect(describeEngineOverrides(engineConfigFromEnv({ scorePrecision8Enabled: "true" }))).toEqual(["score.decimals = 8 (default 4)", "score.forceDecimals = 8 (default 4)"]);
+    // The dead zone at gravity_rate 0.08 and a 30 s tick: four decimals leave Gravity silent inside ~0.08 points; eight, inside ~0.00001.
+    const perTick = 1 - Math.exp(-0.08 / 120);
+    expect(0.00005 / perTick).toBeCloseTo(0.075, 2);
+    expect(0.000000005 / perTick).toBeLessThan(0.00001);
+  });
+
   it("stores the score at four decimals so Gravity's pull inside 1.72 points of the target is no longer rounded away", () => {
     expect(score.decimals).toBe(4);
     // At 30 s, Gravity moves gap × (1 − e^(−λ/120)); the dead zone is the gap at which that is under half a unit of the stored precision.

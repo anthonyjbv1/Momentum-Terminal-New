@@ -4,7 +4,7 @@ import { makePerson } from "@/lib/__tests__/fixtures";
 import { LLMError, type LLMResponse } from "@/lib/llm/types";
 import { createMemoryUsageLogger } from "@/lib/llm/usage";
 
-import { DEFAULT_ENGINE_CONFIG as CONFIG, withEngineConfig } from "./config";
+import { DEFAULT_ENGINE_CONFIG as CONFIG, engineConfigFromEnv, withEngineConfig } from "./config";
 import { deadlineAfter } from "./deadline";
 import { LLMScorer } from "./sentiment/llm";
 import { rulesBasedScorer } from "./sentiment/rules";
@@ -68,6 +68,50 @@ describe("Engine tick", () => {
     const score = Number(store.people[0].current_score);
     expect(score).toBeGreaterThan(61.63);
     expect(63 - score).toBeCloseTo(1.37 * Math.exp(-0.35), 2);
+  });
+
+  describe("EIGHT DECIMALS behind SCORE_PRECISION_8_ENABLED (2026-10-12)", () => {
+    const eight = engineConfigFromEnv({ scorePrecision8Enabled: "true" });
+    const atRate = (config: typeof CONFIG, lambdaPerHour: number) => withEngineConfig({ gravity: { lambdaPerHour } }, config);
+
+    it("on, stores the score and every force at eight decimals; off, the tick is what it was", async () => {
+      const on = createMemoryEngineStore(seed());
+      const summary = await runEngineTick({ store: on, scorer: rulesBasedScorer, now: NOW, config: eight });
+      // 50 toward 68 for one 30 s tick: 18 × (1 − e^(−0.35/120)) = 0.05242338… kept to the eighth place.
+      const expected = Math.round((50 + 18 * (1 - Math.exp(-0.35 / 120))) * 1e8) / 1e8;
+      const mr = summary.people.find((p) => p.slug === "mrbeast")!;
+      expect(mr.newScore).toBe(expected);
+      expect(String(mr.newScore).split(".")[1]?.length).toBeGreaterThan(4);
+      expect(mr.forces.gravity).toBe(Math.round((expected - 50) * 1e8) / 1e8);
+      expect(on.people.find((p) => p.id === "p-mrbeast")?.current_score).toBe(expected);
+      expect(on.scoreEvents.find((e) => e.personId === "p-mrbeast")?.impact).toBe(mr.forces.gravity);
+      // Off: byte-identical to the four-decimal tick above.
+      const off = createMemoryEngineStore(seed());
+      const before = await runEngineTick({ store: off, scorer: rulesBasedScorer, now: NOW, config: engineConfigFromEnv({}) });
+      expect(before.people.find((p) => p.slug === "mrbeast")?.newScore).toBe(50.0524);
+      expect(off.people.find((p) => p.id === "p-mrbeast")?.current_score).toBe(50.0524);
+    });
+
+    it("closes Gravity's dead band at gravity_rate 0.08: four decimals leave a person 0.05 from target untouched for an hour, eight bring them in", async () => {
+      const near = () => makePerson({ id: "p-near", slug: "near", current_score: 60.05, revert_target: 60 });
+      const run = async (config: typeof CONFIG) => {
+        const store = createMemoryEngineStore({ people: [near()], lastTickNumber: 1000 });
+        let now = NOW;
+        let gravityRows = 0;
+        for (let tick = 0; tick < 120; tick += 1) {
+          now = new Date(now.getTime() + 30_000);
+          const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now, config });
+          if (summary.people[0].forces.gravity !== undefined) gravityRows += 1;
+        }
+        return { score: Number(store.people[0].current_score), gravityRows };
+      };
+      const four = await run(atRate(CONFIG, 0.08));
+      expect(four).toEqual({ score: 60.05, gravityRows: 0 });
+      const eightAt008 = await run(atRate(eight, 0.08));
+      expect(eightAt008.gravityRows).toBe(120);
+      // An hour of continuous decay: 0.05 × e^(−0.08) = 0.04616.
+      expect(eightAt008.score - 60).toBeCloseTo(0.05 * Math.exp(-0.08), 5);
+    });
   });
 
   it("increments tick_number and uses the time since the last tick", async () => {

@@ -45,7 +45,10 @@ export function ScoreDisplay({ score, change, size = "md", withLabel = false, fl
   return (
     <span className={cn("inline-flex items-baseline", dims.gap, className)}>
       <span
-        key={flash ? score : undefined}
+        // The flash keys on the score at four decimals (2026-10-12): under
+        // SCORE_PRECISION_8_ENABLED the stored score moves every tick, and the
+        // flash must not run while the figure shown has not changed.
+        key={flash ? Math.round(score * 10_000) / 10_000 : undefined}
         className={cn("num inline-flex items-baseline font-semibold leading-none tracking-tighter text-fg", dims.whole, flash && "animate-tick-flash")}
         aria-label={`Momentum score ${whole}.${fraction}`}
       >

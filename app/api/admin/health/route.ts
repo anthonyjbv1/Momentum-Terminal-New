@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { authorizeSharedSecret } from "@/lib/api-auth";
 import { apiSportsWarnings } from "@/lib/connectors/apisports";
-import { getEngineSecretOrNull, getIngestSecretOrNull, getScorerName, isEngineCronEnabled, isGoogleNewsFreshEnabled, isTwitchRampUpEnabled, isYouTubePaceAgeMatchedEnabled } from "@/lib/env";
+import { getEngineSecretOrNull, getIngestSecretOrNull, getScorerName, isEngineCronEnabled, isGoogleNewsFreshEnabled, isScorePrecision8Enabled, isTwitchRampUpEnabled, isYouTubePaceAgeMatchedEnabled } from "@/lib/env";
 import { videoPaceStatus } from "@/lib/connectors/youtube-pace";
 import { fallbackStatus, type TickScoringRow } from "@/lib/engine/fallback-health";
 import { DEFAULT_MIN_SAMPLES_AFTER_CUT, REBASELINE_HOLD_DAYS, rebaselineStatus } from "@/lib/ingest/rebaseline";
@@ -175,6 +175,8 @@ export async function GET(request: NextRequest) {
       apisports,
       apisportsNba,
       googleNewsFresh: isGoogleNewsFreshEnabled(),
+      // The precision switch (2026-10-12), shipped off: eight decimals on scores and forces.
+      scorePrecision8: isScorePrecision8Enabled(),
       // The scoring batch's two switches (2026-10-09), both shipped off.
       youtubePaceAgeMatched: isYouTubePaceAgeMatchedEnabled(),
       twitchRampUp: isTwitchRampUpEnabled(),

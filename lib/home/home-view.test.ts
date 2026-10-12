@@ -20,6 +20,8 @@ describe("sparklinePath", () => {
 
   it("puts a flat series on the centre line rather than dividing by zero", () => {
     expect(sparklinePath([50, 50, 50], 100, 24, 2)).toBe("M0.00,12.00 L50.00,12.00 L100.00,12.00");
+    // Eight-decimal scores (SCORE_PRECISION_8_ENABLED, 2026-10-12) are read at four: a series flat at four decimals stays a centred line rather than a stretched wobble.
+    expect(sparklinePath([50.00000001, 50.00000003, 50.00000002], 100, 24, 2)).toBe("M0.00,12.00 L50.00,12.00 L100.00,12.00");
   });
 });
 

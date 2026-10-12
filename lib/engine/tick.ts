@@ -80,7 +80,6 @@ export interface EngineTickOptions {
   deadline?: TickDeadline;
 }
 
-const FORCE_DECIMALS = 4;
 /** Contributions smaller than this are treated as zero and never logged. */
 const ZERO_EPSILON = 1e-9;
 
@@ -91,8 +90,9 @@ function deltaHoursFor(person: Person, now: Date, config: EngineConfig): number 
   return clamp(hours, 0, config.tick.maxDeltaHours);
 }
 
-function roundForce(entry: ForceEntry): ForceEntry {
-  const impact = round(entry.impact, FORCE_DECIMALS);
+/** A force's impact at the configured precision (config.score.forceDecimals: four, or eight under SCORE_PRECISION_8_ENABLED). */
+function roundForceAt(entry: ForceEntry, decimals: number): ForceEntry {
+  const impact = round(entry.impact, decimals);
   return { ...entry, impact: Math.abs(impact) < ZERO_EPSILON ? 0 : impact };
 }
 
@@ -108,7 +108,8 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
   const budgetMs = Number.isFinite(deadline.at) ? Math.max(0, deadline.at - wallClockStart) : null;
 
   const context: TickContext = await store.loadTickContext(startedAt, config);
-  const { floor, ceiling, decimals } = config.score;
+  const { floor, ceiling, decimals, forceDecimals: FORCE_DECIMALS } = config.score;
+  const roundForce = (entry: ForceEntry) => roundForceAt(entry, FORCE_DECIMALS);
   const expectedTickNumber = context.lastTickNumber + 1;
   const slugById = new Map(context.people.map((p) => [p.id, p.slug]));
 

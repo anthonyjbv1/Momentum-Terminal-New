@@ -70,8 +70,20 @@ export interface EngineConfig {
      * their target, moved only when Market Mood tipped a tick over the
      * rounding edge, and the board read as frozen. Four decimals keep the
      * dead zone under 0.02 points. Not a force constant: no force changed.
+     *
+     * Eight, behind SCORE_PRECISION_8_ENABLED (2026-10-12). The dead zone
+     * scales with Gravity's rate: at gravity_rate 0.08 (set that day) four
+     * decimals left Gravity silent inside 0.08 to 0.10 points of the target,
+     * and 21 of 29 people sat there, moved only by Market Mood. At eight
+     * decimals the zone is under 0.00001 points. Display is untouched.
      */
     decimals: number;
+    /**
+     * Decimal places every force's impact is rounded to before it enters the
+     * score (and is written to score_events and the tick summary). Four, as
+     * the stored score; eight with it under the switch above.
+     */
+    forceDecimals: number;
   };
   /** FORCE 1 — Gravity (mean reversion toward the person's target: revert_target, plus the drift below when it is on). */
   gravity: {
@@ -632,7 +644,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     maxEventSignalsPerTick: 48,
     maxEventSignalsPerPersonPerTick: 12,
   },
-  score: { floor: 35, ceiling: 100, decimals: 4 },
+  score: { floor: 35, ceiling: 100, decimals: 4, forceDecimals: 4 },
   gravity: { lambdaPerHour: 0.35 },
   targetDrift: { enabled: false, halfLifeHours: 336, bound: 8, fullCoverageImpactPerHour: 0.2 },
   signals: {
@@ -829,6 +841,8 @@ export interface EngineEnvOverrides {
   followerTuneEnabled?: string | undefined;
   /** GO_LIVE_NEUTRAL_ENABLED: the neutral go-live (narratives.goLiveNeutral, default false). Only the exact string "true" turns it on. */
   goLiveNeutralEnabled?: string | undefined;
+  /** SCORE_PRECISION_8_ENABLED: scores stored and forces rounded at eight decimals instead of four (score.decimals, score.forceDecimals). Only the exact string "true" turns it on. */
+  scorePrecision8Enabled?: string | undefined;
 }
 
 /** A strictly positive integer from a raw environment string, or null. */
@@ -866,6 +880,7 @@ export function engineConfigFromEnv(env: EngineEnvOverrides, base: EngineConfig 
   if (parseExactTrue(env.companyNewsTuneEnabled)) overrides.companyNewsVolume = { ...base.companyNewsVolume, enabled: true };
   if (parseExactTrue(env.followerTuneEnabled)) overrides.followerGrowth = { ...base.followerGrowth, enabled: true };
   if (parseExactTrue(env.goLiveNeutralEnabled)) overrides.narratives = { ...base.narratives, goLiveNeutral: true };
+  if (parseExactTrue(env.scorePrecision8Enabled)) overrides.score = { ...base.score, decimals: 8, forceDecimals: 8 };
   const volumeReference = parsePositiveNumber(env.volumeReference);
   // withEngineConfig merges ONE level deep, so a nested section has to be
   // handed over whole: `{ volume: { referenceSignalsPerDay } }` alone would
@@ -906,5 +921,7 @@ export function describeEngineOverrides(config: EngineConfig, base: EngineConfig
   if (config.companyNewsVolume.enabled !== base.companyNewsVolume.enabled) {
     out.push(`companyNewsVolume.enabled = ${config.companyNewsVolume.enabled} (default ${base.companyNewsVolume.enabled})`);
   }
+  if (config.score.decimals !== base.score.decimals) out.push(`score.decimals = ${config.score.decimals} (default ${base.score.decimals})`);
+  if (config.score.forceDecimals !== base.score.forceDecimals) out.push(`score.forceDecimals = ${config.score.forceDecimals} (default ${base.score.forceDecimals})`);
   return out;
 }

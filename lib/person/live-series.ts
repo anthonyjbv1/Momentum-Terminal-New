@@ -57,7 +57,8 @@ export function marketAtTicks(ticks: LiveTick[], changes: PremiumChange[], curre
       }
       premium = latest ? latest.premiumAfterCents : sorted[0].premiumBeforeCents;
     }
-    return { ...tick, market: Math.round((tick.score + premium / 100) * 10_000) / 10_000 };
+    // Eight places (2026-10-12): the server series does not round, and under SCORE_PRECISION_8_ENABLED a four-place round here would disagree with it past the cent.
+    return { ...tick, market: Math.round((tick.score + premium / 100) * 100_000_000) / 100_000_000 };
   });
 }
 
