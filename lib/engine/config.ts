@@ -921,6 +921,8 @@ export function describeEngineOverrides(config: EngineConfig, base: EngineConfig
   if (config.companyNewsVolume.enabled !== base.companyNewsVolume.enabled) {
     out.push(`companyNewsVolume.enabled = ${config.companyNewsVolume.enabled} (default ${base.companyNewsVolume.enabled})`);
   }
+  // The follower tune (2026-10-13): it was missing from this list, so its switch left no line in the tick log.
+  if (config.followerGrowth.enabled !== base.followerGrowth.enabled) out.push(`followerGrowth.enabled = ${config.followerGrowth.enabled} (default ${base.followerGrowth.enabled})`);
   if (config.score.decimals !== base.score.decimals) out.push(`score.decimals = ${config.score.decimals} (default ${base.score.decimals})`);
   if (config.score.forceDecimals !== base.score.forceDecimals) out.push(`score.forceDecimals = ${config.score.forceDecimals} (default ${base.score.forceDecimals})`);
   return out;

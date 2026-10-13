@@ -97,6 +97,8 @@ describe("Phase 14 invariants", () => {
     expect(parseExactTrue(undefined)).toBe(false);
     expect(describeEngineOverrides(engineConfigFromEnv({ targetDriftEnabled: "true" }))).toEqual(["targetDrift.enabled = true (default false)"]);
     expect(describeEngineOverrides(engineConfigFromEnv({ companyNewsTuneEnabled: "true" }))).toEqual(["companyNewsVolume.enabled = true (default false)"]);
+    // The follower tune's switch is named in the tick log like the others (2026-10-13; it was missing).
+    expect(describeEngineOverrides(engineConfigFromEnv({ followerTuneEnabled: "true" }))).toEqual(["followerGrowth.enabled = true (default false)"]);
   });
 
   /**
