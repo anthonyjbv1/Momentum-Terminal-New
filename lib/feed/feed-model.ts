@@ -370,12 +370,17 @@ export function toFeedEntry(row: FeedRow, context: FeedRowContext = EMPTY_CONTEX
 
 /**
  * Whether an entry is a card (Phase 30, rule 6): a narrative always (it is
- * written only for a move of 0.5 or more); a signal only once the Engine has
- * read it and only when its move prints as something other than zero.
+ * written only for a move of 0.5 or more), a story always; a signal only once
+ * the Engine has read it and only when its move prints as something other
+ * than zero. A metric signal the Engine read as exactly zero (a tune's lull,
+ * a day already given, a sub-threshold surge) is never a card (2026-10-14):
+ * feed_entries() leaves it out of the page too, so it no longer takes a slot.
  */
 export function isCard(entry: FeedEntry): boolean {
   if (entry.kind === "narrative" || entry.kind === "story") return true;
-  return showsAsCard(entry.impact, entry.evidence[0]?.processed ?? null);
+  const own = entry.evidence[0];
+  if (own && own.payload !== null && own.processed !== false && entry.impact === 0) return false;
+  return showsAsCard(entry.impact, own?.processed ?? null);
 }
 
 /** Every signal id a page's rows refer to, for the server's detail read. */

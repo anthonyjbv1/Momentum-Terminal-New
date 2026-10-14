@@ -267,6 +267,7 @@ export function signalsForce(scored: ScoredSignal[], config: EngineConfig["signa
         // The news-volume tune's reading (variant C), present only on a news-volume firing while the tune is on.
         ...(s.newsVolume ? { newsVolume: s.newsVolume } : {}),
         ...(s.followerGrowth ? { followerGrowth: s.followerGrowth } : {}),
+        ...(s.viewCount ? { viewCount: s.viewCount } : {}),
         scorer: s.sentiment.scorer,
         // The audit fields (2026-10-09): present only on a model-scored signal.
         ...(s.sentiment.model ? { model: s.sentiment.model } : {}),

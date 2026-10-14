@@ -70,6 +70,8 @@ export interface ScoredSignal {
   newsVolume?: NewsVolumeDetail;
   /** The follower tune's working (2026-10-09), present on a follower_count firing while the tune is on. */
   followerGrowth?: FollowerGrowthDetail;
+  /** The view tune's working (2026-10-14), present on a view_count firing while the tune is on. */
+  viewCount?: FollowerGrowthDetail;
   /** The allegation hold's classification (2026-10-09): display and narrative only; the impact is untouched. */
   allegation?: AllegationFlag;
 }
@@ -145,6 +147,8 @@ export interface TickContext {
   companyNewsVolumeByPerson?: Map<string, NewsVolumeContext>;
   /** The follower tune's day state per person (2026-10-09), loaded only while the tune is on. */
   followerGrowthByPerson?: Map<string, NewsVolumeDayState>;
+  /** The view tune's day state per person (2026-10-14), loaded only while that tune is on. */
+  viewCountByPerson?: Map<string, NewsVolumeDayState>;
   /**
    * The logged Engine parameters (2026-10-09), read from engine_parameters
    * each tick: Gravity's rate per hour. Null when the row is absent or
@@ -304,6 +308,7 @@ export interface TickSummary {
     /** The news-volume tune's reading behind a news-volume firing's impact (variant C, 2026-10-02). */
     newsVolume?: NewsVolumeDetail;
     followerGrowth?: FollowerGrowthDetail;
+    viewCount?: FollowerGrowthDetail;
     /** Set on a neutral go-live (GO_LIVE_NEUTRAL_ENABLED): the stream title the narrative template quotes, and nothing else. */
     goLiveTitle?: string;
     /** The allegation hold (2026-10-09): the story carries a serious-crime allegation; held unless a tier 1-2 publisher's. Narratives never mention it either way. */

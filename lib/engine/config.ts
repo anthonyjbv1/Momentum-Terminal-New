@@ -591,6 +591,15 @@ export interface EngineConfig {
    */
   followerGrowth: FollowerGrowthTuneConfig;
   /**
+   * THE VIEW TUNE (2026-10-14, VIEW_COUNT_TUNE_ENABLED): the follower tune's
+   * shape applied to the YouTube view_count metric, which fired for MrBeast
+   * forty-one times in thirty days, one to three times a day, up to 1.5 a
+   * pass: upward only, each firing capped at ceilingPoints, peak-only per
+   * person per UTC day (lib/engine/follower-growth.ts). Off, the metric
+   * scorer's reading stands.
+   */
+  viewCount: FollowerGrowthTuneConfig;
+  /**
    * THE COMPANY-NEWS TUNE (2026-10-09): the same rule, unchanged, applied to
    * the Finnhub company_news_volume_24h metric behind its own switch
    * (COMPANY_NEWS_TUNE_ENABLED). The metric counts the company's stories,
@@ -738,6 +747,11 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
     metric: "follower_count",
     ceilingPoints: 0.75,
   },
+  viewCount: {
+    enabled: false,
+    metric: "view_count",
+    ceilingPoints: 0.75,
+  },
   companyNewsVolume: {
     enabled: false,
     metric: "company_news_volume_24h",
@@ -839,6 +853,8 @@ export interface EngineEnvOverrides {
   companyNewsTuneEnabled?: string | undefined;
   /** FOLLOWER_TUNE_ENABLED: the follower tune (followerGrowth.enabled, default false). Only the exact string "true" turns it on. */
   followerTuneEnabled?: string | undefined;
+  /** VIEW_COUNT_TUNE_ENABLED: the view tune (viewCount.enabled, default false). Only the exact string "true" turns it on. */
+  viewCountTuneEnabled?: string | undefined;
   /** GO_LIVE_NEUTRAL_ENABLED: the neutral go-live (narratives.goLiveNeutral, default false). Only the exact string "true" turns it on. */
   goLiveNeutralEnabled?: string | undefined;
   /** SCORE_PRECISION_8_ENABLED: scores stored and forces rounded at eight decimals instead of four (score.decimals, score.forceDecimals). Only the exact string "true" turns it on. */
@@ -879,6 +895,7 @@ export function engineConfigFromEnv(env: EngineEnvOverrides, base: EngineConfig 
   if (parseExactTrue(env.newsVolumeTuneEnabled)) overrides.newsVolume = { ...base.newsVolume, enabled: true };
   if (parseExactTrue(env.companyNewsTuneEnabled)) overrides.companyNewsVolume = { ...base.companyNewsVolume, enabled: true };
   if (parseExactTrue(env.followerTuneEnabled)) overrides.followerGrowth = { ...base.followerGrowth, enabled: true };
+  if (parseExactTrue(env.viewCountTuneEnabled)) overrides.viewCount = { ...base.viewCount, enabled: true };
   if (parseExactTrue(env.goLiveNeutralEnabled)) overrides.narratives = { ...base.narratives, goLiveNeutral: true };
   if (parseExactTrue(env.scorePrecision8Enabled)) overrides.score = { ...base.score, decimals: 8, forceDecimals: 8 };
   const volumeReference = parsePositiveNumber(env.volumeReference);
@@ -923,6 +940,7 @@ export function describeEngineOverrides(config: EngineConfig, base: EngineConfig
   }
   // The follower tune (2026-10-13): it was missing from this list, so its switch left no line in the tick log.
   if (config.followerGrowth.enabled !== base.followerGrowth.enabled) out.push(`followerGrowth.enabled = ${config.followerGrowth.enabled} (default ${base.followerGrowth.enabled})`);
+  if (config.viewCount.enabled !== base.viewCount.enabled) out.push(`viewCount.enabled = ${config.viewCount.enabled} (default ${base.viewCount.enabled})`);
   if (config.score.decimals !== base.score.decimals) out.push(`score.decimals = ${config.score.decimals} (default ${base.score.decimals})`);
   if (config.score.forceDecimals !== base.score.forceDecimals) out.push(`score.forceDecimals = ${config.score.forceDecimals} (default ${base.score.forceDecimals})`);
   return out;

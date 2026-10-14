@@ -380,3 +380,28 @@ describe("a voided signal (hotfix 2026-09-28)", () => {
     expect(entry?.evidence).toEqual([]);
   });
 });
+
+describe("a metric the Engine read as exactly zero (2026-10-14)", () => {
+  const metric = { kind: "metric", metric: "follower_count", sigma: -7.37, polarity: 1, scale: 1, source: "twitch" };
+  const signalRow = (impact: number | null, processed: boolean, payload: unknown) =>
+    row({
+      kind: "signal",
+      id: "aaaaaaaa-0000-4000-8000-000000000021",
+      text: "Follower growth has slowed for Drake",
+      impact,
+      score_before: null,
+      score_after: null,
+      tick_number: null,
+      sources: ["Twitch"],
+      evidence: [{ id: "aaaaaaaa-0000-4000-8000-000000000021", headline: "Follower growth has slowed for Drake", source: "Twitch", impact, occurred_at: iso(NOW), sentiment: "neutral", confidence: 0.5, processed, payload }],
+    });
+  it("is never a card; a non-zero metric is; a story is always one", () => {
+    const zeroed = toFeedEntry(signalRow(0, true, metric))!;
+    expect(zeroed.impact).toBe(0);
+    expect(isCard(zeroed)).toBe(false);
+    expect(isCard(toFeedEntry(signalRow(0.75, true, metric))!)).toBe(true);
+    expect(isCard(toFeedEntry(signalRow(0.04, true, metric))!)).toBe(false);
+    expect(isCard(entry({ id: "s1", kind: "story", impact: 0, evidence: [] }))).toBe(true);
+    expect(pageFromRows([signalRow(0, true, metric), signalRow(0.75, true, metric)], 24).entries.map((e) => e.impact)).toEqual([0.75]);
+  });
+});

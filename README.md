@@ -302,7 +302,7 @@ All of these are applied to the `Momentum Terminal` Supabase project and recorde
 | `rate_limit_buckets`  | Fixed-window counters keyed by string (the sign-up username check, per IP), read and written by `rate_limit_hit()`. Service role only |
 | `score_history`       | One row per person per tick (`tick_number`, `score`)                                          |
 | `engine_ticks`        | One row per Engine tick: timing, counts, market mood, summary                                 |
-| `score_events`        | Per-force audit trail (`force`, `impact`, `details`); zero-impact entries are never written   |
+| `score_events`        | Per-force audit trail (`force`, `impact`, `details`); zero-impact entries are never written, except a Signals row recording a tune's block (2026-10-14) |
 | `trade_events`        | Live Buy/Sell tape read by Trading Activity; one row per filled order, notional in cents      |
 | `person_memory`       | Per-person profile, baseline patterns and rolling recent context used by the LLM scorer       |
 | `llm_usage`           | One row per LLM call: provider, model, task, input/output/cache tokens, latency, person, tick  |
@@ -3803,6 +3803,27 @@ Display only; no migration, no Engine change. **The rule is overridden for athle
 **The replay** (the six hours to 23:40 UTC on 2026-10-12, 725 ticks, at λ 0.08 throughout, each person's stored non-Gravity forces re-applied tick by tick; the four-decimal machinery reproduced all 29 stored scores exactly over the post-change ticks). Twelve people with no signals that day started 0.039 above target: continuous decay predicts 0.0245; four decimals left them at 0.0533 (Gravity zero on all 725 ticks, Mood's +0.0153 unopposed); eight decimals land them at 0.0321, continuous decay plus the Mood residual. For everyone else the two precisions agree within the signals' own noise, and the four-decimal zero-Gravity tick counts (up to 666 of 725) go to zero.
 
 **Checked for four-decimal assumptions.** Formats first, so safe: every score and change on the board, profile, feed, search, OG image and admin (one or two decimals), money in whole cents (`pointsToCents` / `points_to_cents` agree on the rounding rule), direction and state thresholds (0.05 and above), the profile chart's 0.5-point floor, the landing sparkline's 0.5 range. Guarded so the display does not change: the score flash keys on the four-decimal score (`score-display.tsx`), the home and feed sparkline reads its points at four decimals (`sparkline.tsx`), the live market series rounds at eight so it agrees with the server series (`live-series.ts`). Tests pinned to 50.0524 run on the default config and stay. **Left as they are, noted:** `forecast_votes.score_at_vote` is `numeric(8, 4)`, so a vote taken under the switch records the score rounded to four (display-only, no migration by decision); score_events grows by the forces that rounded away before (about one Gravity row per person per tick); the public featured API and the tick summary carry the longer numbers to any outside caller.
+
+## The view tune (2026-10-14, `VIEW_COUNT_TUNE_ENABLED`, ships off), the tune block record, and the Feed's zero metrics
+
+**The view tune** (`lib/engine/follower-growth.ts`, the same module as the follower tune with its own config block `viewCount`, its own switch, its own day state and its own detail key `viewCount` on the signal): the follower tune's shape on the YouTube `view_count` metric. Upward only; each firing's reading is the metric scorer's impact capped at 0.75; peak-only per person per UTC day; ceiling 0.75 per person per UTC day. The day's state is read back from the day's processed `view_count` firings; nothing new is written. Off, the metric scorer's reading stands exactly as before. The tick log names the switch (`viewCount.enabled = true (default false)`).
+
+**Why.** The metric is a relative rate of a channel's total views against the person's own week (polarity 1, scale 0.8, sd floor 0.00002, 168-hour baseline), and a channel of MrBeast's size clears the band almost every day. Thirty days to 2026-10-13: forty-one firings, every one upward, one to three a day, 0.44 to 1.5 each and most at the 1.5 cap; the three streamers two to five each. No negative side ever fired.
+
+**Replay, the thirty days** (`view-count.test.ts`, each firing in its own tick with the day read back; the firings as production scored them):
+
+| Person | Firings | Days with one | Live | Tuned | Second passes zeroed |
+|---|---|---|---|---|---|
+| MrBeast | 41 | 27 | 49.18 | 20.25 | 14 (10 under the day's peak, 4 on a day already at its ceiling) |
+| Caedrel | 5 | 4 | 7.03 | 3.00 | 1 |
+| Jynxzi | 3 | 3 | 3.88 | 2.25 | 0 |
+| Asmongold | 2 | 2 | 3.00 | 1.50 | 0 |
+
+Every live reading was above the cap, so every day that fired pays exactly 0.75 and the tuned total is 0.75 × the days. MrBeast's 09-19, the three-pass day: 05:15 at 4.39σ takes the day (0.75), 08:15 at 1.09σ and 19:15 at 2.22σ are not the peak and add nothing.
+
+**The tune block record** (`lib/engine/tune-blocks.ts`, migration `20261014100000_tune_block_rows.sql`). Every tune that replaces a metric firing's reading (news-volume, company-news, follower, view) writes why it read a firing as nothing on the signal (`zeroBecause`), and the Signals force carries that in its `score_events` row's `signals[]`. But a row was written only for a non-zero force, so a zeroed firing that was the person's only signal of the tick left no row at all: the 21:15 follower firings of 2026-10-13 (σ −7.37 and −7.04, both read as a lull) reached `engine_ticks.summary` and nowhere else. Now the force's details carry `tuneBlocks` (`id`, `metric`, `tune`, `reason`, `sigma`, `scored`), one per zeroed firing, and a Signals row carrying any is written at zero impact: the check constraint allows exactly that case (`impact <> 0 or (force = 'signals' and details ? 'tuneBlocks')`) and `apply_engine_tick` writes exactly it, otherwise byte-identical to Phase 29. Every other force keeps the rule. No score changes: a zero row adds zero, and every reader of `score_events` (Market Mood's window, the profile's forces, the landing page) already skips or sums zero (`tick.test.ts`, `target-drift.db.test.ts`).
+
+**The Feed's zero metrics.** A metric signal the Engine read as exactly zero was never a card (the renderer hides a move that prints as zero, Phase 30 rule 6) but still took a slot in every page of `feed_entries()`. Now the function leaves it out (`coalesce(raw_payload->>'kind', '') = 'metric' and processed and impact_score = 0`) and `isCard` says so explicitly. Story cards, narratives, unread signals and a zero article are untouched; the signal itself stays, as evidence and on the profile's list (`feed-entries.db.test.ts`, `feed-model.test.ts`).
 
 ## Open items
 

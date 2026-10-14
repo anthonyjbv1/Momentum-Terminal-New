@@ -36,9 +36,19 @@ import type { ScoredSignal } from "@/lib/engine/types";
  * exactly as before. The day's state is read back from the person's
  * processed follower_count signals of the day (dayStateFromSignals), as the
  * news-volume tune reads its own: nothing new is written anywhere.
+ *
+ * THE VIEW TUNE (VIEW_COUNT_TUNE_ENABLED, 2026-10-14; ships off) is the same
+ * rule on the YouTube view_count metric, with its own switch, its own day
+ * state and its own detail key (`viewCount`) on the signal. MrBeast's thirty
+ * days to 10-13: forty-one firings, every one upward, one to three a day,
+ * 0.44 to 1.5 each and most at the cap; the three streamers two to five
+ * each. lib/engine/view-count.test.ts holds the replay, live against tuned.
  */
 
 export type FollowerGrowthConfig = EngineConfig["followerGrowth"];
+
+/** Where a tune of this shape records its working on the signal. */
+export type FollowerGrowthDetailKey = "followerGrowth" | "viewCount";
 
 export interface FollowerGrowthDetail {
   sigma: number;
@@ -74,8 +84,13 @@ export function readFollowerGrowth(input: { sigma: number; scored: number; at: D
   };
 }
 
-/** Applies the tune to one person's scored signals, in time order, each firing updating the day for the next. Other signals pass through untouched. */
-export function tuneFollowerGrowth(scored: ScoredSignal[], today: NewsVolumeDayState | null | undefined, config: FollowerGrowthConfig): ScoredSignal[] {
+/**
+ * Applies the tune to one person's scored signals, in time order, each firing
+ * updating the day for the next. Other signals pass through untouched. The
+ * working is recorded under `detailKey`: the follower tune's on
+ * `followerGrowth`, the view tune's on `viewCount`.
+ */
+export function tuneFollowerGrowth(scored: ScoredSignal[], today: NewsVolumeDayState | null | undefined, config: FollowerGrowthConfig, detailKey: FollowerGrowthDetailKey = "followerGrowth"): ScoredSignal[] {
   const firings = scored
     .map((entry, index) => ({ entry, index, sigma: followerGrowthSigma(entry.signal.rawPayload, config) }))
     .filter((item): item is { entry: ScoredSignal; index: number; sigma: number } => item.sigma !== null)
@@ -86,7 +101,7 @@ export function tuneFollowerGrowth(scored: ScoredSignal[], today: NewsVolumeDayS
   for (const firing of firings) {
     const read = readFollowerGrowth({ sigma: firing.sigma, scored: firing.entry.impact, at: firing.entry.signal.occurredAt }, day, config);
     day = read.day;
-    out[firing.index] = { ...firing.entry, impact: read.detail.delta, followerGrowth: read.detail };
+    out[firing.index] = { ...firing.entry, impact: read.detail.delta, [detailKey]: read.detail };
   }
   return out;
 }

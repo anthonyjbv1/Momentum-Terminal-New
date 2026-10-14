@@ -386,3 +386,31 @@ describe("the allegation hold and the display-only hide (2026-10-09)", () => {
     expect(await database.rows("select count(*)::int as n from public.admin_audit_log where action = 'lift_allegation_hold'")).toEqual([{ n: 1 }]);
   });
 });
+
+describe("a metric the Engine read as exactly zero (2026-10-14)", () => {
+  it("is no card and takes no slot in the page; a non-zero metric, an unread one and a zero article are as before", async () => {
+    const at = "2026-10-13 21:15:29.326+00";
+    const metric = (sigma: number) => JSON.stringify({ kind: "metric", metric: "follower_count", sigma, polarity: 1, scale: 1, source: "twitch" });
+    const insert = async (headline: string, impact: number | null, processed: boolean, payload: string | null) => {
+      const [row] = await database.rows<{ id: string }>(
+        `insert into public.signals (person_id, data_source_id, headline, occurred_at, impact_score, processed, processed_at, sentiment_label, sentiment_confidence, raw_payload)
+         values ($1, $2, $3, $4::timestamptz, $5, $6, case when $6 then $4::timestamptz end, case when $6 then 'neutral' end, case when $6 then 0.5 end, $7::jsonb)
+         returning id`,
+        [people.get("mrbeast"), youtube.id, headline, at, impact, processed, payload],
+      );
+      return row.id;
+    };
+    const zeroed = await insert("Follower growth has slowed for MrBeast", 0, true, metric(-7.37));
+    const paid = await insert("MrBeast's channel is pulling views fast", 0.75, true, metric(5.9));
+    const unread = await insert("Follower growth has slowed for MrBeast (unread)", null, false, metric(-7.04));
+    const zeroArticle = await insert("A story the Engine read as nothing", 0, true, null);
+
+    const ids = (await feed(null, null, 100)).map((row) => row.id);
+    expect(ids).not.toContain(zeroed);
+    expect(ids).toContain(paid);
+    // Not yet read: still a row (the renderer hides it until the Engine's read), unchanged.
+    expect(ids).toContain(unread);
+    // A zero article is still a row too: the rule is for metrics, whose zero is a tune's decision. The renderer hides it as before.
+    expect(ids).toContain(zeroArticle);
+  });
+});

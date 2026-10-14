@@ -13,6 +13,7 @@ import { isFreeSignal, selectTickSignals } from "@/lib/engine/selection";
 import { getSentimentScorer } from "@/lib/engine/sentiment";
 import { tuneNewsVolume } from "@/lib/engine/news-volume";
 import { tuneFollowerGrowth } from "./follower-growth";
+import { tuneBlocksOf, writesSignalsRow } from "./tune-blocks";
 import { volumeWeight } from "@/lib/engine/signal-volume";
 import { confirmStories, storyOptions } from "@/lib/engine/stories";
 import { storyRecords } from "@/lib/engine/story-records";
@@ -216,9 +217,22 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
     // company-news metric, with its own switch and its own day state.
     if (config.companyNewsVolume.enabled) scoredSignals = tuneNewsVolume(scoredSignals, context.companyNewsVolumeByPerson?.get(person.id), config.companyNewsVolume);
     // The follower tune (2026-10-09): upward only, capped, peak-only per day.
-    if (config.followerGrowth.enabled) scoredSignals = tuneFollowerGrowth(scoredSignals, context.followerGrowthByPerson?.get(person.id), config.followerGrowth);
+    if (config.followerGrowth.enabled) scoredSignals = tuneFollowerGrowth(scoredSignals, context.followerGrowthByPerson?.get(person.id), config.followerGrowth, "followerGrowth");
+    // The view tune (2026-10-14): the same rule on YouTube view_count, its own switch and day state.
+    if (config.viewCount.enabled) scoredSignals = tuneFollowerGrowth(scoredSignals, context.viewCountByPerson?.get(person.id), config.viewCount, "viewCount");
+    // The tune block record (2026-10-14): every firing a tune read as nothing,
+    // with its reason, on the force's details, so the reason reaches
+    // score_events even when the force itself is zero this tick.
+    const tuneBlocks = tuneBlocksOf(scoredSignals, config);
     const signalsEntry = signalsForce(scoredSignals, config.signals, volume);
-    const signals = roundForce(quality ? { ...signalsEntry, details: { ...signalsEntry.details, salienceMultipliers: quality.salienceMultipliers, storyClusters } } : signalsEntry);
+    const signals = roundForce({
+      ...signalsEntry,
+      details: {
+        ...signalsEntry.details,
+        ...(quality ? { salienceMultipliers: quality.salienceMultipliers, storyClusters } : {}),
+        ...(tuneBlocks.length > 0 ? { tuneBlocks } : {}),
+      },
+    });
     // The target: the seed, plus the drift's offset when the drift is on.
     // Off, the dormant state is written back so nothing accumulates unseen.
     const seedTarget = Number(person.revert_target);
@@ -417,6 +431,7 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       ...(s.story ? { story: s.story } : {}),
       ...(s.newsVolume ? { newsVolume: s.newsVolume } : {}),
       ...(s.followerGrowth ? { followerGrowth: s.followerGrowth } : {}),
+      ...(s.viewCount ? { viewCount: s.viewCount } : {}),
       narrative: s.sentiment.narrative,
       ...(s.sentiment.narrativeDirection ? { narrativeDirection: s.sentiment.narrativeDirection } : {}),
     })),
@@ -440,9 +455,10 @@ export async function runEngineTick(options: EngineTickOptions): Promise<TickSum
       sentimentLabel: s.sentiment.label,
       sentimentConfidence: s.sentiment.confidence,
     })),
+    // A zero force writes no row, except a Signals force recording a tune's block (2026-10-14).
     events: results.flatMap((r) =>
       r.forces
-        .filter((f) => f.impact !== 0)
+        .filter((f) => f.impact !== 0 || (f.force === "signals" && writesSignalsRow(f.impact, f.details)))
         .map((f) => ({ personId: r.person.id, force: f.force, impact: round(f.impact, FORCE_DECIMALS), details: f.details })),
     ),
 

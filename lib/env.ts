@@ -193,6 +193,7 @@ export function getEngineEnvOverrides(): {
   newsVolumeTuneEnabled: string | undefined;
   companyNewsTuneEnabled: string | undefined;
   followerTuneEnabled: string | undefined;
+  viewCountTuneEnabled: string | undefined;
   googleNewsFreshEnabled: string | undefined;
   goLiveNeutralEnabled: string | undefined;
   scorePrecision8Enabled: string | undefined;
@@ -207,6 +208,7 @@ export function getEngineEnvOverrides(): {
     newsVolumeTuneEnabled: process.env.NEWS_VOLUME_TUNE_ENABLED,
     companyNewsTuneEnabled: process.env.COMPANY_NEWS_TUNE_ENABLED,
     followerTuneEnabled: process.env.FOLLOWER_TUNE_ENABLED,
+    viewCountTuneEnabled: process.env.VIEW_COUNT_TUNE_ENABLED,
     googleNewsFreshEnabled: process.env.GOOGLE_NEWS_FRESH_ENABLED,
     goLiveNeutralEnabled: process.env.GO_LIVE_NEUTRAL_ENABLED,
     scorePrecision8Enabled: process.env.SCORE_PRECISION_8_ENABLED,

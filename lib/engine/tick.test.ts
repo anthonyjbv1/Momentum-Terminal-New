@@ -889,3 +889,69 @@ describe("the allegation hold in the tick (2026-10-09)", () => {
     expect(store.processedSignals.find((s) => s.id === "s-x")).toEqual(bare.processedSignals.find((s) => s.id === "s-x"));
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE TUNE BLOCK RECORD (2026-10-14)
+// ---------------------------------------------------------------------------
+
+describe("the tune block record (2026-10-14)", () => {
+  const quiet = withEngineConfig({ marketMood: { ratePerHour: 0 }, inversePairs: { defaultDampening: 0 } });
+  const metric = (id: string, metricKey: string, sigma: number, at: Date, sourceName = "twitch"): EngineSignal => ({
+    id,
+    personId: "p-mrbeast",
+    headline: `${metricKey} ${sigma}`,
+    rawPayload: { kind: "metric", metric: metricKey, label: metricKey, sigma, polarity: 1, scale: 1, source: sourceName },
+    sourceName,
+    sourceTier: 2,
+    occurredAt: at,
+    createdAt: at,
+  });
+  const signalsRow = (store: ReturnType<typeof createMemoryEngineStore>, tickNumber: number) => store.scoreEvents.find((e) => e.personId === "p-mrbeast" && e.force === "signals" && e.tickNumber === tickNumber);
+
+  it("a lone follower lull the tune zeroes still writes a Signals row, at zero, naming the signal and the reason; off, nothing of the kind", async () => {
+    const on = withEngineConfig({ followerGrowth: { enabled: true } }, quiet);
+    const store = createMemoryEngineStore(seed({ signals: [metric("lull", "follower_count", -7.37, NOW)] }));
+    const summary = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config: on });
+    expect(summary.signals.find((s) => s.id === "lull")).toMatchObject({ impact: 0, followerGrowth: { zeroBecause: "lull" } });
+    const row = signalsRow(store, 1)!;
+    expect(row.impact).toBe(0);
+    expect(row.details.tuneBlocks).toEqual([{ id: "lull", metric: "follower_count", tune: "followerGrowth", reason: "lull", sigma: -7.37, scored: expect.any(Number) }]);
+    expect((row.details.tuneBlocks as Array<{ scored: number }>)[0].scored).toBeLessThan(0);
+    // The score is untouched by the row: Gravity alone moved it.
+    expect(summary.people.find((p) => p.slug === "mrbeast")?.forces).toEqual({ gravity: expect.any(Number) });
+
+    // Off, the metric scorer's negative reading stands and the row is an ordinary non-zero one without blocks.
+    const off = createMemoryEngineStore(seed({ signals: [metric("lull2", "follower_count", -7.37, NOW)] }));
+    await runEngineTick({ store: off, scorer: rulesBasedScorer, now: NOW, config: quiet });
+    const plain = signalsRow(off, 1)!;
+    expect(plain.impact).toBeLessThan(0);
+    expect(plain.details.tuneBlocks).toBeUndefined();
+  });
+
+  it("the view tune's second pass of a day, the news-volume tune's lull: each block names its tune; a zero force with no block writes no row", async () => {
+    const on = withEngineConfig({ viewCount: { enabled: true }, newsVolume: { enabled: true } }, quiet);
+    const store = createMemoryEngineStore(seed({ signals: [metric("v1", "view_count", 4.4, NOW, "youtube")] }));
+    const first = await runEngineTick({ store, scorer: rulesBasedScorer, now: NOW, config: on });
+    expect(first.signals.find((s) => s.id === "v1")).toMatchObject({ impact: 0.75, viewCount: { reading: 0.75, delta: 0.75, zeroBecause: null } });
+    expect(signalsRow(store, 1)?.details.tuneBlocks).toBeUndefined();
+
+    const t2 = new Date(NOW.getTime() + 3_600_000);
+    store.signals.push(metric("v2", "view_count", 1.1, t2, "youtube"), metric("nv", "news_volume_24h", -2.2, t2, "rss"));
+    const second = await runEngineTick({ store, scorer: rulesBasedScorer, now: t2, config: on });
+    expect(second.signals.find((s) => s.id === "v2")).toMatchObject({ impact: 0, viewCount: { zeroBecause: "not_the_peak" } });
+    expect(second.signals.find((s) => s.id === "nv")).toMatchObject({ impact: 0, newsVolume: { zeroBecause: "lull" } });
+    const row = signalsRow(store, 2)!;
+    expect(row.impact).toBe(0);
+    expect(row.details.tuneBlocks).toEqual([
+      { id: "nv", metric: "news_volume_24h", tune: "newsVolume", reason: "lull", sigma: -2.2, scored: null },
+      { id: "v2", metric: "view_count", tune: "viewCount", reason: "not_the_peak", sigma: 1.1, scored: 0.5505 },
+    ]);
+    // The row's working still lists both signals with the tunes' details, so the profile reads the same record as before.
+    expect((row.details.signals as Array<{ id: string }>).map((s) => s.id).sort()).toEqual(["nv", "v2"]);
+
+    // A baseline (zero) signal with no tune behind it: no Signals row at all, as always.
+    const bare = createMemoryEngineStore(seed({ signals: [{ id: "b", personId: "p-mrbeast", headline: "baseline", rawPayload: { kind: "baseline" }, sourceName: "youtube", sourceTier: 2, occurredAt: NOW, createdAt: NOW }] }));
+    await runEngineTick({ store: bare, scorer: rulesBasedScorer, now: NOW, config: on });
+    expect(signalsRow(bare, 1)).toBeUndefined();
+  });
+});

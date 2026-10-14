@@ -96,3 +96,28 @@ describe("the two items from the queue", () => {
     expect(triggers.map((t) => t.proname).sort()).toEqual(["positions_enforce_direction", "trade_orders_snapshot_portfolio"]);
   });
 });
+
+describe("the tune block record (2026-10-14)", () => {
+  it("apply_engine_tick writes a zero Signals row that carries tuneBlocks, drops every other zero force, and the table refuses a bare zero", async () => {
+    const [{ n }] = await database.rows<{ n: string }>("select max(tick_number) as n from public.engine_ticks");
+    const next = Number(n ?? 0) + 1;
+    const payload = JSON.parse(tick(next, [{ id: personId, score: 61.64, spread: 0.5 }]));
+    payload.events = [
+      { person_id: personId, force: "signals", impact: 0, details: { tuneBlocks: [{ id: "00000000-0000-4000-8000-000000000001", metric: "follower_count", tune: "followerGrowth", reason: "lull", sigma: -7.37, scored: -0.9 }] } },
+      { person_id: personId, force: "gravity", impact: 0, details: {} },
+      { person_id: personId, force: "market_mood", impact: 0.01, details: {} },
+    ];
+    const [{ result }] = await database.rows<{ result: { score_events: number } }>("select public.apply_engine_tick($1::jsonb) as result", [JSON.stringify(payload)]);
+    expect(result.score_events).toBe(2);
+    const rows = await database.rows<{ force: string; impact: string; details: { tuneBlocks?: Array<{ reason: string }> } }>("select force, impact, details from public.score_events where tick_number = $1 order by force", [next]);
+    expect(rows.map((row) => [row.force, Number(row.impact)])).toEqual([
+      ["market_mood", 0.01],
+      ["signals", 0],
+    ]);
+    expect(rows[1].details.tuneBlocks?.[0].reason).toBe("lull");
+
+    // The check constraint: a zero row needs the record, and only on the Signals force.
+    await expect(database.rows("insert into public.score_events (tick_number, person_id, force, impact, details) values ($1, $2, 'signals', 0, '{}')", [next, personId])).rejects.toThrow(/score_events_impact_nonzero/);
+    await expect(database.rows("insert into public.score_events (tick_number, person_id, force, impact, details) values ($1, $2, 'gravity', 0, '{\"tuneBlocks\": []}')", [next, personId])).rejects.toThrow(/score_events_impact_nonzero/);
+  });
+});
